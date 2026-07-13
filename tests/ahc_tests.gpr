@@ -1,0 +1,22 @@
+with "config/ahc_tests_config.gpr";
+project Ahc_Tests is
+
+   for Source_Dirs use ("src/", "config/");
+   for Object_Dir use "obj/" & Ahc_Tests_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use "bin";
+   for Main use ("ahc_tests_main.adb");
+
+   package Builder is
+      for Executable ("ahc_tests_main.adb") use "ahc_tests";
+   end Builder;
+
+   package Compiler is
+      for Default_Switches ("Ada") use Ahc_Tests_Config.Ada_Compiler_Switches;
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es");
+   end Binder;
+
+end Ahc_Tests;

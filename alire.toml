@@ -1,0 +1,21 @@
+name = "ahc"
+description = "Ada Haskell Compiler: a Haskell 2010 compiler written in Ada 2022"
+version = "0.1.0-dev"
+
+authors = ["Montez"]
+maintainers = ["Montez <montezf@gmail.com>"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["haskell", "compiler", "ada2022"]
+
+executables = ["ahc"]
+
+# Contracts (Pre/Post, Type_Invariant, Dynamic_Predicate) are the point of
+# this project: always on in development/validation, off in release
+# (PRD §8 "Performance of Compiler" mitigation).
+[build-switches]
+"*".ada_version = "Ada2022"
+"*".style_checks = "no"
+development.contracts = "yes"
+validation.contracts = "yes"
+release.contracts = "no"

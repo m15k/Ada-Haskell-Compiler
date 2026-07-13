@@ -1,0 +1,22 @@
+name = "ahc_tests"
+description = "Unit tests for AHC"
+version = "0.1.0-dev"
+
+authors = ["Montez"]
+maintainers = ["Montez <montezf@gmail.com>"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+
+executables = ["ahc_tests"]
+
+[[depends-on]]
+ahc = "*"
+
+[[pins]]
+ahc = { path = ".." }
+
+# Tests must run with all contracts enabled, whatever profile the parent
+# crate was built with; contract-violation tests depend on it.
+[build-switches]
+"*".ada_version = "Ada2022"
+"*".style_checks = "no"
+"*".contracts = "yes"

@@ -1,0 +1,9 @@
+/obj/
+/bin/
+/alire/
+/config/
+tests/obj/
+tests/bin/
+tests/alire/
+tests/config/
+.DS_Store

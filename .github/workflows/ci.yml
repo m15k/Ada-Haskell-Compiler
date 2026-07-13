@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: alire-project/setup-alire@v4
+
+      - name: Build (validation profile)
+        run: alr -n build --validation
+
+      - name: Build (release profile)
+        run: alr -n build --release
+
+      - name: Build tests
+        working-directory: tests
+        run: alr -n build --validation
+
+      - name: Run unit tests
+        working-directory: tests
+        run: ./bin/ahc_tests
+
+      - name: Smoke-check driver
+        run: ./bin/ahc --version
