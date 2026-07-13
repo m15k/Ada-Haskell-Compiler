@@ -15,7 +15,9 @@ with AHC.Diagnostics;
 with AHC.Layout;
 with AHC.Lexer;
 with AHC.Names;
+with AHC.Parser;
 with AHC.Source_Text;
+with AHC.Syntax.Printer;
 with AHC.Tokens;
 
 procedure AHC_Main is
@@ -89,6 +91,32 @@ procedure AHC_Main is
       end if;
    end Run_Lex;
 
+   procedure Run_Parse (Path : String) is
+      Text   : AHC.Source_Text.Source;
+      Table  : AHC.Names.Name_Table;
+      Bag    : AHC.Diagnostics.Diagnostic_Bag;
+      Stream : AHC.Tokens.Token_Vectors.Vector;
+      Arena  : AHC.Syntax.Module_Arena;
+   begin
+      begin
+         Text := AHC.Source_Text.Load_File (Path);
+      exception
+         when Ada.IO_Exceptions.Name_Error =>
+            Usage_Error ("cannot open '" & Path & "'");
+            return;
+      end;
+
+      AHC.Lexer.Scan (Text, Table, Bag, Stream);
+      AHC.Parser.Parse_Module (Stream, Table, Bag, Arena);
+
+      Put (AHC.Syntax.Printer.Dump (Arena, Table));
+
+      Bag.Print_All (Text);
+      if Bag.Has_Errors then
+         Set_Exit_Status (1);
+      end if;
+   end Run_Parse;
+
 begin
    if Argument_Count = 0 then
       Print_Usage (Standard_Error);
@@ -110,9 +138,11 @@ begin
             Usage_Error ("expected: ahc lex [--layout] FILE.hs");
          end if;
       elsif Command = "parse" then
-         Put_Line (Standard_Error,
-                   "ahc: 'parse' is not implemented yet");
-         Set_Exit_Status (2);
+         if Argument_Count = 2 then
+            Run_Parse (Argument (2));
+         else
+            Usage_Error ("expected: ahc parse FILE.hs");
+         end if;
       else
          Usage_Error ("unknown command '" & Command & "'");
       end if;

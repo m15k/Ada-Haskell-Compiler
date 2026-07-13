@@ -1,0 +1,3 @@
+(module M)
+(fun f (pats (pvar x)) (case (var x) (alt (pint 0) (var a)) (alt (pwild) (var b))) (where (patbind (pvar a) (do (var p) (var q))) (patbind (pvar b) (int 2))))
+(patbind (pvar g) (var h))

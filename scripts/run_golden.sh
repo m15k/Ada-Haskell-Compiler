@@ -17,10 +17,10 @@ fail=0
 shopt -s nullglob
 for hs in tests/golden/*.hs; do
   base="${hs%.hs}"
-  exp="$base.tokens"
   case "$(basename "$hs")" in
-    layout_*) got="$("$AHC" lex --layout "$hs" 2>&1)" ;;
-    *)        got="$("$AHC" lex "$hs" 2>&1)" ;;
+    layout_*) exp="$base.tokens"; got="$("$AHC" lex --layout "$hs" 2>&1)" ;;
+    parse_*)  exp="$base.ast";    got="$("$AHC" parse "$hs" 2>&1)" ;;
+    *)        exp="$base.tokens"; got="$("$AHC" lex "$hs" 2>&1)" ;;
   esac
   if $update; then
     printf '%s\n' "$got" > "$exp"
