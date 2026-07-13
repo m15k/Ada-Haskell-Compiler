@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+
 package body AHC.Lexer is
 
    use AHC.Tokens;
@@ -54,6 +56,29 @@ package body AHC.Lexer is
        elsif S = "_"        then Underscore
        else Varid);
 
+   type String_Access is not null access constant String;
+
+   --  ASCII mnemonic escapes (Report 2.6 charesc); index = code point,
+   --  except DEL at the end.
+   Mnemonics : constant array (Tokens.Code_Point range 0 .. 33) of
+     String_Access :=
+       [new String'("NUL"), new String'("SOH"), new String'("STX"),
+        new String'("ETX"), new String'("EOT"), new String'("ENQ"),
+        new String'("ACK"), new String'("BEL"), new String'("BS"),
+        new String'("HT"),  new String'("LF"),  new String'("VT"),
+        new String'("FF"),  new String'("CR"),  new String'("SO"),
+        new String'("SI"),  new String'("DLE"), new String'("DC1"),
+        new String'("DC2"), new String'("DC3"), new String'("DC4"),
+        new String'("NAK"), new String'("SYN"), new String'("ETB"),
+        new String'("CAN"), new String'("EM"),  new String'("SUB"),
+        new String'("ESC"), new String'("FS"),  new String'("GS"),
+        new String'("RS"),  new String'("US"),  new String'("SP"),
+        new String'("DEL")];
+
+   function Mnemonic_Code (Index : Tokens.Code_Point)
+     return Tokens.Code_Point
+   is (if Index = 33 then 127 else Index);
+
    --  Varsym if S is not a reserved operator.
    function Symbol_Kind (S : String) return Token_Kind
    is (if    S = ".."  then Dot_Dot
@@ -93,6 +118,9 @@ package body AHC.Lexer is
       function Slice (From, Stop : Positive) return String
       is (Text.Slice (Source_Text.Byte_Offset (From),
                       Source_Text.Byte_Offset (Stop)));
+
+      function At_Offset (I : Positive) return Character
+      is (Text.Char_At (Source_Text.Byte_Offset (I)));
 
       --  Line/column of O, clamped so the end-of-file position (one past
       --  the buffer) renders as just after the last character.
@@ -357,25 +385,25 @@ package body AHC.Lexer is
       end Scan_Operator;
 
       ------------------------------------------------------------------
-      --  Numeric literals (decimal/octal/hex integers here; floats and
-      --  the char/string literals arrive with Milestone 3)
+      --  Numeric literals (Report 2.5)
       ------------------------------------------------------------------
 
+      function Is_Octal (C : Character) return Boolean
+      is (C in '0' .. '7');
+      function Is_Hex (C : Character) return Boolean
+      is (Is_Digit (C) or else C in 'a' .. 'f' | 'A' .. 'F');
+
+      procedure Munch (Valid : not null access
+                         function (C : Character) return Boolean) is
+      begin
+         while Pos <= Len and then Valid (Peek) loop
+            Pos := Pos + 1;
+         end loop;
+      end Munch;
+
       procedure Scan_Number is
-         Start : constant Positive := Pos;
-
-         procedure Munch (Valid : not null access
-                            function (C : Character) return Boolean) is
-         begin
-            while Pos <= Len and then Valid (Peek) loop
-               Pos := Pos + 1;
-            end loop;
-         end Munch;
-
-         function Is_Octal (C : Character) return Boolean
-         is (C in '0' .. '7');
-         function Is_Hex (C : Character) return Boolean
-         is (Is_Digit (C) or else C in 'a' .. 'f' | 'A' .. 'F');
+         Start    : constant Positive := Pos;
+         Is_Float : Boolean := False;
       begin
          if Peek = '0' and then Peek (1) in 'x' | 'X'
            and then Is_Hex (Peek (2))
@@ -389,11 +417,299 @@ package body AHC.Lexer is
             Munch (Is_Octal'Access);
          else
             Munch (Is_Digit'Access);
+
+            --  "1.5" is a float but "1..2" is 1 .. 2; the dot only joins
+            --  when a digit follows (maximal munch, Report 2.5).
+            if Peek = '.' and then Is_Digit (Peek (1)) then
+               Pos := Pos + 1;
+               Munch (Is_Digit'Access);
+               Is_Float := True;
+            end if;
+
+            if Peek in 'e' | 'E'
+              and then (Is_Digit (Peek (1))
+                        or else (Peek (1) in '+' | '-'
+                                 and then Is_Digit (Peek (2))))
+            then
+               Pos := Pos + 2;  --  'e' plus digit or sign
+               Munch (Is_Digit'Access);
+               Is_Float := True;
+            end if;
          end if;
-         Emit ((Kind => Int_Lit,
-                Int_Text => Table.Intern (Slice (Start, Pos)),
-                others => <>), Start);
+
+         if Is_Float then
+            Emit ((Kind => Float_Lit,
+                   Float_Text => Table.Intern (Slice (Start, Pos)),
+                   others => <>), Start);
+         else
+            Emit ((Kind => Int_Lit,
+                   Int_Text => Table.Intern (Slice (Start, Pos)),
+                   others => <>), Start);
+         end if;
       end Scan_Number;
+
+      ------------------------------------------------------------------
+      --  Character and string literals (Report 2.6)
+      ------------------------------------------------------------------
+
+      type Escape_Result is (Escaped_Char, Empty_Escape, Gap, Bad_Escape);
+      --  Pos is just past a backslash inside a literal. Decodes one
+      --  escape; on Bad_Escape a diagnostic has been reported and Pos
+      --  advanced by at least one character.
+      procedure Scan_Escape
+        (In_String : Boolean;
+         Result    : out Escape_Result;
+         Value     : out Code_Point)
+      is
+         Start : constant Positive := Pos - 1;  --  the backslash
+
+         procedure Numeric
+           (Valid : not null access function (C : Character) return Boolean;
+            Base  : Code_Point)
+         is
+            First : constant Positive := Pos;
+            Acc   : Code_Point := 0;
+            Overflowed : Boolean := False;
+         begin
+            Munch (Valid);
+            for I in First .. Pos - 1 loop
+               declare
+                  C : constant Character := At_Offset (I);
+                  D : constant Code_Point :=
+                    (if Is_Digit (C) then Character'Pos (C) - 48
+                     elsif C in 'a' .. 'f' then Character'Pos (C) - 87
+                     else Character'Pos (C) - 55);
+               begin
+                  if Acc > (Code_Point'Last - D) / Base then
+                     Overflowed := True;
+                  else
+                     Acc := Acc * Base + D;
+                  end if;
+               end;
+            end loop;
+            if Overflowed then
+               Error (Diagnostics.Lex_Invalid_Literal, Start,
+                      "numeric escape out of range");
+               Result := Bad_Escape;
+               Value := 16#FFFD#;
+            else
+               Result := Escaped_Char;
+               Value := Acc;
+            end if;
+         end Numeric;
+
+         C : constant Character := Peek;
+      begin
+         Result := Escaped_Char;
+         Value := 16#FFFD#;
+
+         if Pos > Len then
+            Error (Diagnostics.Lex_Invalid_Literal, Start,
+                   "incomplete escape");
+            Result := Bad_Escape;
+         elsif In_String and then Is_White (C) then
+            --  Gap: backslash, whitespace, backslash (Report 2.6).
+            Munch (Is_White'Access);
+            if Peek = '\' then
+               Pos := Pos + 1;
+               Result := Gap;
+            else
+               Pos := Pos + 1;
+               Error (Diagnostics.Lex_Invalid_Literal, Start,
+                      "string gap must end with a backslash");
+               Result := Bad_Escape;
+            end if;
+         elsif C = '&' then
+            Pos := Pos + 1;
+            Result := Empty_Escape;
+         elsif Is_Digit (C) then
+            Numeric (Is_Digit'Access, 10);
+         elsif C = 'x' and then Is_Hex (Peek (1)) then
+            Pos := Pos + 1;
+            Numeric (Is_Hex'Access, 16);
+         elsif C = 'o' and then Is_Octal (Peek (1)) then
+            Pos := Pos + 1;
+            Numeric (Is_Octal'Access, 8);
+         elsif C = '^'
+           and then (Is_Large (Peek (1))
+                     or else Peek (1) in '@' | '[' | '\' | ']' | '^' | '_')
+         then
+            Pos := Pos + 2;
+            Value := Character'Pos (At_Offset (Pos - 1)) - 64;
+         else
+            case C is
+               when 'a' => Value := 7;   when 'b'  => Value := 8;
+               when 'f' => Value := 12;  when 'n'  => Value := 10;
+               when 'r' => Value := 13;  when 't'  => Value := 9;
+               when 'v' => Value := 11;  when '\'  => Value := 92;
+               when ''' => Value := 39;  when '"'  => Value := 34;
+               when others => Value := Code_Point'Last;
+            end case;
+
+            if Value /= Code_Point'Last then
+               Pos := Pos + 1;
+            else
+               --  ASCII mnemonics, longest match first ("SOH" over "SO").
+               declare
+                  Found : Boolean := False;
+               begin
+                  for Length in reverse 2 .. 3 loop
+                     if not Found and then Pos + Length - 1 <= Len then
+                        declare
+                           Word : constant String :=
+                             Slice (Pos, Pos + Length);
+                        begin
+                           for I in Mnemonics'Range loop
+                              if Mnemonics (I).all = Word then
+                                 Value := Mnemonic_Code (I);
+                                 Pos := Pos + Length;
+                                 Found := True;
+                                 exit;
+                              end if;
+                           end loop;
+                        end;
+                     end if;
+                  end loop;
+                  if not Found then
+                     Pos := Pos + 1;
+                     Error (Diagnostics.Lex_Invalid_Literal, Start,
+                            "unknown escape '\" & C & "'");
+                     Result := Bad_Escape;
+                     Value := 16#FFFD#;
+                  end if;
+               end;
+            end if;
+         end if;
+      end Scan_Escape;
+
+      procedure Append_Code_Point
+        (Buffer : in out Ada.Strings.Unbounded.Unbounded_String;
+         Value  : Code_Point)
+      is
+         use Ada.Strings.Unbounded;
+      begin
+         --  UTF-8 encode; the intern table stores byte strings.
+         if Value < 16#80# then
+            Append (Buffer, Character'Val (Value));
+         elsif Value < 16#800# then
+            Append (Buffer, Character'Val (16#C0# + Value / 2**6));
+            Append (Buffer, Character'Val (16#80# + Value mod 2**6));
+         elsif Value < 16#1_0000# then
+            Append (Buffer, Character'Val (16#E0# + Value / 2**12));
+            Append (Buffer,
+                    Character'Val (16#80# + (Value / 2**6) mod 2**6));
+            Append (Buffer, Character'Val (16#80# + Value mod 2**6));
+         else
+            Append (Buffer, Character'Val (16#F0# + Value / 2**18));
+            Append (Buffer,
+                    Character'Val (16#80# + (Value / 2**12) mod 2**6));
+            Append (Buffer,
+                    Character'Val (16#80# + (Value / 2**6) mod 2**6));
+            Append (Buffer, Character'Val (16#80# + Value mod 2**6));
+         end if;
+      end Append_Code_Point;
+
+      procedure Scan_Char is
+         Start  : constant Positive := Pos;
+         Value  : Code_Point := 16#FFFD#;
+         Broken : Boolean := False;
+      begin
+         Pos := Pos + 1;  --  opening quote
+
+         if Pos > Len or else Peek = ASCII.LF then
+            Error (Diagnostics.Lex_Invalid_Literal, Start,
+                   "unterminated character literal");
+            Broken := True;
+         elsif Peek = '\' then
+            Pos := Pos + 1;
+            declare
+               Result : Escape_Result;
+            begin
+               Scan_Escape (In_String => False,
+                            Result => Result, Value => Value);
+               if Result in Empty_Escape | Gap then
+                  Error (Diagnostics.Lex_Invalid_Literal, Start,
+                         "escape not allowed in character literal");
+                  Broken := True;
+               elsif Result = Bad_Escape then
+                  Broken := True;
+               end if;
+            end;
+         elsif Peek = ''' then
+            Error (Diagnostics.Lex_Invalid_Literal, Start,
+                   "empty character literal");
+            Pos := Pos + 1;
+            Emit_Plain (Error_Token, Start);
+            return;
+         else
+            Value := Character'Pos (Peek);
+            Pos := Pos + 1;
+         end if;
+
+         if Pos <= Len and then Peek = ''' then
+            Pos := Pos + 1;
+         elsif not Broken then
+            Error (Diagnostics.Lex_Invalid_Literal, Start,
+                   "unterminated character literal");
+            Broken := True;
+         end if;
+
+         if Broken then
+            Emit_Plain (Error_Token, Start);
+         else
+            Emit ((Kind => Char_Lit, Char_Value => Value, others => <>),
+                  Start);
+         end if;
+      end Scan_Char;
+
+      procedure Scan_String is
+         use Ada.Strings.Unbounded;
+         Start  : constant Positive := Pos;
+         Buffer : Unbounded_String;
+         Broken : Boolean := False;
+      begin
+         Pos := Pos + 1;  --  opening quote
+
+         loop
+            if Pos > Len or else Peek = ASCII.LF then
+               Error (Diagnostics.Lex_Unterminated_String, Start,
+                      "unterminated string literal");
+               Broken := True;
+               exit;
+            elsif Peek = '"' then
+               Pos := Pos + 1;
+               exit;
+            elsif Peek = '\' then
+               Pos := Pos + 1;
+               declare
+                  Result : Escape_Result;
+                  Value  : Code_Point;
+               begin
+                  Scan_Escape (In_String => True,
+                               Result => Result, Value => Value);
+                  case Result is
+                     when Escaped_Char => Append_Code_Point (Buffer, Value);
+                     when Empty_Escape | Gap => null;
+                     when Bad_Escape => Broken := True;
+                  end case;
+               end;
+            else
+               Append (Buffer, Peek);
+               Pos := Pos + 1;
+            end if;
+         end loop;
+
+         if Broken then
+            Emit_Plain (Error_Token, Start);
+         else
+            Emit ((Kind => String_Lit,
+                   String_Value =>
+                     (if Length (Buffer) = 0 then Names.No_Name
+                      else Names.Name_Id
+                             (Table.Intern (To_String (Buffer)))),
+                   others => <>), Start);
+         end if;
+      end Scan_String;
 
       Special : Token_Kind;
 
@@ -416,6 +732,10 @@ package body AHC.Lexer is
                Scan_Large_Ident;
             elsif Is_Digit (C) then
                Scan_Number;
+            elsif C = ''' then
+               Scan_Char;
+            elsif C = '"' then
+               Scan_String;
             elsif Is_Symbol_Char (C) then
                Scan_Operator;
             else
