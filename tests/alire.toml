@@ -15,8 +15,13 @@ ahc = "*"
 ahc = { path = ".." }
 
 # Tests must run with all contracts enabled, whatever profile the parent
-# crate was built with; contract-violation tests depend on it.
+# crate was built with; contract-violation tests depend on it. Without the
+# build-profiles override, Alire builds the ahc dependency in release mode,
+# which compiles its contracts out.
 [build-switches]
 "*".ada_version = "Ada2022"
 "*".style_checks = "no"
 "*".contracts = "yes"
+
+[build-profiles]
+ahc = "validation"
