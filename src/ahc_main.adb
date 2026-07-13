@@ -12,6 +12,7 @@ with Ada.IO_Exceptions;
 with Ada.Text_IO;
 
 with AHC.Diagnostics;
+with AHC.Layout;
 with AHC.Lexer;
 with AHC.Names;
 with AHC.Source_Text;
@@ -38,11 +39,20 @@ procedure AHC_Main is
    --  Dump one token per line as "line:col[*] image"; '*' marks the
    --  first token of a source line (layout-relevant). Golden-test format.
    procedure Run_Lex (Path : String; Apply_Layout : Boolean) is
-      pragma Unreferenced (Apply_Layout);  --  until Milestone 4
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
       Stream : AHC.Tokens.Token_Vectors.Vector;
+
+      procedure Print (T : AHC.Tokens.Token) is
+         Line : constant String := T.Line'Image;
+         Col  : constant String := T.Column'Image;
+      begin
+         Put_Line
+           (Line (2 .. Line'Last) & ":" & Col (2 .. Col'Last)
+            & (if T.First_On_Line then "* " else "  ")
+            & AHC.Tokens.Image (T, Table));
+      end Print;
    begin
       begin
          Text := AHC.Source_Text.Load_File (Path);
@@ -54,17 +64,24 @@ procedure AHC_Main is
 
       AHC.Lexer.Scan (Text, Table, Bag, Stream);
 
-      for T of Stream loop
+      if Apply_Layout then
          declare
-            Line : constant String := T.Line'Image;
-            Col  : constant String := T.Column'Image;
+            use type AHC.Tokens.Token_Kind;
+            Laid : AHC.Layout.Layout_Stream;
+            T    : AHC.Tokens.Token;
          begin
-            Put_Line
-              (Line (2 .. Line'Last) & ":" & Col (2 .. Col'Last)
-               & (if T.First_On_Line then "* " else "  ")
-               & AHC.Tokens.Image (T, Table));
+            Laid.Start (Stream);
+            loop
+               Laid.Next (Bag, T);
+               Print (T);
+               exit when T.Kind = AHC.Tokens.End_Of_File;
+            end loop;
          end;
-      end loop;
+      else
+         for T of Stream loop
+            Print (T);
+         end loop;
+      end if;
 
       Bag.Print_All (Text);
       if Bag.Has_Errors then

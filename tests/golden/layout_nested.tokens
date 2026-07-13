@@ -1,0 +1,51 @@
+1:1* module
+1:8  conid "M"
+1:10  where
+2:1  {v
+2:1* varid "f"
+2:3  varid "x"
+2:5  =
+2:7  case
+2:12  varid "x"
+2:14  of
+3:9  {v
+3:9* int "0"
+3:11  ->
+3:14  varid "a"
+4:9  ;v
+4:9* _
+4:11  ->
+4:14  varid "b"
+5:3  }v
+5:3* where
+5:9  {v
+5:9  varid "a"
+5:11  =
+5:13  do
+5:16  {v
+5:16  varid "p"
+6:16  ;v
+6:16* varid "q"
+7:9  }v
+7:9  ;v
+7:9* varid "b"
+7:11  =
+7:13  int "2"
+8:1  }v
+8:1  ;v
+8:1* varid "g"
+8:3  =
+8:5  let
+8:9  {v
+8:9  varid "h"
+8:11  =
+8:13  int "1"
+9:9  ;v
+9:9* varid "i"
+9:11  =
+9:13  int "2"
+10:6  }v
+10:6* in
+10:9  varid "h"
+10:11  }v
+10:11  <eof>
