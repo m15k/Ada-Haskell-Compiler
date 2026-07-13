@@ -2,15 +2,20 @@
 --
 --  Usage:
 --    ahc --version
---    ahc lex [--layout] FILE.hs    (Milestone 2+)
+--    ahc lex [--layout] FILE.hs
 --    ahc parse FILE.hs             (Milestone 5+)
 --
 --  Exit status: 0 on success, 1 on compilation errors, 2 on usage errors.
 
 with Ada.Command_Line;
+with Ada.IO_Exceptions;
 with Ada.Text_IO;
 
-with AHC;
+with AHC.Diagnostics;
+with AHC.Lexer;
+with AHC.Names;
+with AHC.Source_Text;
+with AHC.Tokens;
 
 procedure AHC_Main is
    use Ada.Command_Line;
@@ -22,6 +27,51 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc lex [--layout] FILE.hs");
       Put_Line (Target, "       ahc parse FILE.hs");
    end Print_Usage;
+
+   procedure Usage_Error (Message : String) is
+   begin
+      Put_Line (Standard_Error, "ahc: " & Message);
+      Print_Usage (Standard_Error);
+      Set_Exit_Status (2);
+   end Usage_Error;
+
+   --  Dump one token per line as "line:col[*] image"; '*' marks the
+   --  first token of a source line (layout-relevant). Golden-test format.
+   procedure Run_Lex (Path : String; Apply_Layout : Boolean) is
+      pragma Unreferenced (Apply_Layout);  --  until Milestone 4
+      Text   : AHC.Source_Text.Source;
+      Table  : AHC.Names.Name_Table;
+      Bag    : AHC.Diagnostics.Diagnostic_Bag;
+      Stream : AHC.Tokens.Token_Vectors.Vector;
+   begin
+      begin
+         Text := AHC.Source_Text.Load_File (Path);
+      exception
+         when Ada.IO_Exceptions.Name_Error =>
+            Usage_Error ("cannot open '" & Path & "'");
+            return;
+      end;
+
+      AHC.Lexer.Scan (Text, Table, Bag, Stream);
+
+      for T of Stream loop
+         declare
+            Line : constant String := T.Line'Image;
+            Col  : constant String := T.Column'Image;
+         begin
+            Put_Line
+              (Line (2 .. Line'Last) & ":" & Col (2 .. Col'Last)
+               & (if T.First_On_Line then "* " else "  ")
+               & AHC.Tokens.Image (T, Table));
+         end;
+      end loop;
+
+      Bag.Print_All (Text);
+      if Bag.Has_Errors then
+         Set_Exit_Status (1);
+      end if;
+   end Run_Lex;
+
 begin
    if Argument_Count = 0 then
       Print_Usage (Standard_Error);
@@ -34,14 +84,20 @@ begin
    begin
       if Command = "--version" then
          Put_Line ("ahc " & AHC.Version);
-      elsif Command = "lex" or else Command = "parse" then
+      elsif Command = "lex" then
+         if Argument_Count = 2 then
+            Run_Lex (Argument (2), Apply_Layout => False);
+         elsif Argument_Count = 3 and then Argument (2) = "--layout" then
+            Run_Lex (Argument (3), Apply_Layout => True);
+         else
+            Usage_Error ("expected: ahc lex [--layout] FILE.hs");
+         end if;
+      elsif Command = "parse" then
          Put_Line (Standard_Error,
-                   "ahc: '" & Command & "' is not implemented yet");
+                   "ahc: 'parse' is not implemented yet");
          Set_Exit_Status (2);
       else
-         Put_Line (Standard_Error, "ahc: unknown command '" & Command & "'");
-         Print_Usage (Standard_Error);
-         Set_Exit_Status (2);
+         Usage_Error ("unknown command '" & Command & "'");
       end if;
    end;
 end AHC_Main;

@@ -33,3 +33,6 @@ jobs:
 
       - name: Smoke-check driver
         run: ./bin/ahc --version
+
+      - name: Run golden tests
+        run: scripts/run_golden.sh

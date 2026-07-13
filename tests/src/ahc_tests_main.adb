@@ -6,6 +6,7 @@ with Test_Source_Text;
 with Test_Names;
 with Test_Diagnostics;
 with Test_Tokens;
+with Test_Lexer;
 
 procedure AHC_Tests_Main is
 begin
@@ -14,6 +15,7 @@ begin
    Test_Names.Run;
    Test_Diagnostics.Run;
    Test_Tokens.Run;
+   Test_Lexer.Run;
 
    Test_Harness.Summarize_And_Exit;
 end AHC_Tests_Main;
