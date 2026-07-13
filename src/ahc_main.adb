@@ -12,6 +12,7 @@ with Ada.IO_Exceptions;
 with Ada.Text_IO;
 
 with AHC.Diagnostics;
+with AHC.Fixity;
 with AHC.Layout;
 with AHC.Lexer;
 with AHC.Names;
@@ -108,6 +109,7 @@ procedure AHC_Main is
 
       AHC.Lexer.Scan (Text, Table, Bag, Stream);
       AHC.Parser.Parse_Module (Stream, Table, Bag, Arena);
+      AHC.Fixity.Resolve_Module (Arena, Table, Bag);
 
       Put (AHC.Syntax.Printer.Dump (Arena, Table));
 

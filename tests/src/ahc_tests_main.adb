@@ -9,6 +9,7 @@ with Test_Tokens;
 with Test_Lexer;
 with Test_Layout;
 with Test_Parser;
+with Test_Fixity;
 
 procedure AHC_Tests_Main is
 begin
@@ -20,6 +21,7 @@ begin
    Test_Lexer.Run;
    Test_Layout.Run;
    Test_Parser.Run;
+   Test_Fixity.Run;
 
    Test_Harness.Summarize_And_Exit;
 end AHC_Tests_Main;

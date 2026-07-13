@@ -30,7 +30,16 @@ that violated contracts actually raise `Assert_Failure`.
 
 ## Status
 
-Phase 1 (frontend: lexer, layout rule, AST, parser) is under construction.
+Phase 1 (frontend) is complete: lexer with the full literal grammar,
+Report 10.3 layout engine, recursive-descent parser for the whole
+Haskell 2010 surface, and Report 10.6 fixity resolution.
+`ahc parse Foo.hs` prints a canonical AST dump. Next up: Phase 2, the
+desugarer to a System-FC-like Core and the Hindley-Milner typechecker.
+
+```sh
+scripts/run_golden.sh          # golden lex/layout/parse expectations
+scripts/run_differential.sh    # agree-with-GHC corpus check (needs ghc)
+```
 
 ## Layout
 
