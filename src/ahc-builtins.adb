@@ -180,6 +180,20 @@ package body AHC.Builtins is
       begin
          M.DataCons (Real_DataCon_Id (M.Classes (Cl).Dict_Con)).Arity :=
            Arity;
+         for I in 1 .. M.Classes (Cl).Supers.Last_Index loop
+            declare
+               Img : constant String := I'Image;
+               Sel : constant Real_Var_Id :=
+                 M.Mint_Var
+                   ((Name => Table.Intern
+                       ("sup$" & Table.Text (M.Info (Cl).Name)
+                        & "$" & Img (2 .. Img'Last)),
+                     Span => No_Span, Is_Global => True,
+                     others => <>));
+            begin
+               M.Classes (Cl).Super_Sels.Append (Sel);
+            end;
+         end loop;
       end Finish_Class;
 
       --  Signature-only instance: an opaque dictionary global.
@@ -205,6 +219,7 @@ package body AHC.Builtins is
              Head_Vars => Head_Vars, Context => Context,
              Dict_Global => Var_Id (Dict),
              Method_Binds => Bind_Vectors.Empty_Vector,
+             Param_Vars => Var_Id_Vectors.Empty_Vector,
              Span => No_Span));
          pragma Unreferenced (Ignore);
       end Def_Instance;

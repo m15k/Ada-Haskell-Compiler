@@ -11,10 +11,6 @@ package body AHC.Typechecker is
 
    Max_Context_Depth : constant := 63;
 
-   ---------------------------------------------------------------------
-   --  Fully_Typed
-   ---------------------------------------------------------------------
-
    function Fully_Typed (M : Core.Core_Module) return Boolean is
    begin
       for G of M.Top_Binds loop
@@ -35,7 +31,7 @@ package body AHC.Typechecker is
       Sigs  : Kinds.Sig_Maps.Map)
    is
       ------------------------------------------------------------------
-      --  Inference state: union-find meta cells with levels
+      --  Inference state
       ------------------------------------------------------------------
 
       type Meta_Cell is record
@@ -50,7 +46,44 @@ package body AHC.Typechecker is
       Cells : Cell_Vectors.Vector;
       Level : Natural := 0;
 
-      Wanted : Constraint_Vectors.Vector;
+      --  Wanted constraints with evidence shapes (M16): every scheme
+      --  instantiation appends wanteds; solving records HOW each was
+      --  discharged; evidence expressions are built at the end and
+      --  applied at the recorded occurrence sites.
+      package Nat_Vectors is new Ada.Containers.Vectors
+        (Positive, Positive);
+
+      type Sol_Kind is (Unsolved, By_Given, By_Param, By_Instance,
+                        By_Error);
+
+      type Wanted_Rec is record
+         C     : Constraint;
+         Site  : Expr_Id := No_Expr;    --  occurrence to rewrite
+         Owner : Var_Id := No_Var;      --  binder whose rhs holds At
+         Sol   : Sol_Kind := Unsolved;
+         GEv   : Expr_Id := No_Expr;    --  By_Given evidence expr
+         Dict  : Var_Id := No_Var;      --  By_Param dictionary param
+         Inst  : Instance_Id := 0;      --  By_Instance
+         Subs  : Nat_Vectors.Vector;    --  wanted indices for Inst ctx
+      end record;
+
+      package Wanted_Vectors is new Ada.Containers.Vectors
+        (Positive, Wanted_Rec);
+
+      W_List : Wanted_Vectors.Vector;
+      Current_Owner : Var_Id := No_Var;
+      Probing : Boolean := False;
+
+      --  Dictionary-lambda wraps to apply at the end: binder -> params.
+      type Wrap_Rec is record
+         Binder : Real_Var_Id;
+         Params : Var_Id_Vectors.Vector;
+      end record;
+
+      package Wrap_Vectors is new Ada.Containers.Vectors
+        (Positive, Wrap_Rec);
+
+      Wraps : Wrap_Vectors.Vector;
 
       function Fresh_Meta return Real_Type_Id is
       begin
@@ -61,7 +94,6 @@ package body AHC.Typechecker is
                                     Cells.Last_Index)));
       end Fresh_Meta;
 
-      --  Follow bindings at the head.
       function Repr (T : Real_Type_Id) return Real_Type_Id is
          N : constant Type_Node := M.Node (T);
       begin
@@ -96,8 +128,6 @@ package body AHC.Typechecker is
       function Is_Unbound (Meta : Real_Meta_Id) return Boolean
       is (not Cells (Positive (Meta)).Bound);
 
-      --  Lower the levels of metas inside T to at most L (level
-      --  adjustment keeps generalization sound).
       procedure Adjust_Levels (T : Real_Type_Id; L : Natural) is
          Z : constant Real_Type_Id := Repr (T);
          N : constant Type_Node := M.Node (Z);
@@ -131,8 +161,7 @@ package body AHC.Typechecker is
             Level => Cells (Positive (Meta)).Level);
       end Bind_Meta;
 
-      --  The observable acyclicity witness (Zonk terminates and the
-      --  result is meta-free once generalization substitutes).
+      --  The observable acyclicity witness.
       function Meta_Free (T : Real_Type_Id) return Boolean is
          N : constant Type_Node := M.Node (T);
       begin
@@ -148,9 +177,6 @@ package body AHC.Typechecker is
          end case;
       end Meta_Free;
 
-      --  Rebuild T with all bound metas resolved; unbound metas are
-      --  replaced via Subst (used by generalization) or left in place
-      --  when Subst is empty.
       function Meta_Hash (K : Real_Meta_Id)
         return Ada.Containers.Hash_Type
       is (Ada.Containers.Hash_Type (K));
@@ -230,8 +256,8 @@ package body AHC.Typechecker is
          end if;
          if NA.Kind = TMeta_T then
             if Occurs (NA.Meta, ZB) then
-               Bag.Add (Diagnostics.Error, Diagnostics.Type_Occurs_Check,
-                        Span,
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Type_Occurs_Check, Span,
                         "cannot construct the infinite type: "
                         & Type_Str (ZA) & " ~ " & Type_Str (ZB));
                return;
@@ -241,8 +267,8 @@ package body AHC.Typechecker is
          end if;
          if NB.Kind = TMeta_T then
             if Occurs (NB.Meta, ZA) then
-               Bag.Add (Diagnostics.Error, Diagnostics.Type_Occurs_Check,
-                        Span,
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Type_Occurs_Check, Span,
                         "cannot construct the infinite type: "
                         & Type_Str (ZB) & " ~ " & Type_Str (ZA));
                return;
@@ -253,7 +279,6 @@ package body AHC.Typechecker is
 
          case NA.Kind is
             when TCon_T =>
-               --  Design rule 2: erased-head comparison.
                if not Same_Con_Erased (NA, NB) then
                   Mismatch;
                end if;
@@ -276,7 +301,7 @@ package body AHC.Typechecker is
                   Unify (NA.To, NB.To, Span);
                end if;
             when TMeta_T =>
-               null;   --  unreachable
+               null;
          end case;
       end Unify;
 
@@ -301,7 +326,8 @@ package body AHC.Typechecker is
          case N.Kind is
             when TVar_T =>
                declare
-                  C : constant TyVar_Type_Maps.Cursor := Map.Find (N.Tv);
+                  C : constant TyVar_Type_Maps.Cursor :=
+                    Map.Find (N.Tv);
                begin
                   if TyVar_Type_Maps.Has_Element (C) then
                      return TyVar_Type_Maps.Element (C);
@@ -324,10 +350,10 @@ package body AHC.Typechecker is
       end Subst_TyVars;
 
       --  Instantiate a scheme with fresh metas; its context becomes
-      --  wanted constraints.
+      --  wanted constraints recorded against the occurrence site.
       function Instantiate
-        (S : Real_Scheme_Id; Span : Diagnostics.Source_Span)
-         return Real_Type_Id
+        (S : Real_Scheme_Id; Span : Diagnostics.Source_Span;
+         Site : Expr_Id := No_Expr) return Real_Type_Id
       is
          Sch : constant Scheme := M.Node (S);
          Map : TyVar_Type_Maps.Map;
@@ -336,16 +362,19 @@ package body AHC.Typechecker is
             Map.Include (Tv, Fresh_Meta);
          end loop;
          for C of Sch.Context loop
-            Wanted.Append
-              (Constraint'(Class => C.Class,
-                           Arg => Subst_TyVars (C.Arg, Map),
-                           Span => Span));
+            W_List.Append
+              (Wanted_Rec'
+                 (C => Constraint'(Class => C.Class,
+                                   Arg => Subst_TyVars (C.Arg, Map),
+                                   Span => Span),
+                  Site => Site, Owner => Current_Owner,
+                  others => <>));
          end loop;
          return Subst_TyVars (Real_Type_Id (Sch.S_Body), Map);
       end Instantiate;
 
       ------------------------------------------------------------------
-      --  Built-in literal types
+      --  Literal types
       ------------------------------------------------------------------
 
       function TCon (TC : Core.TyCon_Id) return Real_Type_Id
@@ -365,14 +394,19 @@ package body AHC.Typechecker is
                  T_Arg => TCon (Env.Char_TC))));
 
       ------------------------------------------------------------------
-      --  Context reduction (Report 4.5.3) and defaulting (4.3.4)
+      --  Givens and evidence-shaped context reduction
       ------------------------------------------------------------------
 
-      --  Givens: constraints assumed from an enclosing signature,
-      --  closed under superclasses.
-      Givens : Constraint_Vectors.Vector;
+      type Given_Rec is record
+         C  : Constraint;
+         Ev : Real_Expr_Id;    --  dictionary expression
+      end record;
 
-      --  Both args zonked to rigid tyvars (post-generalization)?
+      package Given_Vectors is new Ada.Containers.Vectors
+        (Positive, Given_Rec);
+
+      Givens : Given_Vectors.Vector;
+
       function Same_Tv_Arg (A, B : Real_Type_Id) return Boolean is
          NA : constant Type_Node := M.Node (Repr (A));
          NB : constant Type_Node := M.Node (Repr (B));
@@ -381,35 +415,34 @@ package body AHC.Typechecker is
            and then NA.Tv = NB.Tv;
       end Same_Tv_Arg;
 
-      function Same_Constraint (A, B : Constraint) return Boolean is
-         RA : constant Real_Type_Id := Repr (A.Arg);
-         RB : constant Real_Type_Id := Repr (B.Arg);
+      --  Assume C with evidence Ev, plus superclasses via their
+      --  selector globals.
+      procedure Assume (C : Constraint; Ev : Real_Expr_Id) is
+         Info : constant Class_Info := M.Info (C.Class);
       begin
-         if A.Class /= B.Class then
-            return False;
-         end if;
-         --  Given args are rigid tyvars; compare heads.
-         declare
-            NA : constant Type_Node := M.Node (RA);
-            NB : constant Type_Node := M.Node (RB);
-         begin
-            return NA.Kind = TVar_T and then NB.Kind = TVar_T
-              and then NA.Tv = NB.Tv;
-         end;
-      end Same_Constraint;
-
-      --  Add C and all its superclass constraints to Givens.
-      procedure Assume (C : Constraint) is
-      begin
-         Givens.Append (C);
-         for Super of M.Info (C.Class).Supers loop
-            Assume (Constraint'(Class => Super, Arg => C.Arg,
-                                Span => C.Span));
+         Givens.Append (Given_Rec'(C => C, Ev => Ev));
+         for I in 1 .. Info.Supers.Last_Index loop
+            declare
+               Sel : constant Var_Id :=
+                 (if I <= Info.Super_Sels.Last_Index
+                  then Var_Id (Info.Super_Sels (I)) else No_Var);
+               Sup_Ev : Real_Expr_Id := Ev;
+            begin
+               if Sel /= No_Var then
+                  Sup_Ev := M.Add (Expr_Node'
+                    (Kind => App_C, Span => C.Span,
+                     Fun => M.Add (Expr_Node'
+                       (Kind => Var_C, Span => C.Span,
+                        V => Real_Var_Id (Sel))),
+                     Arg => Ev));
+               end if;
+               Assume (Constraint'(Class => Info.Supers (I),
+                                   Arg => C.Arg, Span => C.Span),
+                       Sup_Ev);
+            end;
          end loop;
       end Assume;
 
-      --  Head TyCon of a zonked type, treating T1 -> T2 as (->) and
-      --  following application spines. 0 if headed by a meta/tyvar.
       procedure Head_Of
         (T : Real_Type_Id;
          Head : out TyCon_Id;
@@ -433,187 +466,237 @@ package body AHC.Typechecker is
          end case;
       end Head_Of;
 
-      --  Reduce one wanted to HNF. True if discharged or deferred as a
-      --  tyvar-headed constraint (still wanted); False only on error.
-      procedure Solve
-        (C : Constraint; Depth : Natural;
-         Residual : in out Constraint_Vectors.Vector;
-         Quiet : Boolean := False;
-         Failed : access Boolean := null)
-      is
-         procedure Report (Code : Diagnostics.Diag_Code; Msg : String)
-         is
-         begin
-            if Quiet then
-               if Failed /= null then
-                  Failed.all := True;
-               end if;
-            else
-               Bag.Add (Diagnostics.Error, Code, C.Span, Msg);
-            end if;
-         end Report;
-         Head : TyCon_Id;
-         Args : Type_Id_Vectors.Vector;
+      --  Reduce wanted I to HNF, recording its evidence shape.
+      --  Unsolved entries have tyvar/meta heads (residuals).
+      procedure Solve (I : Positive; Depth : Natural) is
+         W : Wanted_Rec := W_List (I);
       begin
-         if Depth > Max_Context_Depth then
-            Report (Diagnostics.Class_Context_Depth,
-                    "context reduction stack overflow");
+         if W.Sol /= Unsolved then
             return;
          end if;
 
-         --  Discharged by a given (or its superclasses)?
+         if Depth > Max_Context_Depth then
+            if not Probing then
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Class_Context_Depth, W.C.Span,
+                        "context reduction stack overflow");
+            end if;
+            W.Sol := By_Error;
+            W_List.Replace_Element (I, W);
+            return;
+         end if;
+
          for G of Givens loop
-            if Same_Constraint (G, C) then
+            if G.C.Class = W.C.Class
+              and then Same_Tv_Arg (G.C.Arg, W.C.Arg)
+            then
+               W.Sol := By_Given;
+               W.GEv := Expr_Id (G.Ev);
+               W_List.Replace_Element (I, W);
                return;
             end if;
          end loop;
 
-         Head_Of (C.Arg, Head, Args);
-         if Head = No_TyCon then
-            --  Tyvar-headed: stays wanted (generalized or defaulted).
-            Residual.Append (C);
-            return;
-         end if;
+         declare
+            Head : TyCon_Id;
+            Args : Type_Id_Vectors.Vector;
+         begin
+            Head_Of (W.C.Arg, Head, Args);
+            if Head = No_TyCon then
+               return;   --  residual
+            end if;
 
-         --  Find the instance for (Class, Head).
-         for I of M.Info (C.Class).Instances loop
-            declare
-               Inst : constant Instance_Info := M.Info (I);
-            begin
-               if Inst.Head = Head then
-                  --  Map instance head vars to the wanted's args and
-                  --  solve the instance context.
-                  declare
-                     Map : TyVar_Type_Maps.Map;
-                  begin
-                     for VI in 1 .. Inst.Head_Vars.Last_Index loop
-                        if VI <= Args.Last_Index then
-                           Map.Include (Inst.Head_Vars (VI),
-                                        Args (VI));
-                        end if;
-                     end loop;
-                     for IC of Inst.Context loop
-                        Solve
-                          (Constraint'
-                             (Class => IC.Class,
-                              Arg => Subst_TyVars (IC.Arg, Map),
-                              Span => C.Span),
-                           Depth + 1, Residual, Quiet, Failed);
-                     end loop;
-                  end;
-                  return;
-               end if;
-            end;
-         end loop;
+            for Inst_Id of M.Info (W.C.Class).Instances loop
+               declare
+                  Inst : constant Instance_Info := M.Info (Inst_Id);
+               begin
+                  if Inst.Head = Head then
+                     declare
+                        Map : TyVar_Type_Maps.Map;
+                     begin
+                        for VI in 1 .. Inst.Head_Vars.Last_Index loop
+                           if VI <= Args.Last_Index then
+                              Map.Include (Inst.Head_Vars (VI),
+                                           Args (VI));
+                           end if;
+                        end loop;
+                        for IC of Inst.Context loop
+                           W_List.Append
+                             (Wanted_Rec'
+                                (C => Constraint'
+                                   (Class => IC.Class,
+                                    Arg => Subst_TyVars (IC.Arg, Map),
+                                    Span => W.C.Span),
+                                 Site => No_Expr, Owner => W.Owner,
+                                 others => <>));
+                           W.Subs.Append (W_List.Last_Index);
+                           Solve (W_List.Last_Index, Depth + 1);
+                        end loop;
+                        W.Sol := By_Instance;
+                        W.Inst := Instance_Id (Inst_Id);
+                        W_List.Replace_Element (I, W);
+                        return;
+                     end;
+                  end if;
+               end;
+            end loop;
 
-         Report (Diagnostics.Class_No_Instance,
-                 "no instance for '"
-                 & Table.Text (M.Info (C.Class).Name) & " "
-                 & Type_Str (C.Arg) & "'");
+            if not Probing then
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Class_No_Instance, W.C.Span,
+                        "no instance for '"
+                        & Table.Text (M.Info (W.C.Class).Name) & " "
+                        & Type_Str (W.C.Arg) & "'");
+            end if;
+            W.Sol := By_Error;
+            W_List.Replace_Element (I, W);
+         end;
       end Solve;
 
-      --  Report 4.3.4: default an ambiguous tyvar when all of its
-      --  classes are standard and at least one is numeric; candidates
-      --  are Integer then Double.
-      procedure Try_Default (Residual : in out Constraint_Vectors.Vector)
-      is
-         Remaining : Constraint_Vectors.Vector;
+      --  Report 4.3.4 defaulting over the unsolved residuals.
+      procedure Try_Default is
       begin
-         --  Group by head meta.
-         while not Residual.Is_Empty loop
-            declare
-               First_C : constant Constraint := Residual.First_Element;
-               FZ : constant Real_Type_Id := Repr (First_C.Arg);
-               FN : constant Type_Node := M.Node (FZ);
-               Group : Constraint_Vectors.Vector;
-               Rest  : Constraint_Vectors.Vector;
-               Numeric : Boolean := False;
-            begin
-               if FN.Kind /= TMeta_T then
-                  Remaining.Append (First_C);
-                  Residual.Delete_First;
-               else
-                  for C of Residual loop
+         for I in 1 .. W_List.Last_Index loop
+            if W_List (I).Sol = Unsolved then
+               declare
+                  Z : constant Real_Type_Id :=
+                    Repr (W_List (I).C.Arg);
+                  N : constant Type_Node := M.Node (Z);
+               begin
+                  if N.Kind = TMeta_T then
+                     --  Collect the classes constraining this meta.
                      declare
-                        Z : constant Real_Type_Id := Repr (C.Arg);
-                        N2 : constant Type_Node := M.Node (Z);
-                     begin
-                        if N2.Kind = TMeta_T
-                          and then N2.Meta = FN.Meta
-                        then
-                           Group.Append (C);
-                           if Class_Id (C.Class) = Env.Num_Cl
-                             or else Class_Id (C.Class) =
-                                       Env.Fractional_Cl
-                             or else Class_Id (C.Class) = Env.Real_Cl
-                           then
-                              Numeric := True;
-                           end if;
-                        else
-                           Rest.Append (C);
-                        end if;
-                     end;
-                  end loop;
-                  Residual := Rest;
-
-                  if Numeric then
-                     --  Try Integer, then Double.
-                     declare
+                        Numeric : Boolean := False;
                         Solved : Boolean := False;
                      begin
-                        for Cand in 1 .. 2 loop
-                           if not Solved then
+                        for J in I .. W_List.Last_Index loop
+                           if W_List (J).Sol = Unsolved then
                               declare
-                                 T : constant Real_Type_Id :=
-                                   TCon (if Cand = 1 then Env.Integer_TC
-                                         else Env.Double_TC);
-                                 Ok : Boolean := True;
+                                 ZJ : constant Real_Type_Id :=
+                                   Repr (W_List (J).C.Arg);
+                                 NJ : constant Type_Node :=
+                                   M.Node (ZJ);
                               begin
-                                 for C of Group loop
-                                    declare
-                                       Probe : Constraint_Vectors.Vector;
-                                       Fail : aliased Boolean := False;
-                                       Trial : Constraint := C;
-                                    begin
-                                       --  Probe quietly: does an
-                                       --  instance exist?
-                                       Trial.Arg := T;
-                                       Solve (Trial, 0, Probe,
-                                              Quiet => True,
-                                              Failed => Fail'Access);
-                                       if Fail or else not Probe.Is_Empty
-                                       then
-                                          Ok := False;
-                                       end if;
-                                    end;
-                                 end loop;
-                                 if Ok then
-                                    Bind_Meta (FN.Meta, T);
-                                    Solved := True;
+                                 if NJ.Kind = TMeta_T
+                                   and then NJ.Meta = N.Meta
+                                   and then
+                                     (Class_Id (W_List (J).C.Class) =
+                                        Env.Num_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.Fractional_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.Real_Cl)
+                                 then
+                                    Numeric := True;
                                  end if;
                               end;
                            end if;
                         end loop;
-                        if not Solved then
-                           Bag.Add (Diagnostics.Error,
-                                    Diagnostics.Type_Ambiguous,
-                                    First_C.Span,
-                                    "ambiguous type variable in"
-                                    & " constraints");
-                        end if;
-                     end;
-                  else
-                     Bag.Add (Diagnostics.Error,
-                              Diagnostics.Type_Ambiguous, First_C.Span,
+
+                        if Numeric then
+                           for Cand in 1 .. 2 loop
+                              if not Solved then
+                                 declare
+                                    T : constant Real_Type_Id :=
+                                      TCon (if Cand = 1
+                                            then Env.Integer_TC
+                                            else Env.Double_TC);
+                                    Ok : Boolean := True;
+                                    Mark : constant Natural :=
+                                      W_List.Last_Index;
+                                 begin
+                                    --  Quiet probe on every class of
+                                    --  this meta.
+                                    Probing := True;
+                                    for J in 1 .. Mark loop
+                                       if W_List (J).Sol = Unsolved
+                                       then
+                                          declare
+                                             ZJ : constant
+                                               Real_Type_Id :=
+                                                 Repr (W_List (J)
+                                                         .C.Arg);
+                                             NJ : constant Type_Node
+                                               := M.Node (ZJ);
+                                          begin
+                                             if NJ.Kind = TMeta_T
+                                               and then NJ.Meta =
+                                                          N.Meta
+                                             then
+                                                declare
+                                                   CJ : constant
+                                                     Constraint :=
+                                                       W_List (J).C;
+                                                begin
+                                                   W_List.Append
+                                                     (Wanted_Rec'
+                                                        (C =>
+                                                           Constraint'
+                                                           (Class =>
+                                                              CJ.Class,
+                                                            Arg => T,
+                                                            Span =>
+                                                              CJ.Span),
+                                                         others =>
+                                                           <>));
+                                                end;
+                                                Solve
+                                                  (W_List.Last_Index,
+                                                   0);
+                                                if W_List
+                                                  (W_List.Last_Index)
+                                                  .Sol in
+                                                    By_Error | Unsolved
+                                                then
+                                                   Ok := False;
+                                                end if;
+                                             end if;
+                                          end;
+                                       end if;
+                                    end loop;
+                                    Probing := False;
+                                    while W_List.Last_Index > Mark loop
+                                       W_List.Delete_Last;
+                                    end loop;
+                                    if Ok then
+                                       Bind_Meta (N.Meta, T);
+                                       Solved := True;
+                                       --  Re-solve for evidence.
+                                       for J in 1 .. Mark loop
+                                          if W_List (J).Sol = Unsolved
+                                          then
+                                             Solve (J, 0);
+                                          end if;
+                                       end loop;
+                                    end if;
+                                 end;
+                              end if;
+                           end loop;
+                           if not Solved then
+                              Bag.Add (Diagnostics.Error,
+                                       Diagnostics.Type_Ambiguous,
+                                       W_List (I).C.Span,
+                                       "ambiguous type variable in"
+                                       & " constraints");
+                           end if;
+                        else
+                           Bag.Add
+                             (Diagnostics.Error,
+                              Diagnostics.Type_Ambiguous,
+                              W_List (I).C.Span,
                               "ambiguous type variable in constraint '"
                               & Table.Text
-                                  (M.Info (First_C.Class).Name)
-                              & " " & Type_Str (First_C.Arg) & "'");
+                                  (M.Info (W_List (I).C.Class).Name)
+                              & " " & Type_Str (W_List (I).C.Arg)
+                              & "'");
+                        end if;
+                     end;
                   end if;
-               end if;
-            end;
+               end;
+            end if;
          end loop;
-         Residual := Remaining;
       end Try_Default;
 
       ------------------------------------------------------------------
@@ -621,7 +704,7 @@ package body AHC.Typechecker is
       ------------------------------------------------------------------
 
       procedure Check_Group
-        (Binds : Bind_Vectors.Vector; Top : Boolean);
+        (Binds : in out Bind_Vectors.Vector);
 
       function Infer (E : Real_Expr_Id) return Real_Type_Id is
          N : constant Expr_Node := M.Node (E);
@@ -634,12 +717,11 @@ package body AHC.Typechecker is
                begin
                   if V.Var_Scheme /= No_Scheme then
                      return Instantiate
-                       (Real_Scheme_Id (V.Var_Scheme), Span);
+                       (Real_Scheme_Id (V.Var_Scheme), Span,
+                        Site => Expr_Id (E));
                   elsif V.Var_Type /= No_Type then
                      return Real_Type_Id (V.Var_Type);
                   else
-                     --  A global whose type is unknown (opaque
-                     --  dictionary or an errored binder): fresh meta.
                      declare
                         T : constant Real_Type_Id := Fresh_Meta;
                      begin
@@ -685,8 +767,18 @@ package body AHC.Typechecker is
                   end;
                end;
             when Let_C =>
-               Check_Group (N.Binds, Top => False);
-               return Infer (N.Let_Body);
+               declare
+                  Local : Bind_Vectors.Vector := N.Binds;
+               begin
+                  Check_Group (Local);
+                  --  Write back (dictionary wraps may have changed
+                  --  the binds); node surgery via Replace_Element.
+                  M.Exprs.Replace_Element
+                    (E, Expr_Node'(Kind => Let_C, Span => Span,
+                                   Is_Rec => N.Is_Rec, Binds => Local,
+                                   Let_Body => N.Let_Body));
+                  return Infer (N.Let_Body);
+               end;
             when Case_C =>
                declare
                   TS : constant Real_Type_Id := Infer (N.Scrutinee);
@@ -711,7 +803,6 @@ package body AHC.Typechecker is
                                  else
                                     CT := Fresh_Meta;
                                  end if;
-                                 --  CT = f1 -> .. -> fn -> T args.
                                  for B of Alt.Binders loop
                                     declare
                                        Z : constant Real_Type_Id :=
@@ -737,7 +828,8 @@ package body AHC.Typechecker is
                            when Default_Alt =>
                               null;
                         end case;
-                        Unify (Infer (Alt.Alt_Body), R, Alt.Span);
+                        Unify (Infer (M.Node (A).Alt_Body), R,
+                               Alt.Span);
                      end;
                   end loop;
                   return R;
@@ -746,10 +838,11 @@ package body AHC.Typechecker is
       end Infer;
 
       ------------------------------------------------------------------
-      --  Binding groups, generalization, MR
+      --  Binding groups
       ------------------------------------------------------------------
 
-      function Free_Metas_In_Env_Level (T : Real_Type_Id) return Boolean
+      function Free_Metas_In_Env_Level (T : Real_Type_Id)
+        return Boolean
       is
          Z : constant Real_Type_Id := Repr (T);
          N : constant Type_Node := M.Node (Z);
@@ -770,8 +863,7 @@ package body AHC.Typechecker is
 
       procedure Collect_Gen_Metas
         (T : Real_Type_Id; Into : in out Meta_Type_Maps.Map;
-         Order : in out TyVar_Id_Vectors.Vector;
-         Names_Src : in out Natural)
+         Order : in out TyVar_Id_Vectors.Vector)
       is
          Z : constant Real_Type_Id := Repr (T);
          N : constant Type_Node := M.Node (Z);
@@ -781,7 +873,6 @@ package body AHC.Typechecker is
                if Cells (Positive (N.Meta)).Level > Level
                  and then not Into.Contains (N.Meta)
                then
-                  Names_Src := Names_Src + 1;
                   declare
                      Tv : constant Real_TyVar_Id :=
                        M.Mint_TyVar
@@ -795,27 +886,80 @@ package body AHC.Typechecker is
                   end;
                end if;
             when TApp_T =>
-               Collect_Gen_Metas (N.T_Fun, Into, Order, Names_Src);
-               Collect_Gen_Metas (N.T_Arg, Into, Order, Names_Src);
+               Collect_Gen_Metas (N.T_Fun, Into, Order);
+               Collect_Gen_Metas (N.T_Arg, Into, Order);
             when TFun_T =>
-               Collect_Gen_Metas (N.From, Into, Order, Names_Src);
-               Collect_Gen_Metas (N.To, Into, Order, Names_Src);
+               Collect_Gen_Metas (N.From, Into, Order);
+               Collect_Gen_Metas (N.To, Into, Order);
             when others =>
                null;
          end case;
       end Collect_Gen_Metas;
 
-      procedure Check_Group
-        (Binds : Bind_Vectors.Vector; Top : Boolean)
+      --  Rewrite occurrences of group binders inside Rhs to apply the
+      --  owner's dictionary params (ties the recursive knot).
+      procedure Apply_Rec_Params
+        (Rhs : Real_Expr_Id;
+         Group_Binders : Var_Id_Vectors.Vector;
+         Params : Var_Id_Vectors.Vector)
       is
-         pragma Unreferenced (Top);
-         Wanted_Mark : constant Natural := Natural (Wanted.Length);
-         Givens_Mark : constant Natural := Natural (Givens.Length);
+         N : constant Expr_Node := M.Node (Rhs);
+      begin
+         case N.Kind is
+            when Var_C =>
+               for GB of Group_Binders loop
+                  if GB = N.V then
+                     declare
+                        Copy : constant Real_Expr_Id :=
+                          M.Add (Expr_Node'(Kind => Var_C,
+                                            Span => N.Span,
+                                            V => N.V));
+                        Chain : Real_Expr_Id := Copy;
+                     begin
+                        for P of Params loop
+                           Chain := M.Add (Expr_Node'
+                             (Kind => App_C, Span => N.Span,
+                              Fun => Chain,
+                              Arg => M.Add (Expr_Node'
+                                (Kind => Var_C, Span => N.Span,
+                                 V => P))));
+                        end loop;
+                        M.Exprs.Replace_Element (Rhs, M.Node (Chain));
+                     end;
+                     return;
+                  end if;
+               end loop;
+            when App_C =>
+               Apply_Rec_Params (N.Fun, Group_Binders, Params);
+               Apply_Rec_Params (N.Arg, Group_Binders, Params);
+            when Lam_C =>
+               Apply_Rec_Params (N.Lam_Body, Group_Binders, Params);
+            when Let_C =>
+               for B of N.Binds loop
+                  Apply_Rec_Params (B.Rhs, Group_Binders, Params);
+               end loop;
+               Apply_Rec_Params (N.Let_Body, Group_Binders, Params);
+            when Case_C =>
+               Apply_Rec_Params (N.Scrutinee, Group_Binders, Params);
+               for A of N.Alts loop
+                  Apply_Rec_Params (M.Node (A).Alt_Body,
+                                    Group_Binders, Params);
+               end loop;
+            when others =>
+               null;
+         end case;
+      end Apply_Rec_Params;
+
+      procedure Check_Group
+        (Binds : in out Bind_Vectors.Vector)
+      is
+         W_Mark : constant Natural := W_List.Last_Index;
+         Givens_Mark : constant Natural := Givens.Last_Index;
          Restricted : Boolean := False;
+         Saved_Owner : constant Var_Id := Current_Owner;
       begin
          Level := Level + 1;
 
-         --  Binder setup.
          for B of Binds loop
             declare
                Sig_C : constant Kinds.Sig_Maps.Cursor :=
@@ -833,44 +977,46 @@ package body AHC.Typechecker is
             end;
          end loop;
 
-         --  Check each right-hand side. A signatured binding solves
-         --  its own wanteds inside its givens window.
+         --  Check right-hand sides. Signatured bindings solve their
+         --  wanteds inside their givens window and get dict wraps.
          for B of Binds loop
             declare
                Info : constant Var_Info := M.Info (B.Binder);
                Span : constant Diagnostics.Source_Span := Info.Span;
             begin
+               Current_Owner := Var_Id (B.Binder);
                if Info.Var_Scheme /= No_Scheme then
                   declare
                      Sch : constant Scheme :=
                        M.Node (Real_Scheme_Id (Info.Var_Scheme));
-                     W_Mark : constant Natural :=
-                       Natural (Wanted.Length);
+                     W_Mark2 : constant Natural := W_List.Last_Index;
+                     Params : Var_Id_Vectors.Vector;
                   begin
                      for C of Sch.Context loop
-                        Assume (C);
+                        declare
+                           D : constant Real_Var_Id :=
+                             M.Mint_Var
+                               ((Name => Table.Intern ("$d"),
+                                 Span => Span, others => <>));
+                        begin
+                           Params.Append (D);
+                           Assume (C, M.Add (Expr_Node'
+                             (Kind => Var_C, Span => Span, V => D)));
+                        end;
                      end loop;
                      Unify (Infer (B.Rhs),
                             Real_Type_Id (Sch.S_Body), Span);
-                     declare
-                        Res2 : Constraint_Vectors.Vector;
-                     begin
-                        while Natural (Wanted.Length) > W_Mark loop
-                           declare
-                              C : constant Constraint :=
-                                Wanted.Last_Element;
-                           begin
-                              Wanted.Delete_Last;
-                              Solve (C, 0, Res2);
-                           end;
-                        end loop;
-                        for C of Res2 loop
-                           Wanted.Append (C);
-                        end loop;
-                     end;
-                     while Natural (Givens.Length) > Givens_Mark loop
+                     for I in W_Mark2 + 1 .. W_List.Last_Index loop
+                        Solve (I, 0);
+                     end loop;
+                     while Givens.Last_Index > Givens_Mark loop
                         Givens.Delete_Last;
                      end loop;
+                     if not Params.Is_Empty then
+                        Wraps.Append
+                          (Wrap_Rec'(Binder => B.Binder,
+                                     Params => Params));
+                     end if;
                   end;
                else
                   Unify (Infer (B.Rhs),
@@ -878,46 +1024,39 @@ package body AHC.Typechecker is
                end if;
             end;
          end loop;
+         Current_Owner := Saved_Owner;
 
          Level := Level - 1;
 
-         --  Solve this group's wanteds to HNF, then generalize the
-         --  whole group with one shared quantifier set (mutual
-         --  recursion shares its type variables and context).
+         --  Solve the group's wanteds, then generalize with a shared
+         --  quantifier set and context.
+         for I in W_Mark + 1 .. W_List.Last_Index loop
+            Solve (I, 0);
+         end loop;
+
          declare
-            Residual : Constraint_Vectors.Vector;
             Subst : Meta_Type_Maps.Map;
             Order : TyVar_Id_Vectors.Vector;
-            Src : Natural := 0;
             Ctx : Constraint_Vectors.Vector;
+            Group_Binders : Var_Id_Vectors.Vector;
          begin
-            while Natural (Wanted.Length) > Wanted_Mark loop
-               declare
-                  C : constant Constraint := Wanted.Last_Element;
-               begin
-                  Wanted.Delete_Last;
-                  Solve (C, 0, Residual);
-               end;
-            end loop;
-
             if not Restricted then
                for B of Binds loop
                   if M.Info (B.Binder).Var_Scheme = No_Scheme then
                      Collect_Gen_Metas
                        (Real_Type_Id (M.Info (B.Binder).Var_Type),
-                        Subst, Order, Src);
+                        Subst, Order);
                   end if;
                end loop;
             end if;
 
-            --  Constraints on generalized metas form the shared
-            --  context (deduplicated); the rest float up.
-            declare
-               Kept : Constraint_Vectors.Vector;
-            begin
-               for C of Residual loop
+            --  Shared context from residual wanteds over generalized
+            --  metas (deduplicated).
+            for I in W_Mark + 1 .. W_List.Last_Index loop
+               if W_List (I).Sol = Unsolved then
                   declare
-                     Z : constant Real_Type_Id := Repr (C.Arg);
+                     Z : constant Real_Type_Id :=
+                       Repr (W_List (I).C.Arg);
                      NC : constant Type_Node := M.Node (Z);
                   begin
                      if NC.Kind = TMeta_T
@@ -925,9 +1064,10 @@ package body AHC.Typechecker is
                      then
                         declare
                            New_C : constant Constraint :=
-                             (Class => C.Class,
-                              Arg => Zonk_With (C.Arg, Subst),
-                              Span => C.Span);
+                             (Class => W_List (I).C.Class,
+                              Arg => Zonk_With (W_List (I).C.Arg,
+                                                Subst),
+                              Span => W_List (I).C.Span);
                            Dup : Boolean := False;
                         begin
                            for Old of Ctx loop
@@ -942,13 +1082,17 @@ package body AHC.Typechecker is
                               Ctx.Append (New_C);
                            end if;
                         end;
-                     else
-                        Kept.Append (C);
                      end if;
                   end;
-               end loop;
-               Residual := Kept;
-            end;
+               end if;
+            end loop;
+
+            --  Per-binder params; schemes; wanted -> By_Param.
+            for B of Binds loop
+               if M.Info (B.Binder).Var_Scheme = No_Scheme then
+                  Group_Binders.Append (B.Binder);
+               end if;
+            end loop;
 
             for B of Binds loop
                if M.Info (B.Binder).Var_Scheme = No_Scheme then
@@ -958,28 +1102,64 @@ package body AHC.Typechecker is
                          (Real_Type_Id (M.Info (B.Binder).Var_Type),
                           Subst);
                      Sch : Scheme;
+                     Params : Var_Id_Vectors.Vector;
                   begin
                      pragma Assert
                        (Restricted or else Meta_Free (Zonked)
                         or else Free_Metas_In_Env_Level (Zonked));
+                     for CI in 1 .. Ctx.Last_Index loop
+                        Params.Append
+                          (M.Mint_Var
+                             ((Name => Table.Intern ("$d"),
+                               Span => M.Info (B.Binder).Span,
+                               others => <>)));
+                     end loop;
                      Sch.Tvs := Order;
                      Sch.Context := Ctx;
                      Sch.S_Body := Type_Id (Zonked);
                      M.Vars (B.Binder).Var_Scheme :=
                        Scheme_Id (M.Add (Sch));
+
+                     if not Ctx.Is_Empty then
+                        Wraps.Append
+                          (Wrap_Rec'(Binder => B.Binder,
+                                     Params => Params));
+                        Apply_Rec_Params (B.Rhs, Group_Binders,
+                                          Params);
+                        --  Wanteds owned by this binder that joined
+                        --  the context resolve to its params.
+                        for I in W_Mark + 1 .. W_List.Last_Index loop
+                           if W_List (I).Sol = Unsolved
+                             and then W_List (I).Owner =
+                                        Var_Id (B.Binder)
+                           then
+                              declare
+                                 W : Wanted_Rec := W_List (I);
+                              begin
+                                 for CI in 1 .. Ctx.Last_Index loop
+                                    if Ctx (CI).Class = W.C.Class
+                                      and then Same_Tv_Arg
+                                        (Ctx (CI).Arg,
+                                         Zonk_With (W.C.Arg, Subst))
+                                    then
+                                       W.Sol := By_Param;
+                                       W.Dict :=
+                                         Var_Id (Params (CI));
+                                       W_List.Replace_Element (I, W);
+                                    end if;
+                                 end loop;
+                              end;
+                           end if;
+                        end loop;
+                     end if;
                   end;
                end if;
-            end loop;
-
-            --  Whatever is left stays wanted for the enclosing group.
-            for C of Residual loop
-               Wanted.Append (C);
             end loop;
          end;
       end Check_Group;
 
       ------------------------------------------------------------------
-      --  Top level: SCC over the top binds
+      --  Top level
       ------------------------------------------------------------------
 
       function Var_Hash (K : Real_Var_Id)
@@ -990,10 +1170,7 @@ package body AHC.Typechecker is
         (Real_Var_Id, Positive,
          Hash => Var_Hash, Equivalent_Keys => "=");
 
-      Binder_Group : Var_Nat_Maps.Map;   --  top binder -> group index
-
-      package Nat_Vectors is new Ada.Containers.Vectors
-        (Positive, Positive);
+      Binder_Group : Var_Nat_Maps.Map;
 
       procedure Free_Top_Vars
         (E : Real_Expr_Id; Into : in out Nat_Vectors.Vector)
@@ -1032,7 +1209,6 @@ package body AHC.Typechecker is
 
       Group_Count : constant Natural := Natural (M.Top_Binds.Length);
 
-      --  Tarjan SCC state.
       Index_Counter : Natural := 0;
       Indices  : array (1 .. Group_Count) of Natural := [others => 0];
       Lowlinks : array (1 .. Group_Count) of Natural := [others => 0];
@@ -1040,10 +1216,7 @@ package body AHC.Typechecker is
         [others => False];
       Stack : Nat_Vectors.Vector;
       Adj : array (1 .. Group_Count) of Nat_Vectors.Vector;
-
-      --  SCCs in reverse topological order (Tarjan emits callees
-      --  before callers, which is exactly the check order we need).
-      SCCs : Nat_Vectors.Vector;         --  flattened
+      SCCs : Nat_Vectors.Vector;
       SCC_Sizes : Nat_Vectors.Vector;
 
       procedure Strong_Connect (V : Positive) is
@@ -1056,9 +1229,11 @@ package body AHC.Typechecker is
          for W of Adj (V) loop
             if Indices (W) = 0 then
                Strong_Connect (W);
-               Lowlinks (V) := Natural'Min (Lowlinks (V), Lowlinks (W));
+               Lowlinks (V) :=
+                 Natural'Min (Lowlinks (V), Lowlinks (W));
             elsif On_Stack (W) then
-               Lowlinks (V) := Natural'Min (Lowlinks (V), Indices (W));
+               Lowlinks (V) :=
+                 Natural'Min (Lowlinks (V), Indices (W));
             end if;
          end loop;
          if Lowlinks (V) = Indices (V) then
@@ -1079,8 +1254,45 @@ package body AHC.Typechecker is
          end if;
       end Strong_Connect;
 
+      --  Evidence expressions, built once every wanted is decided.
+      function Build_Ev (I : Positive) return Real_Expr_Id is
+         W : constant Wanted_Rec := W_List (I);
+         Span : constant Diagnostics.Source_Span := W.C.Span;
+      begin
+         case W.Sol is
+            when By_Given =>
+               return Real_Expr_Id (W.GEv);
+            when By_Param =>
+               return M.Add (Expr_Node'
+                 (Kind => Var_C, Span => Span,
+                  V => Real_Var_Id (W.Dict)));
+            when By_Instance =>
+               declare
+                  Result : Real_Expr_Id :=
+                    M.Add (Expr_Node'
+                      (Kind => Var_C, Span => Span,
+                       V => Real_Var_Id
+                         (M.Info (Real_Instance_Id (W.Inst))
+                            .Dict_Global)));
+               begin
+                  for S of W.Subs loop
+                     Result := M.Add (Expr_Node'
+                       (Kind => App_C, Span => Span,
+                        Fun => Result, Arg => Build_Ev (S)));
+                  end loop;
+                  return Result;
+               end;
+            when Unsolved | By_Error =>
+               return M.Add (Expr_Node'
+                 (Kind => Var_C, Span => Span,
+                  V => M.Mint_Var
+                    ((Name => Table.Intern ("$dMISSING"),
+                      Span => Span, Is_Global => True,
+                      others => <>))));
+         end case;
+      end Build_Ev;
+
    begin
-      --  Build the call graph over top-level groups.
       for GI in 1 .. M.Top_Binds.Last_Index loop
          for B of M.Top_Binds (GI).Binds loop
             Binder_Group.Include (B.Binder, GI);
@@ -1091,14 +1303,12 @@ package body AHC.Typechecker is
             Free_Top_Vars (B.Rhs, Adj (GI));
          end loop;
       end loop;
-
       for GI in 1 .. Group_Count loop
          if Indices (GI) = 0 then
             Strong_Connect (GI);
          end if;
       end loop;
 
-      --  Check each SCC as one binding group, in order.
       declare
          Pos : Natural := 0;
       begin
@@ -1112,18 +1322,16 @@ package body AHC.Typechecker is
                   end loop;
                end loop;
                Pos := Pos + SCC_Sizes (SI);
-               Check_Group (Merged, Top => True);
+               Check_Group (Merged);
             end;
          end loop;
       end;
 
-      --  Instance method bodies: each checked against the method's
-      --  scheme with the class variable instantiated to the instance
-      --  head and the instance context assumed.
+      --  Instance method bodies against instance-substituted schemes,
+      --  with the instance context as given evidence via Param_Vars.
       for II in 1 .. M.Last_Instance loop
          declare
-            Inst : constant Instance_Info :=
-              M.Info (Real_Instance_Id (II));
+            Inst : Instance_Info := M.Info (Real_Instance_Id (II));
          begin
             if not Inst.Method_Binds.Is_Empty
               and then Inst.Of_Class /= No_Class
@@ -1137,7 +1345,7 @@ package body AHC.Typechecker is
                        Con => Real_TyCon_Id (Inst.Head),
                        Refine => No_Refinement));
                   Givens_Mark : constant Natural :=
-                    Natural (Givens.Length);
+                    Givens.Last_Index;
                begin
                   for HV of Inst.Head_Vars loop
                      Head_T := M.Add (Type_Node'
@@ -1146,8 +1354,20 @@ package body AHC.Typechecker is
                           (Kind => TVar_T, Tv => HV))));
                   end loop;
                   for C of Inst.Context loop
-                     Assume (C);
+                     declare
+                        D : constant Real_Var_Id :=
+                          M.Mint_Var
+                            ((Name => Table.Intern ("$d"),
+                              Span => Inst.Span, others => <>));
+                     begin
+                        Inst.Param_Vars.Append (D);
+                        Assume (C, M.Add (Expr_Node'
+                          (Kind => Var_C, Span => Inst.Span,
+                           V => D)));
+                     end;
                   end loop;
+                  M.Instances (Real_Instance_Id (II)).Param_Vars :=
+                    Inst.Param_Vars;
 
                   for B of Inst.Method_Binds loop
                      declare
@@ -1155,6 +1375,7 @@ package body AHC.Typechecker is
                           M.Info (B.Binder).Name;
                         Found : Boolean := False;
                      begin
+                        Current_Owner := Var_Id (B.Binder);
                         for Mth of Cl.Methods loop
                            if Mth.Name = BName
                              and then Mth.Method_Scheme /= No_Scheme
@@ -1166,57 +1387,30 @@ package body AHC.Typechecker is
                                              (Mth.Method_Scheme));
                                  Map : TyVar_Type_Maps.Map;
                                  W_Mark : constant Natural :=
-                                   Natural (Wanted.Length);
+                                   W_List.Last_Index;
                               begin
-                                 --  Class var (first scheme tyvar)
-                                 --  becomes the instance head type.
                                  if not Sch.Tvs.Is_Empty then
-                                    Map.Include (Sch.Tvs (1), Head_T);
+                                    Map.Include (Sch.Tvs (1),
+                                                 Head_T);
                                  end if;
-                                 --  Non-class constraints of the
-                                 --  method's own context are given.
-                                 for C of Sch.Context loop
-                                    if C.Class /=
-                                       Class_Id'(Inst.Of_Class)
-                                    then
-                                       Assume
-                                         (Constraint'
-                                            (Class => C.Class,
-                                             Arg => Subst_TyVars
-                                               (C.Arg, Map),
-                                             Span => C.Span));
-                                    end if;
-                                 end loop;
                                  M.Vars (B.Binder).Var_Type :=
                                    Type_Id (Subst_TyVars
-                                     (Real_Type_Id (Sch.S_Body), Map));
+                                     (Real_Type_Id (Sch.S_Body),
+                                      Map));
                                  Unify
                                    (Infer (B.Rhs),
                                     Real_Type_Id
                                       (M.Info (B.Binder).Var_Type),
                                     M.Info (B.Binder).Span);
-                                 --  Solve this method's wanteds now.
-                                 declare
-                                    Res2 : Constraint_Vectors.Vector;
-                                 begin
-                                    while Natural (Wanted.Length) >
-                                          W_Mark
-                                    loop
-                                       declare
-                                          C2 : constant Constraint :=
-                                            Wanted.Last_Element;
-                                       begin
-                                          Wanted.Delete_Last;
-                                          Solve (C2, 0, Res2);
-                                       end;
-                                    end loop;
-                                    for C2 of Res2 loop
-                                       Wanted.Append (C2);
-                                    end loop;
-                                 end;
+                                 for I in W_Mark + 1 ..
+                                          W_List.Last_Index
+                                 loop
+                                    Solve (I, 0);
+                                 end loop;
                               end;
                            end if;
                         end loop;
+                        Current_Owner := No_Var;
                         if not Found then
                            Bag.Add (Diagnostics.Error,
                                     Diagnostics.Class_Missing_Method,
@@ -1228,12 +1422,10 @@ package body AHC.Typechecker is
                      end;
                   end loop;
 
-                  while Natural (Givens.Length) > Givens_Mark loop
+                  while Givens.Last_Index > Givens_Mark loop
                      Givens.Delete_Last;
                   end loop;
 
-                  --  Methods lacking both an implementation and a
-                  --  class default get a warning (Report 4.3.2).
                   for Mth of Cl.Methods loop
                      declare
                         Have : Boolean := Mth.Has_Default;
@@ -1257,8 +1449,8 @@ package body AHC.Typechecker is
          end;
       end loop;
 
-      --  Class default-method bodies: checked against the method
-      --  scheme itself (class variable rigid, constraint given).
+      --  Class default-method bodies: class constraint given via a
+      --  dictionary parameter; the default binding gets wrapped.
       for CI in 1 .. M.Last_Class loop
          declare
             Cl : constant Class_Info := M.Info (Real_Class_Id (CI));
@@ -1277,38 +1469,45 @@ package body AHC.Typechecker is
                              M.Node (Real_Scheme_Id
                                        (Mth.Method_Scheme));
                            Givens_Mark : constant Natural :=
-                             Natural (Givens.Length);
+                             Givens.Last_Index;
                            W_Mark : constant Natural :=
-                             Natural (Wanted.Length);
+                             W_List.Last_Index;
+                           Params : Var_Id_Vectors.Vector;
                         begin
+                           Current_Owner := Var_Id (B.Binder);
                            for C of Sch.Context loop
-                              Assume (C);
+                              declare
+                                 D : constant Real_Var_Id :=
+                                   M.Mint_Var
+                                     ((Name => Table.Intern ("$d"),
+                                       Span =>
+                                         M.Info (B.Binder).Span,
+                                       others => <>));
+                              begin
+                                 Params.Append (D);
+                                 Assume (C, M.Add (Expr_Node'
+                                   (Kind => Var_C,
+                                    Span => M.Info (B.Binder).Span,
+                                    V => D)));
+                              end;
                            end loop;
                            M.Vars (B.Binder).Var_Type := Sch.S_Body;
                            Unify (Infer (B.Rhs),
                                   Real_Type_Id (Sch.S_Body),
                                   M.Info (B.Binder).Span);
-                           declare
-                              Res2 : Constraint_Vectors.Vector;
-                           begin
-                              while Natural (Wanted.Length) > W_Mark
-                              loop
-                                 declare
-                                    C2 : constant Constraint :=
-                                      Wanted.Last_Element;
-                                 begin
-                                    Wanted.Delete_Last;
-                                    Solve (C2, 0, Res2);
-                                 end;
-                              end loop;
-                              for C2 of Res2 loop
-                                 Wanted.Append (C2);
-                              end loop;
-                           end;
-                           while Natural (Givens.Length) > Givens_Mark
+                           for I in W_Mark + 1 .. W_List.Last_Index
                            loop
+                              Solve (I, 0);
+                           end loop;
+                           while Givens.Last_Index > Givens_Mark loop
                               Givens.Delete_Last;
                            end loop;
+                           Current_Owner := No_Var;
+                           if not Params.Is_Empty then
+                              Wraps.Append
+                                (Wrap_Rec'(Binder => B.Binder,
+                                           Params => Params));
+                           end if;
                         end;
                      end if;
                   end loop;
@@ -1317,33 +1516,134 @@ package body AHC.Typechecker is
          end;
       end loop;
 
-      --  Module-level residuals: defaulting, then ambiguity errors.
+      --  Defaulting, then leftover residuals are errors.
+      Try_Default;
+      for I in 1 .. W_List.Last_Index loop
+         if W_List (I).Sol = Unsolved then
+            declare
+               Z : constant Real_Type_Id := Repr (W_List (I).C.Arg);
+               N : constant Type_Node := M.Node (Z);
+            begin
+               if N.Kind = TVar_T then
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Type_Signature_Too_General,
+                           W_List (I).C.Span,
+                           "could not deduce '"
+                           & Table.Text
+                               (M.Info (W_List (I).C.Class).Name)
+                           & " " & Type_Str (W_List (I).C.Arg)
+                           & "' required by the definition");
+               end if;
+            end;
+         end if;
+      end loop;
+
+      --  Rewrite occurrence sites with their evidence.
       declare
-         Residual : Constraint_Vectors.Vector;
+         I : Positive := 1;
       begin
-         for C of Wanted loop
-            Residual.Append (C);
-         end loop;
-         Wanted.Clear;
-         Try_Default (Residual);
-         --  Anything still unsolved mentions a rigid signature
-         --  variable: the signature promised more than the body keeps.
-         for C of Residual loop
-            Bag.Add (Diagnostics.Error,
-                     Diagnostics.Type_Signature_Too_General, C.Span,
-                     "could not deduce '"
-                     & Table.Text (M.Info (C.Class).Name) & " "
-                     & Type_Str (C.Arg)
-                     & "' required by the definition");
+         while I <= W_List.Last_Index loop
+            if W_List (I).Site /= No_Expr then
+               declare
+                  Site : constant Expr_Id := W_List (I).Site;
+                  Original : constant Expr_Node :=
+                    M.Node (Real_Expr_Id (Site));
+                  Copy : constant Real_Expr_Id :=
+                    M.Add (Original);
+                  Chain : Real_Expr_Id := Copy;
+                  J : Positive := I;
+               begin
+                  while J <= W_List.Last_Index
+                    and then W_List (J).Site = Site
+                  loop
+                     Chain := M.Add (Expr_Node'
+                       (Kind => App_C, Span => Original.Span,
+                        Fun => Chain, Arg => Build_Ev (J)));
+                     J := J + 1;
+                  end loop;
+                  M.Exprs.Replace_Element
+                    (Real_Expr_Id (Site), M.Node (Chain));
+                  I := J;
+               end;
+            else
+               I := I + 1;
+            end if;
          end loop;
       end;
 
-      --  Re-zonk every top-level scheme so defaulting decisions made
-      --  at module level show through restricted bindings.
+      --  Apply dictionary-lambda wraps.
+      for W of Wraps loop
+         declare
+            procedure Wrap_In (Binds : in out Bind_Vectors.Vector) is
+            begin
+               for BI in 1 .. Binds.Last_Index loop
+                  if Binds (BI).Binder = W.Binder then
+                     declare
+                        Rhs : Real_Expr_Id := Binds (BI).Rhs;
+                        Span : constant Diagnostics.Source_Span :=
+                          M.Info (W.Binder).Span;
+                     begin
+                        for PI in reverse 1 .. W.Params.Last_Index loop
+                           Rhs := M.Add (Expr_Node'
+                             (Kind => Lam_C, Span => Span,
+                              Binder => W.Params (PI),
+                              Lam_Body => Rhs));
+                        end loop;
+                        Binds.Replace_Element
+                          (BI, Bind_Pair'(Binder => W.Binder,
+                                          Rhs => Rhs));
+                     end;
+                  end if;
+               end loop;
+            end Wrap_In;
+         begin
+            for GI in 1 .. M.Top_Binds.Last_Index loop
+               declare
+                  G : Top_Bind := M.Top_Binds (GI);
+               begin
+                  Wrap_In (G.Binds);
+                  M.Top_Binds.Replace_Element (GI, G);
+               end;
+            end loop;
+            for EI in 1 .. Natural (M.Last_Expr) loop
+               declare
+                  N : constant Expr_Node :=
+                    M.Node (Real_Expr_Id (EI));
+               begin
+                  if N.Kind = Let_C then
+                     declare
+                        Binds : Bind_Vectors.Vector := N.Binds;
+                     begin
+                        Wrap_In (Binds);
+                        M.Exprs.Replace_Element
+                          (Real_Expr_Id (EI),
+                           Expr_Node'(Kind => Let_C, Span => N.Span,
+                                      Is_Rec => N.Is_Rec,
+                                      Binds => Binds,
+                                      Let_Body => N.Let_Body));
+                     end;
+                  end if;
+               end;
+            end loop;
+            for CI in 1 .. M.Last_Class loop
+               declare
+                  Binds : Bind_Vectors.Vector :=
+                    M.Classes (Real_Class_Id (CI)).Default_Binds;
+               begin
+                  Wrap_In (Binds);
+                  M.Classes (Real_Class_Id (CI)).Default_Binds :=
+                    Binds;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  Re-zonk top-level schemes so defaulting shows through.
       for G of M.Top_Binds loop
          for B of G.Binds loop
             declare
-               SId : constant Scheme_Id := M.Info (B.Binder).Var_Scheme;
+               SId : constant Scheme_Id :=
+                 M.Info (B.Binder).Var_Scheme;
             begin
                if SId /= No_Scheme then
                   declare
@@ -1369,8 +1669,7 @@ package body AHC.Typechecker is
          end loop;
       end loop;
 
-      --  Ensure the postcondition even on error paths: give every
-      --  top binder some scheme.
+      --  Postcondition safety on error paths.
       for G of M.Top_Binds loop
          for B of G.Binds loop
             if M.Info (B.Binder).Var_Scheme = No_Scheme then

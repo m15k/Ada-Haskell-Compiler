@@ -225,6 +225,9 @@ package AHC.Core is
       Instances  : Instance_Id_Vectors.Vector;
       --  Desugared default-method bodies (binder = fresh local var).
       Default_Binds : Bind_Vectors.Vector;
+      --  One selector global per superclass (extracts that dictionary
+      --  field); parallel to Supers.
+      Super_Sels : Var_Id_Vectors.Vector;
    end record;
 
    --  Haskell 2010 instance heads are always C (T a1..an), so keying
@@ -239,6 +242,10 @@ package AHC.Core is
       Dict_Global : Var_Id := No_Var;
       --  Desugared method implementations (binder = local var).
       Method_Binds : Bind_Vectors.Vector;
+      --  Dictionary lambda parameters, one per Context constraint;
+      --  minted by the typechecker (method bodies reference them as
+      --  given evidence), consumed by AHC.Elaborate.
+      Param_Vars  : Var_Id_Vectors.Vector;
       Span        : Diagnostics.Source_Span;
    end record;
 

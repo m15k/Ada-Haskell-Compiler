@@ -794,6 +794,8 @@ package body AHC.Rename is
                          Dict_Global => Core.Var_Id (Dict),
                          Method_Binds =>
                            Core.Bind_Vectors.Empty_Vector,
+                         Param_Vars =>
+                           Core.Var_Id_Vectors.Empty_Vector,
                          Span => N.Span));
                      pragma Unreferenced (Ignore);
                   end;
@@ -900,6 +902,20 @@ package body AHC.Rename is
            (Core.Real_DataCon_Id (M.Classes (Cl).Dict_Con)).Arity :=
            Natural (M.Classes (Cl).Supers.Length)
            + Natural (M.Classes (Cl).Methods.Length);
+         for I in 1 .. M.Classes (Cl).Supers.Last_Index loop
+            declare
+               Img : constant String := I'Image;
+               Sel : constant Core.Real_Var_Id :=
+                 M.Mint_Var
+                   ((Name => Table.Intern
+                       ("sup$" & Text (N.C_Name)
+                        & "$" & Img (2 .. Img'Last)),
+                     Span => N.Span, Is_Global => True,
+                     others => <>));
+            begin
+               M.Classes (Cl).Super_Sels.Append (Sel);
+            end;
+         end loop;
       end Declare_Class;
 
       --  Head TyCon of an instance type.
@@ -988,6 +1004,7 @@ package body AHC.Rename is
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict),
                    Method_Binds => Core.Bind_Vectors.Empty_Vector,
+                   Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
                    Span => N.Span));
                pragma Unreferenced (Ignore);
             end;

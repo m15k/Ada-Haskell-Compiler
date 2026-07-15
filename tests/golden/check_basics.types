@@ -1,8 +1,8 @@
 compose :: (a -> b) -> (c -> a) -> c -> b
 twice :: (a -> a) -> a -> a
 len :: Num b => [a] -> b
-sumTo :: (Num a, Eq a) => a -> a
-isEven :: (Num a, Eq a) => a -> Bool
+sumTo :: (Eq a, Num a) => a -> a
+isEven :: (Eq a, Num a) => a -> Bool
 pairUp :: a -> b -> (a, b)
 names :: [Integer]
 total :: Integer

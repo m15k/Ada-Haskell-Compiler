@@ -1,4 +1,4 @@
-(bindrec (main_128 :: (forall () (tap (tcon IO) (tcon ()))) (app (var putStrLn_123) (app (var pretty_124) (app (con B) (con True))))))
-(bindrec (shout_129 (lam x_130 (app (app (var ++_103) (app (var pretty_124) (var x_130))) (str "!")))))
-(bind ($dPrettyBool_126 (app (app (con MkDict$Pretty) (lam b_132 (case (var b_132) (alt (con True) (str "yes")) (alt _ (str "no"))))) (var shout_129))))
-(bind ($dPrettyB_127 (lam $d_140 (app (app (con MkDict$Pretty) (lam $a_138 (let (($fail_137 (app (var error_105) (str "non-exhaustive patterns in function")))) (let (($k_139 (var $fail_137))) (case (var $a_138) (alt (con B x_134) (app (var pretty_124) (var x_134))) (alt _ (var $k_139))))))) (var shout_129)))))
+(bindrec (main_134 :: (forall () (tap (tcon IO) (tcon ()))) (app (var putStrLn_129) (app (app (var pretty_130) (app (var $dPrettyB_133) (var $dPrettyBool_132))) (app (con B) (con True))))))
+(bindrec (shout_135 (lam $d_147 (lam x_136 (app (app (var ++_109) (app (app (var pretty_130) (var $d_147)) (var x_136))) (str "!"))))))
+(bind ($dPrettyBool_132 (letrec (($dSelf_148 (app (app (con MkDict$Pretty) (lam b_138 (case (var b_138) (alt (con True) (str "yes")) (alt _ (str "no"))))) (app (var shout_135) (var $dSelf_148))))) (var $dSelf_148))))
+(bind ($dPrettyB_133 (lam $d_146 (letrec (($dSelf_149 (app (app (con MkDict$Pretty) (lam $a_144 (let (($fail_143 (app (var error_111) (str "non-exhaustive patterns in function")))) (let (($k_145 (var $fail_143))) (case (var $a_144) (alt (con B x_140) (app (app (var pretty_130) (var $d_146)) (var x_140))) (alt _ (var $k_145))))))) (app (var shout_135) (var $dSelf_149))))) (var $dSelf_149)))))

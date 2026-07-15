@@ -190,17 +190,25 @@ package body AHC.Elaborate is
                   Supers : Expr_Id_Vectors.Vector;
                   Methods : Expr_Id_Vectors.Vector;
                   Params : Var_Id_Vectors.Vector;
+                  Self_D : constant Real_Var_Id :=
+                    M.Mint_Var ((Name => Table.Intern ("$dSelf"),
+                                 Span => Inst.Span, others => <>));
                begin
-                  --  One dictionary parameter per context constraint.
-                  for C of Inst.Context loop
+                  --  One dictionary parameter per context constraint
+                  --  (reusing the typechecker's params so method
+                  --  bodies reference the same evidence variables).
+                  for CI in 1 .. Inst.Context.Last_Index loop
                      declare
                         D : constant Real_Var_Id :=
-                          M.Mint_Var
-                            ((Name => Table.Intern ("$d"),
-                              Span => Span, others => <>));
+                          (if CI <= Inst.Param_Vars.Last_Index
+                           then Inst.Param_Vars (CI)
+                           else M.Mint_Var
+                             ((Name => Table.Intern ("$d"),
+                               Span => Span, others => <>)));
                      begin
                         Params.Append (D);
-                        Givens.Append (Given_Ev'(C => C, D => D));
+                        Givens.Append
+                          (Given_Ev'(C => Inst.Context (CI), D => D));
                      end;
                   end loop;
 
@@ -239,15 +247,23 @@ package body AHC.Elaborate is
                            end if;
                         end loop;
                         if Impl = No_Expr then
-                           --  Fall back to the class default.
+                           --  Fall back to the class default, applied
+                           --  to this very dictionary (letrec knot).
                            for B of M.Classes (Cl).Default_Binds loop
                               if M.Info (B.Binder).Name = Mth.Name
                               then
                                  Lift_Default (B);
                                  Impl := Expr_Id
                                    (M.Add (Expr_Node'
-                                      (Kind => Var_C, Span => Span,
-                                       V => B.Binder)));
+                                      (Kind => App_C, Span => Span,
+                                       Fun => M.Add (Expr_Node'
+                                         (Kind => Var_C,
+                                          Span => Span,
+                                          V => B.Binder)),
+                                       Arg => M.Add (Expr_Node'
+                                         (Kind => Var_C,
+                                          Span => Span,
+                                          V => Self_D)))));
                               end if;
                            end loop;
                         end if;
@@ -268,10 +284,20 @@ package body AHC.Elaborate is
 
                   --  The PRD arity contract fires here if counts drift.
                   declare
-                     Dict : Real_Expr_Id :=
+                     Raw : constant Real_Expr_Id :=
                        Mk_Dict (M, Cl, Supers, Methods, Span);
+                     Knot : Bind_Vectors.Vector;
+                     Dict : Real_Expr_Id;
                      G : Top_Bind;
                   begin
+                     Knot.Append (Bind_Pair'(Binder => Self_D,
+                                             Rhs => Raw));
+                     Dict := M.Add (Expr_Node'
+                       (Kind => Let_C, Span => Span, Is_Rec => True,
+                        Binds => Knot,
+                        Let_Body => M.Add (Expr_Node'
+                          (Kind => Var_C, Span => Span,
+                           V => Self_D))));
                      for PI in reverse 1 .. Params.Last_Index loop
                         Dict := M.Add (Expr_Node'
                           (Kind => Lam_C, Span => Span,
