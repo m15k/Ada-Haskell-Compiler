@@ -47,21 +47,21 @@ package AHC.Core is
    type Expr_Id     is new Natural;
    type Alt_Id      is new Natural;
 
-   --  Refinement-types extension (docs/refinement-types-design-note.md,
-   --  stage 1): a refinement is an inclusive integer range attached to
-   --  a scalar TCon. Reserved through Phases 2-4 (design rule 1), now
-   --  populated by AHC.Kinds from `Int in LO .. HI` surface types.
+   --  Refinement-types extension (docs/refinement-types-design-note.md).
+   --  A refinement attaches to a nullary TCon occurrence and is either
+   --  an inclusive integer range (stage 1, `Int in LO .. HI`) or a
+   --  boolean predicate (stage 2, `BASE satisfying P`). A predicate
+   --  refinement names a hidden top-level binder `$pred :: BASE ->
+   --  Bool` minted by AHC.Kinds and given its body by the desugarer,
+   --  so the predicate is typechecked and dictionary-elaborated like
+   --  any other Haskell; P_Name keeps the surface name of a bare-var
+   --  predicate for pretty printing (No_Name for complex predicates).
    type Refinement_Id is new Natural;
    No_Refinement : constant Refinement_Id := 0;
    subtype Real_Refinement_Id is
      Refinement_Id range 1 .. Refinement_Id'Last;
 
-   type Refinement_Info is record
-      Lo, Hi : Long_Long_Integer;
-   end record;
-
-   package Refinement_Vectors is new Ada.Containers.Vectors
-     (Positive, Refinement_Info);
+   type Refinement_Kind is (Range_R, Pred_R);
 
    No_Var    : constant Var_Id    := 0;
    No_TyCon  : constant TyCon_Id  := 0;
@@ -83,6 +83,19 @@ package AHC.Core is
    subtype Real_Scheme_Id   is Scheme_Id   range 1 .. Scheme_Id'Last;
    subtype Real_Expr_Id     is Expr_Id     range 1 .. Expr_Id'Last;
    subtype Real_Alt_Id      is Alt_Id      range 1 .. Alt_Id'Last;
+
+   type Refinement_Info (Kind : Refinement_Kind := Range_R) is record
+      case Kind is
+         when Range_R =>
+            Lo, Hi : Long_Long_Integer;
+         when Pred_R =>
+            Pred_Var : Real_Var_Id;
+            P_Name   : Names.Name_Id := Names.No_Name;
+      end case;
+   end record;
+
+   package Refinement_Vectors is new Ada.Containers.Vectors
+     (Positive, Refinement_Info);
 
    package Var_Id_Vectors is new Ada.Containers.Vectors
      (Positive, Real_Var_Id);
@@ -418,7 +431,9 @@ package AHC.Core is
    function Add
      (M : in out Core_Module; R : Refinement_Info)
       return Real_Refinement_Id
-     with Pre  => R.Lo <= R.Hi,
+     with Pre  => (case R.Kind is
+                     when Range_R => R.Lo <= R.Hi,
+                     when Pred_R  => R.Pred_Var <= M.Last_Var),
           Post => Add'Result = M.Last_Refinement;
 
    --  Entity minting (no structural invariants beyond a real name

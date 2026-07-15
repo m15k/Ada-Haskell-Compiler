@@ -449,6 +449,29 @@ void ahc_run_main(AhcNode *main_io) {
 
 /* ----- globals ---------------------------------------------------- */
 
+/* Refinement-types extension, stage 2: lazily-fired predicate check.
+   p is the compiled `$pred :: BASE -> Bool` global; fires like the
+   range check, when the refined value is first demanded. */
+static AhcNode *p_check_pred(AhcNode *p, AhcNode *x) {
+  AhcNode *v = ahc_eval(x);
+  AhcNode *r = ahc_eval(ahc_apply(p, v));
+  if (r->u.con.contag == FALSE_TAG) {
+    fflush(stdout);
+    if (v->tag == AHC_INT)
+      fprintf(stderr, "refinement violation: predicate rejected %ld\n",
+              v->u.i);
+    else if (v->tag == AHC_CHAR)
+      fprintf(stderr,
+              "refinement violation: predicate rejected '%c'\n",
+              (char)v->u.c);
+    else
+      fprintf(stderr,
+              "refinement violation: predicate rejected the value\n");
+    exit(1);
+  }
+  return v;
+}
+
 /* Refinement-types extension: lazily-fired range check. Strict in
    the checked value; the check application itself is a thunk, so the
    check fires exactly when the refined value is first demanded. */
@@ -480,7 +503,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
-  *ahc_prim_check_range;
+  *ahc_prim_check_range, *ahc_prim_check_pred;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -522,4 +545,5 @@ void ahc_rts_init(void) {
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);
+  ahc_prim_check_pred = mk_prim2(p_check_pred);
 }

@@ -158,6 +158,8 @@ package body AHC.Syntax is
             return Ok (A, N.R_Base)
               and then N.Lo_Text /= Names.No_Name
               and then N.Hi_Text /= Names.No_Name;
+         when Pred_T =>
+            return Ok (A, N.P_Base) and then Ok (A, N.P_Expr);
       end case;
    end Well_Formed;
 

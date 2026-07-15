@@ -1,0 +1,5 @@
+isWarm :: Color -> Bool
+half :: (Int satisfying (...)) -> Int
+evenOnly :: (Int satisfying even) -> Int
+warmth :: (Color satisfying isWarm) -> Int
+blend :: (Int satisfying (...)) -> (Int in 0 .. 100) -> Int

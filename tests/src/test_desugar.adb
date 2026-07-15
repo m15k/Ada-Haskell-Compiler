@@ -34,6 +34,7 @@ package body Test_Desugar is
       Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
+      Preds  : AHC.Kinds.Pred_Vectors.Vector;
       Out_Buf : Unbounded_String;
    begin
       AHC.Lexer.Scan (Text, Table, Bag, Stream);
@@ -42,10 +43,10 @@ package body Test_Desugar is
       AHC.Builtins.Install (M, Table, Env);
       AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
       AHC.Kinds.Check_Module (Arena, Res, Table, Bag, M, Env, Sigs,
-                              Annos);
+                              Annos, Preds);
       if not Bag.Has_Errors then
          AHC.Desugar.Desugar_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
          declare
             D : constant String := AHC.Core.Printer.Dump (M, Table);
             I : Positive := D'First;

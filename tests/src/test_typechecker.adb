@@ -38,6 +38,7 @@ package body Test_Typechecker is
       Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
+      Preds  : AHC.Kinds.Pred_Vectors.Vector;
       Out_Buf : Unbounded_String;
    begin
       AHC.Lexer.Scan (Text, Table, Bag, Stream);
@@ -46,10 +47,10 @@ package body Test_Typechecker is
       AHC.Builtins.Install (M, Table, Env);
       AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
       AHC.Kinds.Check_Module (Arena, Res, Table, Bag, M, Env, Sigs,
-                              Annos);
+                              Annos, Preds);
       if not Bag.Has_Errors then
          AHC.Desugar.Desugar_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
          AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
          if not Bag.Has_Errors then
             for G of M.Top_Binds loop

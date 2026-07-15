@@ -1,5 +1,3 @@
-with Ada.Containers.Vectors;
-
 package body AHC.Kinds is
 
    use AHC.Syntax;
@@ -10,6 +8,7 @@ package body AHC.Kinds is
    use type Core.Scheme_Id;
    use type Core.Kind_Kind;
    use type Core.Type_Kind;
+   use type Core.Refinement_Id;
    use type Names.Name_Id;
 
    Max_Synonym_Depth : constant := 20;
@@ -22,7 +21,8 @@ package body AHC.Kinds is
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Sig_Maps.Map;
-      Annos : in out Anno_Maps.Map)
+      Annos : in out Anno_Maps.Map;
+      Preds : in out Pred_Vectors.Vector)
    is
       Star_K : constant Core.Real_Kind_Id := M.Star;
 
@@ -453,8 +453,15 @@ package body AHC.Kinds is
                      then
                         Bag.Add (Diagnostics.Error,
                                  Diagnostics.Kind_Error, N.Span,
-                                 "refinements are only supported on"
-                                 & " Int and Integer");
+                                 "range refinements are only supported"
+                                 & " on Int and Integer");
+                        return;
+                     end if;
+                     if BN.Refine /= Core.No_Refinement then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "a type cannot carry two"
+                                 & " refinements");
                         return;
                      end if;
                      if In_Data_Fields then
@@ -481,7 +488,85 @@ package body AHC.Kinds is
                              (Kind => Core.TCon_T, Con => BN.Con,
                               Refine => Core.Refinement_Id
                                 (M.Add (Core.Refinement_Info'
-                                   (Lo => Lo, Hi => Hi))))));
+                                   (Kind => Core.Range_R,
+                                    Lo => Lo, Hi => Hi))))));
+                     end;
+                  end;
+               end;
+
+            when Pred_T =>
+               declare
+                  RB : Core.Type_Id;
+                  KB : Core.Kind_Id;
+               begin
+                  Convert (N.P_Base, TvEnv, Order, Implicit, Depth,
+                           RB, KB);
+                  if RB = Core.No_Type then
+                     return;
+                  end if;
+                  KUnify (Core.Real_Kind_Id (KB), Star_K, N.Span);
+                  declare
+                     BN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (RB));
+                  begin
+                     if BN.Kind /= Core.TCon_T then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "predicate refinements need a"
+                                 & " nullary base type");
+                        return;
+                     end if;
+                     if BN.Refine /= Core.No_Refinement then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "a type cannot carry two"
+                                 & " refinements");
+                        return;
+                     end if;
+                     if In_Data_Fields then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "refined types in data declarations"
+                                 & " are not yet supported");
+                        return;
+                     end if;
+                     --  Hidden top-level predicate binder with the
+                     --  signature BASE -> Bool; the desugarer supplies
+                     --  its body from the pending list, and the
+                     --  typechecker then treats it like any other
+                     --  signatured binding.
+                     declare
+                        PV : constant Core.Real_Var_Id :=
+                          M.Mint_Var
+                            ((Name => Table.Intern ("$pred"),
+                              Span => N.Span, Is_Global => True,
+                              others => <>));
+                        Bool_T : constant Core.Real_Type_Id :=
+                          M.Add (Core.Type_Node'
+                            (Kind => Core.TCon_T,
+                             Con => Core.Real_TyCon_Id (Env.Bool_TC),
+                             Refine => Core.No_Refinement));
+                        Sch : Core.Scheme;
+                     begin
+                        Sch.S_Body := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TFun_T,
+                              From => Core.Real_Type_Id (RB),
+                              To => Bool_T)));
+                        Sigs.Include
+                          (PV, Core.Scheme_Id (M.Add (Sch)));
+                        Preds.Append
+                          (Pending_Pred'(Binder => PV,
+                                         Expr => Syntax.Expr_Id
+                                                   (N.P_Expr)));
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TCon_T, Con => BN.Con,
+                              Refine => Core.Refinement_Id
+                                (M.Add (Core.Refinement_Info'
+                                   (Kind => Core.Pred_R,
+                                    Pred_Var => PV,
+                                    P_Name => N.P_Name))))));
                      end;
                   end;
                end;

@@ -24,12 +24,24 @@ package body AHC.Core.Printer is
               else S);
    end LImg;
 
-   --  " in LO .. HI" when refined, "" otherwise.
+   --  " in LO .. HI" / " satisfying P" when refined, "" otherwise.
    function Refine_Suffix
-     (M : Core_Module; R : Refinement_Id) return String
+     (M : Core_Module; Table : Names.Name_Table; R : Refinement_Id)
+      return String
    is (if R = No_Refinement then ""
-       else " in " & LImg (M.Info (Real_Refinement_Id (R)).Lo)
-            & " .. " & LImg (M.Info (Real_Refinement_Id (R)).Hi));
+       else (case M.Info (Real_Refinement_Id (R)).Kind is
+               when Range_R =>
+                 " in " & LImg (M.Info (Real_Refinement_Id (R)).Lo)
+                 & " .. " & LImg (M.Info (Real_Refinement_Id (R)).Hi),
+               when Pred_R =>
+                 " satisfying "
+                 & (if M.Info (Real_Refinement_Id (R)).P_Name =
+                      Names.No_Name
+                    then "(...)"
+                    else Table.Text
+                           (Names.Real_Name_Id
+                              (M.Info (Real_Refinement_Id
+                                         (R)).P_Name)))));
 
    function Lit_Image
      (Table : Names.Name_Table; L : Literal) return String
@@ -60,7 +72,7 @@ package body AHC.Core.Printer is
             return "(meta ?" & Img (Natural (N.Meta)) & ")";
          when TCon_T =>
             return "(tcon " & NM (Table, M.Info (N.Con).Name)
-              & Refine_Suffix (M, N.Refine) & ")";
+              & Refine_Suffix (M, Table, N.Refine) & ")";
          when TApp_T =>
             return "(tap " & Type_Image (M, Table, N.T_Fun) & " "
               & Type_Image (M, Table, N.T_Arg) & ")";
@@ -145,7 +157,7 @@ package body AHC.Core.Printer is
                   declare
                      Inner : constant String :=
                        NM (Table, M.Info (N.Con).Name)
-                       & Refine_Suffix (M, N.Refine);
+                       & Refine_Suffix (M, Table, N.Refine);
                   begin
                      return (if Prec > 0 then "(" & Inner & ")"
                              else Inner);

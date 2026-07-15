@@ -1,8 +1,9 @@
 # Design Note: Ada-Style Refinement Types as an AHC Extension
 
-**Status:** stage 1 IMPLEMENTED (July 2026) — integer range
-refinements on Int/Integer with lazily-fired runtime checks at
-signature and annotation boundaries; see "Stage 1 as built" below.
+**Status:** stages 1 and 2 IMPLEMENTED (July 2026) — integer range
+refinements on Int/Integer and arbitrary boolean predicate
+refinements on any nullary base type, with lazily-fired runtime
+checks at signature and annotation boundaries; see "As built" below.
 **Date:** July 2026.
 **Prompted by:** the observation that Ada can define types GHC cannot,
 and that an Ada-implemented Haskell compiler is uniquely positioned to
@@ -54,7 +55,7 @@ PRD 4.2:
 The extension proposal is to let *Haskell programs compiled by AHC* say
 the same kinds of things.
 
-## 2a. Stage 1 as built
+## 2a. Stages 1 and 2 as built
 
 Shipped with the refinement-types milestones (M23-M25), directly on
 the two Phase 2 design rules (the reserved `Refine` slot on Core
@@ -81,11 +82,39 @@ the two Phase 2 design rules (the reserved `Refine` slot on Core
   `AHC_UNCHECKED=1 scripts/ahc-build.sh` compiles the checks out —
   Ada's release-mode contract story.
 - **Printing:** `ahc check` shows `clamp :: Int -> Int in 0 .. 100`.
-- **Stage-1 limits:** enforcement only at the direct argument/result
-  positions of declared signatures and `::` annotations; refinements
-  nested under constructors (`[Int in 0 .. 9]`) or on class-method
-  signatures typecheck but are not runtime-checked; no compile-time
-  constant-range checking yet.
+- **Stage 2 — predicate refinements (M26-M28):**
+  `BASE satisfying P` in any type position, with `satisfying` a
+  contextual keyword (still a legal varid elsewhere) and `P` an
+  atomic expression - a named function or a parenthesized lambda /
+  section:
+
+  ```haskell
+  type Nat  = Int satisfying (\n -> n >= 0)
+  type Warm = Color satisfying isWarm      -- user ADTs work
+  evenOnly :: Int satisfying even -> Int
+  ```
+
+  The base may be ANY nullary type constructor (`Int`, `Char`,
+  `Bool`, user enums, ...). Each predicate occurrence compiles to a
+  hidden top-level binding `$pred :: BASE -> Bool` whose body is the
+  predicate expression, materialized by the desugarer and pushed
+  through the ordinary typechecker - so class-constrained predicates
+  (`even`'s `Integral`) get their dictionaries by the normal
+  elaboration path, and the fixity resolver handles operator chains
+  inside predicates. Checks fire through `ahc_prim_check_pred` with
+  the same demand-time laziness as ranges; `ahc check` prints
+  `Int satisfying even` (or `satisfying (...)` for a lambda).
+  Stacking two refinements on one type is rejected. The predicate is
+  assumed total and effect-free (its `BASE -> Bool` type rules out
+  IO but not divergence) - the same obligation Ada places on
+  `Dynamic_Predicate`.
+- **Limits (both stages):** enforcement only at the direct
+  argument/result positions of declared signatures and `::`
+  annotations; refinements nested under constructors
+  (`[Int in 0 .. 9]`) or on class-method signatures typecheck but
+  are not runtime-checked; unused (never-demanded) arguments are
+  never checked - that IS the lazy semantics; no compile-time
+  constant checking yet.
 
 ## 3. Sketch of the extension (`{-# LANGUAGE AdaRefinements #-}`, working name)
 

@@ -156,6 +156,12 @@ sequence_ :: Monad m => [m a] -> m ()
 sequence_ [] = return ()
 sequence_ (m : ms) = m >> sequence_ ms
 
+even :: Int -> Bool
+even n = n `mod` 2 == 0
+
+odd :: Int -> Bool
+odd n = not (even n)
+
 until :: (a -> Bool) -> (a -> a) -> a -> a
 until p f x = if p x then x else until p f (f x)
 

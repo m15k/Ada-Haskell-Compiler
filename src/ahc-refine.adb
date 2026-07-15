@@ -12,19 +12,30 @@ package body AHC.Refine is
       Checks_Enabled : Boolean := True)
    is
       Check_Prim : Var_Id := No_Var;   --  minted on first use
+      Pred_Prim  : Var_Id := No_Var;
 
-      function Prim return Real_Var_Id is
+      function Mint_Prim
+        (Name, Symbol : String; Cache : in out Var_Id)
+         return Real_Var_Id is
       begin
-         if Check_Prim = No_Var then
-            Check_Prim := Var_Id
-              (M.Mint_Var ((Name => Table.Intern ("$checkRange"),
+         if Cache = No_Var then
+            Cache := Var_Id
+              (M.Mint_Var ((Name => Table.Intern (Name),
                             Is_Global => True, others => <>)));
             Prims.Include
-              (Real_Var_Id (Check_Prim),
-               Names.Name_Id (Table.Intern ("ahc_prim_check_range")));
+              (Real_Var_Id (Cache),
+               Names.Name_Id (Table.Intern (Symbol)));
          end if;
-         return Real_Var_Id (Check_Prim);
-      end Prim;
+         return Real_Var_Id (Cache);
+      end Mint_Prim;
+
+      function Prim return Real_Var_Id
+      is (Mint_Prim ("$checkRange", "ahc_prim_check_range",
+                     Check_Prim));
+
+      function PPrim return Real_Var_Id
+      is (Mint_Prim ("$checkPred", "ahc_prim_check_pred",
+                     Pred_Prim));
 
       function Refinement_Of (T : Real_Type_Id) return Refinement_Id is
          N : constant Type_Node := M.Node (T);
@@ -42,7 +53,7 @@ package body AHC.Refine is
                  else S);
       end Decimal;
 
-      --  check LO HI E
+      --  Range_R: check LO HI E.  Pred_R: checkPred $pred E.
       function Check_E
         (R    : Real_Refinement_Id;
          E    : Real_Expr_Id;
@@ -57,13 +68,27 @@ package body AHC.Refine is
                        Text => Names.Name_Id
                                  (Table.Intern (Decimal (V)))))));
 
-         Acc : Real_Expr_Id :=
-           M.Add (Expr_Node'(Kind => Var_C, Span => Span, V => Prim));
+         Acc : Real_Expr_Id;
       begin
-         Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
-                                  Fun => Acc, Arg => Lit (Info.Lo)));
-         Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
-                                  Fun => Acc, Arg => Lit (Info.Hi)));
+         case Info.Kind is
+            when Range_R =>
+               Acc := M.Add (Expr_Node'(Kind => Var_C, Span => Span,
+                                        V => Prim));
+               Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
+                                        Fun => Acc,
+                                        Arg => Lit (Info.Lo)));
+               Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
+                                        Fun => Acc,
+                                        Arg => Lit (Info.Hi)));
+            when Pred_R =>
+               Acc := M.Add (Expr_Node'(Kind => Var_C, Span => Span,
+                                        V => PPrim));
+               Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
+                                        Fun => Acc,
+                                        Arg => M.Add (Expr_Node'
+                                          (Kind => Var_C, Span => Span,
+                                           V => Info.Pred_Var))));
+         end case;
          return M.Add (Expr_Node'(Kind => App_C, Span => Span,
                                   Fun => Acc, Arg => E));
       end Check_E;

@@ -38,6 +38,7 @@ package body Test_Kinds is
       Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
+      Preds  : AHC.Kinds.Pred_Vectors.Vector;
 
       Last_Builtin_Class : AHC.Core.Class_Id;
 
@@ -64,7 +65,7 @@ package body Test_Kinds is
       Last_Builtin_Class := M.Last_Class;
       AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
       AHC.Kinds.Check_Module (Arena, Res, Table, Bag, M, Env, Sigs,
-                              Annos);
+                              Annos, Preds);
 
       for I in 1 .. M.Last_TyCon loop
          declare

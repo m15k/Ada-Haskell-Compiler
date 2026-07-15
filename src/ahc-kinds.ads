@@ -14,6 +14,7 @@
 --  After this pass the typechecker never sees surface types.
 
 with Ada.Containers.Hashed_Maps;
+with Ada.Containers.Vectors;
 
 with AHC.Builtins;
 with AHC.Core;
@@ -39,6 +40,20 @@ package AHC.Kinds is
      (Syntax.Type_Id, Core.Scheme_Id,
       Hash => Type_Hash, Equivalent_Keys => Syntax."=", "=" => Core."=");
 
+   --  Predicate refinements (stage 2): kind checking mints the hidden
+   --  binder `$pred :: BASE -> Bool` (its signature goes into Sigs)
+   --  but cannot desugar the predicate expression, so each pending
+   --  pair is turned into a real top-level binding by the desugarer -
+   --  predicates are then typechecked and dictionary-elaborated like
+   --  any other Haskell.
+   type Pending_Pred is record
+      Binder : Core.Real_Var_Id;
+      Expr   : Syntax.Expr_Id;
+   end record;
+
+   package Pred_Vectors is new Ada.Containers.Vectors
+     (Positive, Pending_Pred);
+
    procedure Check_Module
      (Arena : Syntax.Module_Arena;
       Res   : Rename.Resolutions;
@@ -47,6 +62,7 @@ package AHC.Kinds is
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Sig_Maps.Map;
-      Annos : in out Anno_Maps.Map);
+      Annos : in out Anno_Maps.Map;
+      Preds : in out Pred_Vectors.Vector);
 
 end AHC.Kinds;

@@ -122,6 +122,7 @@ procedure AHC_Main is
       Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
+      Preds  : AHC.Kinds.Pred_Vectors.Vector;
       Prelude_Groups : Natural := 0;
    begin
       begin
@@ -146,6 +147,7 @@ procedure AHC_Main is
             P_Stream : AHC.Tokens.Token_Vectors.Vector;
             P_Arena : AHC.Syntax.Module_Arena;
             P_Res : AHC.Rename.Resolutions;
+            P_Preds : AHC.Kinds.Pred_Vectors.Vector;
             Loaded : Boolean := True;
          begin
             begin
@@ -162,11 +164,13 @@ procedure AHC_Main is
                   AHC.Rename.Resolve_Module
                     (P_Arena, Table, Bag, M, Env, P_Res);
                   AHC.Kinds.Check_Module
-                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos);
+                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos,
+                     P_Preds);
                end if;
                if not Bag.Has_Errors then
                   AHC.Desugar.Desugar_Module
-                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos);
+                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos,
+                     P_Preds);
                end if;
                if Bag.Has_Errors then
                   Put_Line (Standard_Error,
@@ -182,11 +186,11 @@ procedure AHC_Main is
 
          AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
          AHC.Kinds.Check_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
       end if;
       if not Bag.Has_Errors then
          AHC.Desugar.Desugar_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
          if Mode = 't' then
             AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
             if not Bag.Has_Errors then

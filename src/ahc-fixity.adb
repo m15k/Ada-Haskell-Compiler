@@ -498,6 +498,20 @@ package body AHC.Fixity is
       Push_Prelude_Scope;
       Push_Scope (Arena.Top_Decls);
       Resolve_Group (Arena.Top_Decls);
+
+      --  Predicate refinements embed expressions inside types, which
+      --  the declaration walk above never reaches; resolve their
+      --  operator chains at top-level fixity scope.
+      for T in 1 .. Arena.Last_Type loop
+         declare
+            N : constant Type_Node := Arena.Node (Real_Type_Id (T));
+         begin
+            if N.Kind = Pred_T then
+               Resolve_Expr (N.P_Expr);
+            end if;
+         end;
+      end loop;
+
       Pop_Scope;
       Pop_Scope;
    end Resolve_Module;

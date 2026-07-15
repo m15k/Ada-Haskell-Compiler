@@ -231,7 +231,8 @@ package AHC.Syntax is
    ---------------------------------------------------------------------
 
    type Type_Kind is
-     (Var_T, Con_T, App_T, Fun_T, List_T, Tuple_T, Qual_T, Refined_T);
+     (Var_T, Con_T, App_T, Fun_T, List_T, Tuple_T, Qual_T, Refined_T,
+      Pred_T);
 
    type Type_Node (Kind : Type_Kind := Var_T) is record
       Span : Diagnostics.Source_Span;
@@ -260,6 +261,14 @@ package AHC.Syntax is
             Hi_Neg  : Boolean := False;
             Lo_Text : Names.Name_Id;
             Hi_Text : Names.Name_Id;
+         when Pred_T =>
+            --  Refinement-types extension, stage 2: BASE satisfying P
+            --  with P an atomic expression of type BASE -> Bool.
+            --  P_Name is the surface name when P is a bare variable
+            --  (pretty printing only), No_Name otherwise.
+            P_Base : Real_Type_Id;
+            P_Expr : Real_Expr_Id;
+            P_Name : Names.Name_Id := Names.No_Name;
       end case;
    end record;
 

@@ -279,6 +279,9 @@ package body AHC.Syntax.Printer is
                return "(refined " & Type_S (N.R_Base) & " "
                  & (if N.Lo_Neg then "-" else "") & NM (N.Lo_Text) & " "
                  & (if N.Hi_Neg then "-" else "") & NM (N.Hi_Text) & ")";
+            when Pred_T =>
+               return "(satisfying " & Type_S (N.P_Base) & " "
+                 & Expr_S (N.P_Expr) & ")";
          end case;
       end Type_S;
 

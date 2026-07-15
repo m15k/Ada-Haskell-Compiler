@@ -16,7 +16,9 @@ package body AHC.Desugar is
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Kinds.Sig_Maps.Map;
-      Annos : Kinds.Anno_Maps.Map)
+      Annos : Kinds.Anno_Maps.Map;
+      Preds : Kinds.Pred_Vectors.Vector :=
+        Kinds.Pred_Vectors.Empty_Vector)
    is
       ------------------------------------------------------------------
       --  Core building helpers
@@ -1334,6 +1336,24 @@ package body AHC.Desugar is
             end;
          end loop;
       end;
+
+      --  Predicate-refinement bodies (stage 2): each pending pair
+      --  from kind checking becomes an ordinary top-level binding
+      --  `$pred = <predicate>`. Appended after every user group, so
+      --  any function the predicate calls is already generalized
+      --  when the typechecker reaches it.
+      for P of Preds loop
+         declare
+            G : Core.Top_Bind;
+         begin
+            G.Is_Rec := False;
+            G.Binds.Append
+              (Core.Bind_Pair'
+                 (Binder => P.Binder,
+                  Rhs => Ds_Expr (Syntax.Real_Expr_Id (P.Expr))));
+            M.Top_Binds.Append (G);
+         end;
+      end loop;
    end Desugar_Module;
 
 end AHC.Desugar;

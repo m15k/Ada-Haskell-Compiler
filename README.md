@@ -57,11 +57,15 @@ The class hierarchy, numeric primitives and IO remain wired in
 AHC.Builtins / AHC.Prelude_Core.
 
 Extension - Ada-style refinement types
-(`docs/refinement-types-design-note.md`): `type Percent = Int in
-0 .. 100` in any type position, erased for unification (transparent
-arithmetic, no smart constructors), enforced by lazily-fired range
-checks at signature and annotation boundaries; `ahc emit --unchecked`
-(or `AHC_UNCHECKED=1 scripts/ahc-build.sh`) compiles the checks out,
+(`docs/refinement-types-design-note.md`): ranges `type Percent = Int
+in 0 .. 100` and predicates `type Nat = Int satisfying (\n -> n >=
+0)` / `Color satisfying isWarm` (any nullary base type; predicates
+are ordinary typechecked Haskell compiled to hidden top-level
+functions, so class-constrained predicates like `even` just work).
+Refined types are erased for unification (transparent arithmetic, no
+smart constructors) and enforced by lazily-fired checks at signature
+and annotation boundaries; `ahc emit --unchecked` (or
+`AHC_UNCHECKED=1 scripts/ahc-build.sh`) compiles the checks out,
 mirroring Ada's release-mode contract policy.
 
 Remaining gaps: Double/Rational arithmetic and Integer bignum (Int is

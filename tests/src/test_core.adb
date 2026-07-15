@@ -245,7 +245,7 @@ package body Test_Core is
            M.Mint_TyCon ((Name => Table.Intern ("Int"), Arity => 0,
                           TC_Kind => M.Star, others => <>));
          R : constant Real_Refinement_Id :=
-           M.Add (Refinement_Info'(Lo => 0, Hi => 100));
+           M.Add (Refinement_Info'(Kind => Range_R, Lo => 0, Hi => 100));
          T : constant Real_Type_Id :=
            M.Add (Type_Node'(Kind => TCon_T, Con => Int_TC,
                              Refine => Refinement_Id (R)));
@@ -255,6 +255,27 @@ package body Test_Core is
          Check_Equal
            (AHC.Core.Printer.Type_Image (M, Table, T),
             "(tcon Int in 0 .. 100)", "refined type image");
+
+         --  Stage 2: predicate refinements name a hidden binder.
+         declare
+            PV : constant Real_Var_Id :=
+              M.Mint_Var ((Name => Table.Intern ("$pred"),
+                           Is_Global => True, others => <>));
+            PR : constant Real_Refinement_Id :=
+              M.Add (Refinement_Info'
+                (Kind => Pred_R, Pred_Var => PV,
+                 P_Name => AHC.Names.Name_Id (Table.Intern ("even"))));
+            PT : constant Real_Type_Id :=
+              M.Add (Type_Node'(Kind => TCon_T, Con => Int_TC,
+                                Refine => Refinement_Id (PR)));
+         begin
+            Check (M.Info (PR).Pred_Var = PV,
+                   "predicate refinement stores its binder");
+            Check_Equal
+              (AHC.Core.Printer.Type_Image (M, Table, PT),
+               "(tcon Int satisfying even)",
+               "predicate refined type image");
+         end;
       end;
    end Run;
 

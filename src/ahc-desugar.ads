@@ -35,6 +35,8 @@ package AHC.Desugar is
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Kinds.Sig_Maps.Map;
-      Annos : Kinds.Anno_Maps.Map);
+      Annos : Kinds.Anno_Maps.Map;
+      Preds : Kinds.Pred_Vectors.Vector :=
+        Kinds.Pred_Vectors.Empty_Vector);
 
 end AHC.Desugar;

@@ -213,6 +213,10 @@ package body AHC.Rename is
 
       procedure Rename_Type (Id : Real_Type_Id);
 
+      --  Forward (bodies below): predicate refinements embed an
+      --  expression inside a type.
+      procedure Rename_Expr (Id : Real_Expr_Id);
+
       --  A context entry: resolve its head as a class.
       procedure Rename_Assertion (Id : Real_Type_Id) is
          N : constant Type_Node := Arena.Node (Id);
@@ -282,6 +286,9 @@ package body AHC.Rename is
                Rename_Type (N.Q_Body);
             when Refined_T =>
                Rename_Type (N.R_Base);
+            when Pred_T =>
+               Rename_Type (N.P_Base);
+               Rename_Expr (N.P_Expr);
          end case;
       end Rename_Type;
 
@@ -402,8 +409,6 @@ package body AHC.Rename is
       ------------------------------------------------------------------
       --  Expressions and declaration groups (pass B)
       ------------------------------------------------------------------
-
-      procedure Rename_Expr (Id : Real_Expr_Id);
 
       procedure Declare_Group
         (Decls : Syntax.Decl_Id_Vectors.Vector; Global : Boolean);
