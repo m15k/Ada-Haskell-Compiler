@@ -119,6 +119,7 @@ procedure AHC_Main is
       Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
+      Prelude_Groups : Natural := 0;
    begin
       begin
          Text := AHC.Source_Text.Load_File (Path);
@@ -133,6 +134,49 @@ procedure AHC_Main is
       AHC.Fixity.Resolve_Module (Arena, Table, Bag);
       if not Bag.Has_Errors then
          AHC.Builtins.Install (M, Table, Env);
+
+         --  Compile prelude/Prelude.hs into the same module first, so
+         --  its definitions are in scope for the user module.
+         declare
+            P_Path : constant String := "prelude/Prelude.hs";
+            P_Text : AHC.Source_Text.Source;
+            P_Stream : AHC.Tokens.Token_Vectors.Vector;
+            P_Arena : AHC.Syntax.Module_Arena;
+            P_Res : AHC.Rename.Resolutions;
+            Loaded : Boolean := True;
+         begin
+            begin
+               P_Text := AHC.Source_Text.Load_File (P_Path);
+            exception
+               when Ada.IO_Exceptions.Name_Error =>
+                  Loaded := False;
+            end;
+            if Loaded then
+               AHC.Lexer.Scan (P_Text, Table, Bag, P_Stream);
+               AHC.Parser.Parse_Module (P_Stream, Table, Bag, P_Arena);
+               AHC.Fixity.Resolve_Module (P_Arena, Table, Bag);
+               if not Bag.Has_Errors then
+                  AHC.Rename.Resolve_Module
+                    (P_Arena, Table, Bag, M, Env, P_Res);
+                  AHC.Kinds.Check_Module
+                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos);
+               end if;
+               if not Bag.Has_Errors then
+                  AHC.Desugar.Desugar_Module
+                    (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos);
+               end if;
+               if Bag.Has_Errors then
+                  Put_Line (Standard_Error,
+                            "ahc: internal: the Prelude failed to"
+                            & " compile");
+                  Bag.Print_All (P_Text);
+                  Set_Exit_Status (1);
+                  return;
+               end if;
+            end if;
+         end;
+         Prelude_Groups := Natural (M.Top_Binds.Length);
+
          AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
          AHC.Kinds.Check_Module
            (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
@@ -146,8 +190,10 @@ procedure AHC_Main is
                AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
             end if;
             if not Bag.Has_Errors then
-               for G of M.Top_Binds loop
-                  for B of G.Binds loop
+               for GI in Prelude_Groups + 1 ..
+                         M.Top_Binds.Last_Index
+               loop
+                  for B of M.Top_Binds (GI).Binds loop
                      declare
                         use type AHC.Core.Scheme_Id;
                         Info : constant AHC.Core.Var_Info :=
@@ -193,7 +239,8 @@ procedure AHC_Main is
             if not Bag.Has_Errors then
                AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
             end if;
-            Put (AHC.Core.Printer.Dump (M, Table));
+            Put (AHC.Core.Printer.Dump
+                   (M, Table, From_Group => Prelude_Groups + 1));
          end if;
       end if;
 

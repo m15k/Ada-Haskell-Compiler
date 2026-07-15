@@ -728,7 +728,7 @@ package body AHC.Builtins is
          begin
             Def_Pair_Instance (Env.Eq_Cl);
             Def_Pair_Instance (Env.Ord_Cl);
-            Def_Pair_Instance (Env.Show_Cl);
+            --  Show for pairs is defined in prelude/Prelude.hs.
          end;
 
          Def_Instance (Cl (Env.Functor_Cl), TCn (Env.List_TC));
@@ -739,7 +739,7 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Monad_Cl), TCn (Env.Maybe_TC));
          Def_Ctx1_Instance (Env.Eq_Cl, Env.Maybe_TC);
          Def_Ctx1_Instance (Env.Ord_Cl, Env.Maybe_TC);
-         Def_Ctx1_Instance (Env.Show_Cl, Env.Maybe_TC);
+         --  Show for Maybe is defined in prelude/Prelude.hs.
       end;
 
       ------------------------------------------------------------------

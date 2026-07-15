@@ -232,7 +232,8 @@ package body AHC.Core.Printer is
    ---------------------------------------------------------------------
 
    function Dump
-     (M : Core_Module; Table : Names.Name_Table) return String
+     (M : Core_Module; Table : Names.Name_Table;
+      From_Group : Positive := 1) return String
    is
       use Ada.Strings.Unbounded;
 
@@ -310,7 +311,10 @@ package body AHC.Core.Printer is
       end Expr_S;
 
    begin
-      for Group of M.Top_Binds loop
+      for GI in From_Group .. M.Top_Binds.Last_Index loop
+       declare
+         Group : constant Top_Bind := M.Top_Binds (GI);
+       begin
          Append (Out_Buf, (if Group.Is_Rec then "(bindrec" else "(bind"));
          for B of Group.Binds loop
             declare
@@ -325,6 +329,7 @@ package body AHC.Core.Printer is
             end;
          end loop;
          Append (Out_Buf, ")" & ASCII.LF);
+       end;
       end loop;
       return Ada.Strings.Unbounded.To_String (Out_Buf);
    end Dump;

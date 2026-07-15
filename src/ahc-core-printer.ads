@@ -5,8 +5,11 @@
 
 package AHC.Core.Printer is
 
+   --  Dump top-level binding groups starting at From_Group (lets the
+   --  driver hide the compiled Prelude when showing user Core).
    function Dump
-     (M : Core_Module; Table : Names.Name_Table) return String;
+     (M : Core_Module; Table : Names.Name_Table;
+      From_Group : Positive := 1) return String;
 
    --  Render one type (used by `ahc check` and the tests).
    function Type_Image
