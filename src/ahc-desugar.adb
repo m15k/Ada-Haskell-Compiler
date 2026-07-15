@@ -1224,6 +1224,7 @@ package body AHC.Desugar is
                   begin
                      if PN.Kind = Var_P and then PR.Kind = Var_Res then
                         --  x = e directly.
+                        M.Vars (PR.Var).From_Pattern_Binding := True;
                         Into.Append
                           (Core.Bind_Pair'(Binder => PR.Var,
                                            Rhs => RHS_E));
@@ -1234,10 +1235,14 @@ package body AHC.Desugar is
                              Fresh ("$pb", Span);
                            Vars : Core.Var_Id_Vectors.Vector;
                         begin
+                           M.Vars (PB).From_Pattern_Binding := True;
                            Into.Append
                              (Core.Bind_Pair'(Binder => PB,
                                               Rhs => RHS_E));
                            Bound_Vars (N.Pat, Vars);
+                           for V of Vars loop
+                              M.Vars (V).From_Pattern_Binding := True;
+                           end loop;
                            for V of Vars loop
                               Into.Append
                                 (Core.Bind_Pair'

@@ -25,6 +25,7 @@ with AHC.Rename;
 with AHC.Source_Text;
 with AHC.Syntax.Printer;
 with AHC.Tokens;
+with AHC.Typechecker;
 
 procedure AHC_Main is
    use Ada.Command_Line;
@@ -36,6 +37,7 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc lex [--layout] FILE.hs");
       Put_Line (Target, "       ahc parse FILE.hs");
       Put_Line (Target, "       ahc core FILE.hs");
+      Put_Line (Target, "       ahc check FILE.hs");
    end Print_Usage;
 
    procedure Usage_Error (Message : String) is
@@ -98,8 +100,9 @@ procedure AHC_Main is
       end if;
    end Run_Lex;
 
-   --  Pipeline through desugaring; print the Core dump.
-   procedure Run_Core (Path : String) is
+   --  Pipeline through desugaring (+ typechecking for `check`).
+   --  Mode: 'c' = print Core dump, 't' = print top-level types.
+   procedure Run_Middle (Path : String; Mode : Character) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -131,14 +134,43 @@ procedure AHC_Main is
       if not Bag.Has_Errors then
          AHC.Desugar.Desugar_Module
            (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
-         Put (AHC.Core.Printer.Dump (M, Table));
+         if Mode = 't' then
+            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            if not Bag.Has_Errors then
+               for G of M.Top_Binds loop
+                  for B of G.Binds loop
+                     declare
+                        use type AHC.Core.Scheme_Id;
+                        Info : constant AHC.Core.Var_Info :=
+                          M.Info (B.Binder);
+                        Name : constant String :=
+                          Table.Text (Info.Name);
+                     begin
+                        if Info.Var_Scheme /= AHC.Core.No_Scheme
+                          and then (Name'Length = 0
+                                    or else Name (Name'First) /= '$')
+                        then
+                           Put_Line
+                             (Name & " :: "
+                              & AHC.Core.Printer.Pretty_Scheme
+                                  (M, Table,
+                                   AHC.Core.Real_Scheme_Id
+                                     (Info.Var_Scheme)));
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+            end if;
+         else
+            Put (AHC.Core.Printer.Dump (M, Table));
+         end if;
       end if;
 
       Bag.Print_All (Text);
       if Bag.Has_Errors then
          Set_Exit_Status (1);
       end if;
-   end Run_Core;
+   end Run_Middle;
 
    procedure Run_Parse (Path : String) is
       Text   : AHC.Source_Text.Source;
@@ -195,9 +227,15 @@ begin
          end if;
       elsif Command = "core" then
          if Argument_Count = 2 then
-            Run_Core (Argument (2));
+            Run_Middle (Argument (2), 'c');
          else
             Usage_Error ("expected: ahc core FILE.hs");
+         end if;
+      elsif Command = "check" then
+         if Argument_Count = 2 then
+            Run_Middle (Argument (2), 't');
+         else
+            Usage_Error ("expected: ahc check FILE.hs");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

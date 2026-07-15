@@ -453,10 +453,17 @@ package body AHC.Kinds is
          K : Core.Kind_Id;
       begin
          if Arena.Node (T).Kind = Qual_T then
-            for A of Arena.Node (T).Context loop
-               Convert_Assertion (A, TvEnv, Order, True, Ctx);
-            end loop;
-            Body_T := Arena.Node (T).Q_Body;
+            declare
+               --  Bind the node before iterating: 'for .. of' over the
+               --  component of a function-result temporary iterates an
+               --  already-finalized vector.
+               TN : constant Type_Node := Arena.Node (T);
+            begin
+               for A of TN.Context loop
+                  Convert_Assertion (A, TvEnv, Order, True, Ctx);
+               end loop;
+               Body_T := TN.Q_Body;
+            end;
          end if;
          Convert (Body_T, TvEnv, Order, True, 0, R, K);
          if R = Core.No_Type then

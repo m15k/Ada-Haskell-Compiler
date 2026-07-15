@@ -166,6 +166,9 @@ package AHC.Core is
       Is_Global : Boolean := False;
       Var_Type  : Type_Id := No_Type;      --  monomorphic type, if known
       Var_Scheme : Scheme_Id := No_Scheme; --  polymorphic, if generalized
+      --  Binder came from a surface pattern binding (Report 4.5.5:
+      --  the monomorphism restriction applies to its group).
+      From_Pattern_Binding : Boolean := False;
    end record;
 
    type TyVar_Info is record

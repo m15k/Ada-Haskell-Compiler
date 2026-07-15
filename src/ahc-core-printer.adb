@@ -85,6 +85,149 @@ package body AHC.Core.Printer is
    end Scheme_Image;
 
    ---------------------------------------------------------------------
+   --  Pretty types (ahc check output)
+   ---------------------------------------------------------------------
+
+   function Pretty_Scheme
+     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id)
+      return String
+   is
+      use Ada.Strings.Unbounded;
+      Sch : constant Scheme := M.Node (S);
+
+      --  Rename tyvars a, b, .., z, t1, t2, .. by first occurrence.
+      Seen  : TyVar_Id_Vectors.Vector;
+
+      function TV_Name (Tv : Real_TyVar_Id) return String is
+         Idx : Natural := 0;
+      begin
+         for I in 1 .. Seen.Last_Index loop
+            if Core."=" (Seen (I), Tv) then
+               Idx := I;
+            end if;
+         end loop;
+         if Idx = 0 then
+            Seen.Append (Tv);
+            Idx := Seen.Last_Index;
+         end if;
+         if Idx <= 26 then
+            return [Character'Val (Character'Pos ('a') + Idx - 1)];
+         end if;
+         return "t" & Img (Idx);
+      end TV_Name;
+
+      --  Precedence: 0 = top (fun), 1 = app arg, 2 = atomic.
+      function Ty (T : Real_Type_Id; Prec : Natural) return String is
+         N : constant Type_Node := M.Node (T);
+      begin
+         case N.Kind is
+            when TVar_T =>
+               return TV_Name (N.Tv);
+            when TMeta_T =>
+               return "?" & Img (Natural (N.Meta));
+            when TCon_T =>
+               return NM (Table, M.Info (N.Con).Name);
+            when TFun_T =>
+               declare
+                  Inner : constant String :=
+                    Ty (N.From, 1) & " -> " & Ty (N.To, 0);
+               begin
+                  return (if Prec > 0 then "(" & Inner & ")"
+                          else Inner);
+               end;
+            when TApp_T =>
+               --  Detect list and tuple spines for standard notation.
+               declare
+                  Head : Real_Type_Id := T;
+                  Args : Type_Id_Vectors.Vector;
+               begin
+                  while M.Node (Head).Kind = TApp_T loop
+                     Args.Prepend (M.Node (Head).T_Arg);
+                     Head := M.Node (Head).T_Fun;
+                  end loop;
+                  if M.Node (Head).Kind = TCon_T then
+                     declare
+                        Name : constant String :=
+                          NM (Table, M.Info (M.Node (Head).Con).Name);
+                     begin
+                        if Name = "[]"
+                          and then Natural (Args.Length) = 1
+                        then
+                           return "[" & Ty (Args (1), 0) & "]";
+                        end if;
+                        if Name'Length >= 3
+                          and then Name (Name'First) = '('
+                          and then Name (Name'First + 1) = ','
+                          and then Natural (Args.Length) =
+                                     Name'Length - 1
+                        then
+                           declare
+                              R : Unbounded_String;
+                           begin
+                              Append (R, "(");
+                              for I in 1 .. Args.Last_Index loop
+                                 if I > 1 then
+                                    Append (R, ", ");
+                                 end if;
+                                 Append (R, Ty (Args (I), 0));
+                              end loop;
+                              Append (R, ")");
+                              return To_String (R);
+                           end;
+                        end if;
+                     end;
+                  end if;
+                  declare
+                     R : Unbounded_String;
+                  begin
+                     Append (R, Ty (Head, 2));
+                     for A of Args loop
+                        Append (R, " " & Ty (A, 2));
+                     end loop;
+                     if Prec > 1 then
+                        return "(" & To_String (R) & ")";
+                     end if;
+                     return To_String (R);
+                  end;
+               end;
+         end case;
+      end Ty;
+
+      Result : Unbounded_String;
+   begin
+      --  Walk the body first so tyvar letters follow their appearance
+      --  in the printed type, then prepend the (sorted-as-written)
+      --  context.
+      declare
+         Body_S : constant String := Ty (Sch.S_Body, 0);
+      begin
+         if not Sch.Context.Is_Empty then
+            declare
+               Ctx : Unbounded_String;
+               First : Boolean := True;
+            begin
+               for C of Sch.Context loop
+                  if not First then
+                     Append (Ctx, ", ");
+                  end if;
+                  First := False;
+                  Append (Ctx, NM (Table, M.Info (C.Class).Name) & " "
+                             & Ty (C.Arg, 2));
+               end loop;
+               if Natural (Sch.Context.Length) = 1 then
+                  Append (Result, To_String (Ctx) & " => ");
+               else
+                  Append (Result,
+                          "(" & To_String (Ctx) & ") => ");
+               end if;
+            end;
+         end if;
+         Append (Result, Body_S);
+      end;
+      return To_String (Result);
+   end Pretty_Scheme;
+
+   ---------------------------------------------------------------------
    --  Expressions
    ---------------------------------------------------------------------
 

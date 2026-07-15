@@ -19,4 +19,13 @@ package AHC.Core.Printer is
       return String
      with Pre => S <= M.Last_Scheme;
 
+   --  Human-readable Haskell form for `ahc check`:
+   --  "(Eq a, Num b) => [a] -> b -> Bool" - tyvars renamed a, b, c...
+   --  in order of first occurrence, lists/tuples/arrows in standard
+   --  notation, forall-free.
+   function Pretty_Scheme
+     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id)
+      return String
+     with Pre => S <= M.Last_Scheme;
+
 end AHC.Core.Printer;

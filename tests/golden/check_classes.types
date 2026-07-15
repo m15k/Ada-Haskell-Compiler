@@ -1,0 +1,3 @@
+describe :: Pretty a => a -> [Char]
+check1 :: Bool
+main :: IO ()
