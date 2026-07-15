@@ -1138,17 +1138,29 @@ package body AHC.Parser is
                end if;
                return;
             end if;
-            Into.Append (Parse_Qual);
-            if At_K (Semicolon) or else At_K (V_Semicolon) then
-               Advance;
-            elsif (Explicit and then At_K (Right_Brace))
-              or else (not Explicit and then At_K (V_Right_Brace))
+            --  A token that cannot start a statement closes an
+            --  implicit block via the parse-error(t) rule ('where'
+            --  at the same indentation as the do statements).
+            if not Explicit
+              and then Tok.Kind in Kw_Where | Kw_In | Kw_Then
+                         | Kw_Else | Right_Paren | Right_Bracket
+                         | Comma
+              and then Try_Layout_Close
             then
-               null;
-            elsif not Explicit and then Try_Layout_Close then
-               null;  --  Tok is now the V_Right_Brace
+               null;   --  Tok is the V_Right_Brace; loop exits above
             else
-               Fail ("expected ';' or end of do block");
+               Into.Append (Parse_Qual);
+               if At_K (Semicolon) or else At_K (V_Semicolon) then
+                  Advance;
+               elsif (Explicit and then At_K (Right_Brace))
+                 or else (not Explicit and then At_K (V_Right_Brace))
+               then
+                  null;
+               elsif not Explicit and then Try_Layout_Close then
+                  null;  --  Tok is now the V_Right_Brace
+               else
+                  Fail ("expected ';' or end of do block");
+               end if;
             end if;
          end loop;
          Advance;  --  closing brace

@@ -25,6 +25,8 @@ package AHC.Fixity is
      (Arena : in out Syntax.Module_Arena;
       Table : in out Names.Name_Table;
       Bag   : in out Diagnostics.Diagnostic_Bag)
-     with Post => Chain_Free (Arena);
+     with Post => Bag.Has_Errors or else Chain_Free (Arena);
+   --  Error recovery can orphan chain nodes, hence the escape hatch;
+   --  on a clean parse no flat chain survives.
 
 end AHC.Fixity;

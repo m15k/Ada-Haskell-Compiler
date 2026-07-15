@@ -1,0 +1,13 @@
+-- arithmetic & recursion
+6765
+-- lists, laziness (take from infinite would need take; use enumFromTo)
+5050
+[2,4,6]
+-- ADTs, classes, deriving
+12
+True
+False
+circle
+something
+-- guards & where
+positive

@@ -9,9 +9,11 @@
 
 with Ada.Command_Line;
 with Ada.IO_Exceptions;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with AHC.Builtins;
+with AHC.CodeGen;
 with AHC.Core.Printer;
 with AHC.Desugar;
 with AHC.Diagnostics;
@@ -22,6 +24,7 @@ with AHC.Layout;
 with AHC.Lexer;
 with AHC.Names;
 with AHC.Parser;
+with AHC.Prelude_Core;
 with AHC.Rename;
 with AHC.Source_Text;
 with AHC.Syntax.Printer;
@@ -39,6 +42,7 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc parse FILE.hs");
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
+      Put_Line (Target, "       ahc emit FILE.hs OUT   (writes OUT.c)");
    end Print_Usage;
 
    procedure Usage_Error (Message : String) is
@@ -102,8 +106,9 @@ procedure AHC_Main is
    end Run_Lex;
 
    --  Pipeline through desugaring (+ typechecking for `check`).
-   --  Mode: 'c' = print Core dump, 't' = print top-level types.
-   procedure Run_Middle (Path : String; Mode : Character) is
+   --  Mode: 'c' = Core dump, 't' = types, 'b' = build executable.
+   procedure Run_Middle
+     (Path : String; Mode : Character; Out_Path : String := "") is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -164,6 +169,24 @@ procedure AHC_Main is
                      end;
                   end loop;
                end loop;
+            end if;
+         elsif Mode = 'b' then
+            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            if not Bag.Has_Errors then
+               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+               declare
+                  Prims : AHC.Prelude_Core.Prim_Maps.Map;
+                  C_Src : Ada.Text_IO.File_Type;
+                  C_Path : constant String := Out_Path & ".c";
+               begin
+                  AHC.Prelude_Core.Install_Bodies (Table, M, Env, Prims);
+                  Create (C_Src, Out_File, C_Path);
+                  Put (C_Src,
+                       Ada.Strings.Unbounded.To_String
+                         (AHC.CodeGen.Emit (Table, M, Env, Prims)));
+                  Close (C_Src);
+                  Put_Line ("wrote " & C_Path);
+               end;
             end if;
          else
             AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
@@ -244,6 +267,12 @@ begin
             Run_Middle (Argument (2), 't');
          else
             Usage_Error ("expected: ahc check FILE.hs");
+         end if;
+      elsif Command = "emit" then
+         if Argument_Count = 3 then
+            Run_Middle (Argument (2), 'b', Argument (3));
+         else
+            Usage_Error ("expected: ahc emit FILE.hs OUT");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

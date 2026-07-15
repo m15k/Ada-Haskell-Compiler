@@ -30,7 +30,23 @@ that violated contracts actually raise `Assert_Failure`.
 
 ## Status
 
-Phases 1 and 2 are complete.
+Phases 1, 2 and 3 are complete: AHC compiles and runs Haskell programs.
+
+```sh
+scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable
+./Foo
+```
+
+Backend: `ahc emit` generates C over the AHC runtime
+(`runtime/ahc_rts.{h,c}`) - call-by-need graph reduction with
+update-in-place thunks, curried closures, generic constructor workers,
+dictionary field selectors, and IO as world-passing actions - linked
+against the Boehm-Demers-Weiser GC (plain malloc fallback). Covered at
+runtime today: Int arithmetic/comparison, Bool/Char/String/list Show,
+user ADTs with derived Eq/Ord (generic structural prims), user classes
+with default methods, lazy infinite structures, do-notation IO.
+Double/Rational arithmetic, tuple/Maybe Show and Integer bignum remain
+error thunks until Phase 4's real Prelude.
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,
@@ -48,6 +64,7 @@ along with the C backend and Boehm GC runtime.
 scripts/run_golden.sh              # golden lex/layout/parse/core/check
 scripts/run_differential.sh        # parse-level GHC agreement
 scripts/run_differential_types.sh  # type-level GHC agreement
+scripts/run_exec.sh                # compile-and-run output goldens
 ```
 
 ## Layout
