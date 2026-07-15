@@ -202,6 +202,16 @@ package AHC.Core is
    package Method_Info_Vectors is new Ada.Containers.Vectors
      (Positive, Method_Info);
 
+   --  One binder = rhs pair (used in Core lets, top-level groups, and
+   --  class/instance method bodies).
+   type Bind_Pair is record
+      Binder : Real_Var_Id;
+      Rhs    : Real_Expr_Id;
+   end record;
+
+   package Bind_Vectors is new Ada.Containers.Vectors
+     (Positive, Bind_Pair);
+
    type Class_Info is record
       Name       : Names.Name_Id := Names.No_Name;
       Var_Kind   : Kind_Id := No_Kind;     --  kind of the class tyvar
@@ -210,6 +220,8 @@ package AHC.Core is
       Dict_TyCon : TyCon_Id := No_TyCon;
       Dict_Con   : DataCon_Id := 0;
       Instances  : Instance_Id_Vectors.Vector;
+      --  Desugared default-method bodies (binder = fresh local var).
+      Default_Binds : Bind_Vectors.Vector;
    end record;
 
    --  Haskell 2010 instance heads are always C (T a1..an), so keying
@@ -222,6 +234,8 @@ package AHC.Core is
       Head_Vars   : TyVar_Id_Vectors.Vector;
       Context     : Constraint_Vectors.Vector;
       Dict_Global : Var_Id := No_Var;
+      --  Desugared method implementations (binder = local var).
+      Method_Binds : Bind_Vectors.Vector;
       Span        : Diagnostics.Source_Span;
    end record;
 
@@ -239,14 +253,6 @@ package AHC.Core is
             Code : Natural := 0;
       end case;
    end record;
-
-   type Bind_Pair is record
-      Binder : Real_Var_Id;
-      Rhs    : Real_Expr_Id;
-   end record;
-
-   package Bind_Vectors is new Ada.Containers.Vectors
-     (Positive, Bind_Pair);
 
    type Expr_Kind is (Var_C, Lit_C, Con_C, App_C, Lam_C, Let_C, Case_C);
 

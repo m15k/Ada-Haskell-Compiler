@@ -11,12 +11,17 @@ with Ada.Command_Line;
 with Ada.IO_Exceptions;
 with Ada.Text_IO;
 
+with AHC.Builtins;
+with AHC.Core.Printer;
+with AHC.Desugar;
 with AHC.Diagnostics;
 with AHC.Fixity;
+with AHC.Kinds;
 with AHC.Layout;
 with AHC.Lexer;
 with AHC.Names;
 with AHC.Parser;
+with AHC.Rename;
 with AHC.Source_Text;
 with AHC.Syntax.Printer;
 with AHC.Tokens;
@@ -30,6 +35,7 @@ procedure AHC_Main is
       Put_Line (Target, "usage: ahc --version");
       Put_Line (Target, "       ahc lex [--layout] FILE.hs");
       Put_Line (Target, "       ahc parse FILE.hs");
+      Put_Line (Target, "       ahc core FILE.hs");
    end Print_Usage;
 
    procedure Usage_Error (Message : String) is
@@ -92,6 +98,48 @@ procedure AHC_Main is
       end if;
    end Run_Lex;
 
+   --  Pipeline through desugaring; print the Core dump.
+   procedure Run_Core (Path : String) is
+      Text   : AHC.Source_Text.Source;
+      Table  : AHC.Names.Name_Table;
+      Bag    : AHC.Diagnostics.Diagnostic_Bag;
+      Stream : AHC.Tokens.Token_Vectors.Vector;
+      Arena  : AHC.Syntax.Module_Arena;
+      M      : AHC.Core.Core_Module;
+      Env    : AHC.Builtins.Global_Env;
+      Res    : AHC.Rename.Resolutions;
+      Sigs   : AHC.Kinds.Sig_Maps.Map;
+      Annos  : AHC.Kinds.Anno_Maps.Map;
+   begin
+      begin
+         Text := AHC.Source_Text.Load_File (Path);
+      exception
+         when Ada.IO_Exceptions.Name_Error =>
+            Usage_Error ("cannot open '" & Path & "'");
+            return;
+      end;
+
+      AHC.Lexer.Scan (Text, Table, Bag, Stream);
+      AHC.Parser.Parse_Module (Stream, Table, Bag, Arena);
+      AHC.Fixity.Resolve_Module (Arena, Table, Bag);
+      if not Bag.Has_Errors then
+         AHC.Builtins.Install (M, Table, Env);
+         AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
+         AHC.Kinds.Check_Module
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+      end if;
+      if not Bag.Has_Errors then
+         AHC.Desugar.Desugar_Module
+           (Arena, Res, Table, Bag, M, Env, Sigs, Annos);
+         Put (AHC.Core.Printer.Dump (M, Table));
+      end if;
+
+      Bag.Print_All (Text);
+      if Bag.Has_Errors then
+         Set_Exit_Status (1);
+      end if;
+   end Run_Core;
+
    procedure Run_Parse (Path : String) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
@@ -144,6 +192,12 @@ begin
             Run_Parse (Argument (2));
          else
             Usage_Error ("expected: ahc parse FILE.hs");
+         end if;
+      elsif Command = "core" then
+         if Argument_Count = 2 then
+            Run_Core (Argument (2));
+         else
+            Usage_Error ("expected: ahc core FILE.hs");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

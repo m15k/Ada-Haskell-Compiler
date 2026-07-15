@@ -203,7 +203,9 @@ package body AHC.Builtins is
          Ignore := M.Mint_Instance
            ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
              Head_Vars => Head_Vars, Context => Context,
-             Dict_Global => Var_Id (Dict), Span => No_Span));
+             Dict_Global => Var_Id (Dict),
+             Method_Binds => Bind_Vectors.Empty_Vector,
+             Span => No_Span));
          pragma Unreferenced (Ignore);
       end Def_Instance;
 
@@ -788,6 +790,16 @@ package body AHC.Builtins is
               ("subtract",
                Poly1 (A, FN (TV (A), TV (A), TV (A)),
                       Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
+            --  Integral methods approximated as Num-constrained
+            --  globals until Phase 4 wires the real class.
+            for Op in 1 .. 4 loop
+               Ignore := Def_Global
+                 ((case Op is
+                     when 1 => "div", when 2 => "mod",
+                     when 3 => "quot", when others => "rem"),
+                  Poly1 (A, FN (TV (A), TV (A), TV (A)),
+                         Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
+            end loop;
             Ignore := Def_Global
               ("length", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
          end;

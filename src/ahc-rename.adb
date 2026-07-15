@@ -520,9 +520,13 @@ package body AHC.Rename is
                Rename_Expr (N.Comp_Expr);
                Pop_Scope;
             when Left_Section_E | Right_Section_E =>
-               --  The section operator itself is resolved during
-               --  desugaring via the same lookup used here; the operand
-               --  is an ordinary expression.
+               --  The section's own resolution slot carries its
+               --  operator (the node has no other use for it).
+               if N.Sec_Op.Is_Con then
+                  Set_Expr (Id, Lookup_Con (N.Sec_Op.Op, N.Span));
+               else
+                  Set_Expr (Id, Lookup_Value (N.Sec_Op.Op, N.Span));
+               end if;
                Rename_Expr (N.Sec_Expr);
             when Sig_E =>
                Rename_Expr (N.Sig_Expr);
@@ -788,6 +792,8 @@ package body AHC.Rename is
                          Head_Vars => Vars,
                          Context => Ctx,
                          Dict_Global => Core.Var_Id (Dict),
+                         Method_Binds =>
+                           Core.Bind_Vectors.Empty_Vector,
                          Span => N.Span));
                      pragma Unreferenced (Ignore);
                   end;
@@ -980,7 +986,9 @@ package body AHC.Rename is
                  ((Of_Class => Core.Class_Id (Cl), Head => Head,
                    Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
                    Context => Core.Constraint_Vectors.Empty_Vector,
-                   Dict_Global => Core.Var_Id (Dict), Span => N.Span));
+                   Dict_Global => Core.Var_Id (Dict),
+                   Method_Binds => Core.Bind_Vectors.Empty_Vector,
+                   Span => N.Span));
                pragma Unreferenced (Ignore);
             end;
          end;
