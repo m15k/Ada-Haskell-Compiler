@@ -188,6 +188,31 @@ static AhcNode *mk_prim2(Prim2 f) {
   return ahc_mk_fun(prim2_first, e);
 }
 
+typedef AhcNode *(*Prim3)(AhcNode *, AhcNode *, AhcNode *);
+
+static AhcNode *prim3_apply3(AhcNode **env, AhcNode *c) {
+  Prim3 f = (Prim3)(uintptr_t)env[0]->u.i;
+  return f(env[1], env[2], c);
+}
+
+static AhcNode *prim3_apply2(AhcNode **env, AhcNode *b) {
+  AhcNode **e3 = ahc_env(3);
+  e3[0] = env[0]; e3[1] = env[1]; e3[2] = b;
+  return ahc_mk_fun(prim3_apply3, e3);
+}
+
+static AhcNode *prim3_first(AhcNode **env, AhcNode *a) {
+  AhcNode **e2 = ahc_env(2);
+  e2[0] = env[0]; e2[1] = a;
+  return ahc_mk_fun(prim3_apply2, e2);
+}
+
+static AhcNode *mk_prim3(Prim3 f) {
+  AhcNode **e = ahc_env(1);
+  e[0] = ahc_mk_int((long)(uintptr_t)f);
+  return ahc_mk_fun(prim3_first, e);
+}
+
 typedef AhcNode *(*Prim1)(AhcNode *);
 
 static AhcNode *prim1_apply(AhcNode **env, AhcNode *a) {
@@ -424,6 +449,22 @@ void ahc_run_main(AhcNode *main_io) {
 
 /* ----- globals ---------------------------------------------------- */
 
+/* Refinement-types extension: lazily-fired range check. Strict in
+   the checked value; the check application itself is a thunk, so the
+   check fires exactly when the refined value is first demanded. */
+static AhcNode *p_check_range(AhcNode *lo, AhcNode *hi, AhcNode *x) {
+  long l = ahc_eval(lo)->u.i;
+  long h = ahc_eval(hi)->u.i;
+  AhcNode *v = ahc_eval(x);
+  if (v->u.i < l || v->u.i > h) {
+    fflush(stdout);
+    fprintf(stderr, "refinement violation: %ld not in %ld .. %ld\n",
+            v->u.i, l, h);
+    exit(1);
+  }
+  return v;
+}
+
 AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_neg_int, *ahc_prim_abs_int, *ahc_prim_signum_int,
   *ahc_prim_div_int, *ahc_prim_mod_int, *ahc_prim_quot_int,
@@ -438,7 +479,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_enum_from_to_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
-  *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr;
+  *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_check_range;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -479,4 +521,5 @@ void ahc_rts_init(void) {
   ahc_prim_error = mk_prim1(p_error);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
+  ahc_prim_check_range = mk_prim3(p_check_range);
 }

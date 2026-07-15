@@ -1,6 +1,8 @@
 # Design Note: Ada-Style Refinement Types as an AHC Extension
 
-**Status:** exploratory — captured for consideration after Phase 4.
+**Status:** stage 1 IMPLEMENTED (July 2026) — integer range
+refinements on Int/Integer with lazily-fired runtime checks at
+signature and annotation boundaries; see "Stage 1 as built" below.
 **Date:** July 2026.
 **Prompted by:** the observation that Ada can define types GHC cannot,
 and that an Ada-implemented Haskell compiler is uniquely positioned to
@@ -51,6 +53,39 @@ PRD 4.2:
 
 The extension proposal is to let *Haskell programs compiled by AHC* say
 the same kinds of things.
+
+## 2a. Stage 1 as built
+
+Shipped with the refinement-types milestones (M23-M25), directly on
+the two Phase 2 design rules (the reserved `Refine` slot on Core
+`TCon_T`; erased-head unification):
+
+- **Syntax:** `Int in LO .. HI` in any type position, integer-literal
+  bounds with optional `-`. A one-token lookahead (literal after
+  `in`) keeps `let ... in` unambiguous. Synonyms work
+  (`type Percent = Int in 0 .. 100`).
+- **Bases:** `Int` and `Integer` only; anything else, an empty range,
+  or a refined data-constructor field is a kind error (a refined
+  field would be an unenforced promise until constructor-site checks
+  land in a later stage).
+- **Semantics:** coercive subtyping by erasure — refined and
+  unrefined types unify freely, all arithmetic transparent. AHC.Refine
+  eta-wraps every signatured/annotated binder whose type spine
+  mentions a refined TCon, applying `ahc_prim_check_range` to refined
+  arguments and results (dictionary parameters threaded through). The
+  check is a thunk: it fires when the refined value is first
+  demanded, so unforced values are never checked and a violation
+  inside a lazy structure surfaces exactly at demand time
+  (`refinement violation: 151 not in 0 .. 100`, exit 1).
+- **Policy toggle:** `ahc emit ... --unchecked` /
+  `AHC_UNCHECKED=1 scripts/ahc-build.sh` compiles the checks out —
+  Ada's release-mode contract story.
+- **Printing:** `ahc check` shows `clamp :: Int -> Int in 0 .. 100`.
+- **Stage-1 limits:** enforcement only at the direct argument/result
+  positions of declared signatures and `::` annotations; refinements
+  nested under constructors (`[Int in 0 .. 9]`) or on class-method
+  signatures typecheck but are not runtime-checked; no compile-time
+  constant-range checking yet.
 
 ## 3. Sketch of the extension (`{-# LANGUAGE AdaRefinements #-}`, working name)
 

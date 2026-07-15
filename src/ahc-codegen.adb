@@ -73,23 +73,30 @@ package body AHC.CodeGen is
          return To_String (R);
       end C_Escape;
 
-      --  Parse an integer lexeme (dec/hex/oct) to decimal text.
+      --  Parse an integer lexeme (dec/hex/oct, optional leading '-'
+      --  on generated literals such as refinement bounds) to decimal
+      --  text.
       function Int_Text (T : Names.Name_Id) return String is
          S : constant String := Table.Text (Names.Real_Name_Id (T));
          V : Long_Long_Integer := 0;
          Base : Long_Long_Integer := 10;
          First : Positive := S'First;
+         Neg : Boolean := False;
       begin
-         if S'Length > 2 and then S (S'First) = '0'
-           and then (S (S'First + 1) in 'x' | 'X')
+         if S'Length > 1 and then S (S'First) = '-' then
+            Neg := True;
+            First := S'First + 1;
+         end if;
+         if S'Last - First > 1 and then S (First) = '0'
+           and then (S (First + 1) in 'x' | 'X')
          then
             Base := 16;
-            First := S'First + 2;
-         elsif S'Length > 2 and then S (S'First) = '0'
-           and then (S (S'First + 1) in 'o' | 'O')
+            First := First + 2;
+         elsif S'Last - First > 1 and then S (First) = '0'
+           and then (S (First + 1) in 'o' | 'O')
          then
             Base := 8;
-            First := S'First + 2;
+            First := First + 2;
          end if;
          for I in First .. S'Last loop
             declare
@@ -104,6 +111,9 @@ package body AHC.CodeGen is
                V := V * Base + D;
             end;
          end loop;
+         if Neg then
+            V := -V;
+         end if;
          declare
             R : constant String := V'Image;
          begin

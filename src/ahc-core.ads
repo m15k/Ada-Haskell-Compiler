@@ -47,10 +47,21 @@ package AHC.Core is
    type Expr_Id     is new Natural;
    type Alt_Id      is new Natural;
 
-   --  Reserved for the refinement-types extension; no constructor for
-   --  refinements exists in Phase 2 (design rule 1).
+   --  Refinement-types extension (docs/refinement-types-design-note.md,
+   --  stage 1): a refinement is an inclusive integer range attached to
+   --  a scalar TCon. Reserved through Phases 2-4 (design rule 1), now
+   --  populated by AHC.Kinds from `Int in LO .. HI` surface types.
    type Refinement_Id is new Natural;
    No_Refinement : constant Refinement_Id := 0;
+   subtype Real_Refinement_Id is
+     Refinement_Id range 1 .. Refinement_Id'Last;
+
+   type Refinement_Info is record
+      Lo, Hi : Long_Long_Integer;
+   end record;
+
+   package Refinement_Vectors is new Ada.Containers.Vectors
+     (Positive, Refinement_Info);
 
    No_Var    : constant Var_Id    := 0;
    No_TyCon  : constant TyCon_Id  := 0;
@@ -122,8 +133,8 @@ package AHC.Core is
             Meta : Real_Meta_Id;
          when TCon_T =>
             Con : Real_TyCon_Id;
-            --  Design rule 1: reserved slot, always No_Refinement in
-            --  Phase 2.
+            --  Range refinement on this occurrence of the TyCon;
+            --  No_Refinement for the unrefined base type.
             Refine : Refinement_Id := No_Refinement;
          when TApp_T =>
             T_Fun, T_Arg : Real_Type_Id;
@@ -354,6 +365,7 @@ package AHC.Core is
       Exprs     : Expr_Node_Vectors.Vector;
       Alts      : Alt_Node_Vectors.Vector;
       Top_Binds : Top_Bind_Vectors.Vector;
+      Refinements : Refinement_Vectors.Vector;
       Star_Cache : Kind_Id := No_Kind;
    end record;
 
@@ -379,6 +391,9 @@ package AHC.Core is
    is (if M.Exprs.Is_Empty then No_Expr else M.Exprs.Last_Index);
    function Last_Alt (M : Core_Module) return Alt_Id
    is (if M.Alts.Is_Empty then 0 else M.Alts.Last_Index);
+   function Last_Refinement (M : Core_Module) return Refinement_Id
+   is (if M.Refinements.Is_Empty then No_Refinement
+       else Refinement_Id (M.Refinements.Last_Index));
 
    ---------------------------------------------------------------------
    --  Well-formedness and addition (the AHC.Syntax protocol)
@@ -400,6 +415,11 @@ package AHC.Core is
      with Pre => M.Well_Formed (N), Post => Add'Result = M.Last_Expr;
    function Add (M : in out Core_Module; N : Alt_Node) return Real_Alt_Id
      with Pre => M.Well_Formed (N), Post => Add'Result = M.Last_Alt;
+   function Add
+     (M : in out Core_Module; R : Refinement_Info)
+      return Real_Refinement_Id
+     with Pre  => R.Lo <= R.Hi,
+          Post => Add'Result = M.Last_Refinement;
 
    --  Entity minting (no structural invariants beyond a real name
    --  where one is required; cross-links are filled in as passes run).
@@ -455,6 +475,9 @@ package AHC.Core is
    function Info (M : Core_Module; Id : Real_Instance_Id)
      return Instance_Info
      with Pre => Id <= M.Last_Instance;
+   function Info (M : Core_Module; Id : Real_Refinement_Id)
+     return Refinement_Info
+     with Pre => Id <= M.Last_Refinement;
 
    --  The kind *, allocated once per module.
    function Star (M : in out Core_Module) return Real_Kind_Id

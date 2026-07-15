@@ -30,7 +30,9 @@ that violated contracts actually raise `Assert_Failure`.
 
 ## Status
 
-Phases 1, 2 and 3 are complete: AHC compiles and runs Haskell programs.
+All four phases are complete: AHC compiles and runs Haskell programs
+against a Prelude written in Haskell and compiled by AHC itself, and
+adds an Ada-style refinement-types extension.
 
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable
@@ -45,8 +47,27 @@ against the Boehm-Demers-Weiser GC (plain malloc fallback). Covered at
 runtime today: Int arithmetic/comparison, Bool/Char/String/list Show,
 user ADTs with derived Eq/Ord (generic structural prims), user classes
 with default methods, lazy infinite structures, do-notation IO.
-Double/Rational arithmetic, tuple/Maybe Show and Integer bignum remain
-error thunks until Phase 4's real Prelude.
+
+Standard library: `prelude/Prelude.hs` is compiled through the full
+pipeline ahead of every user module - list/tuple/Maybe/Either
+functions with signatures, the Either type, and Show instances for
+tuples, Maybe and Either as ordinary context-parametrized Haskell
+instances, elaborated to dictionary functions like any user code.
+The class hierarchy, numeric primitives and IO remain wired in
+AHC.Builtins / AHC.Prelude_Core.
+
+Extension - Ada-style refinement types
+(`docs/refinement-types-design-note.md`): `type Percent = Int in
+0 .. 100` in any type position, erased for unification (transparent
+arithmetic, no smart constructors), enforced by lazily-fired range
+checks at signature and annotation boundaries; `ahc emit --unchecked`
+(or `AHC_UNCHECKED=1 scripts/ahc-build.sh`) compiles the checks out,
+mirroring Ada's release-mode contract policy.
+
+Remaining gaps: Double/Rational arithmetic and Integer bignum (Int is
+a C long), the Integral class proper, pattern guards, multi-module
+imports, exhaustiveness warnings, and Show for String prints as a
+char list (needs the Report's showList method).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

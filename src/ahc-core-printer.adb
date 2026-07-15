@@ -17,6 +17,20 @@ package body AHC.Core.Printer is
       return String
    is (NM (Table, M.Info (V).Name) & "_" & Img (Natural (V)));
 
+   function LImg (V : Long_Long_Integer) return String is
+      S : constant String := V'Image;
+   begin
+      return (if S (S'First) = ' ' then S (S'First + 1 .. S'Last)
+              else S);
+   end LImg;
+
+   --  " in LO .. HI" when refined, "" otherwise.
+   function Refine_Suffix
+     (M : Core_Module; R : Refinement_Id) return String
+   is (if R = No_Refinement then ""
+       else " in " & LImg (M.Info (Real_Refinement_Id (R)).Lo)
+            & " .. " & LImg (M.Info (Real_Refinement_Id (R)).Hi));
+
    function Lit_Image
      (Table : Names.Name_Table; L : Literal) return String
    is (case L.Kind is
@@ -45,7 +59,8 @@ package body AHC.Core.Printer is
          when TMeta_T =>
             return "(meta ?" & Img (Natural (N.Meta)) & ")";
          when TCon_T =>
-            return "(tcon " & NM (Table, M.Info (N.Con).Name) & ")";
+            return "(tcon " & NM (Table, M.Info (N.Con).Name)
+              & Refine_Suffix (M, N.Refine) & ")";
          when TApp_T =>
             return "(tap " & Type_Image (M, Table, N.T_Fun) & " "
               & Type_Image (M, Table, N.T_Arg) & ")";
@@ -126,6 +141,16 @@ package body AHC.Core.Printer is
             when TMeta_T =>
                return "?" & Img (Natural (N.Meta));
             when TCon_T =>
+               if N.Refine /= No_Refinement then
+                  declare
+                     Inner : constant String :=
+                       NM (Table, M.Info (N.Con).Name)
+                       & Refine_Suffix (M, N.Refine);
+                  begin
+                     return (if Prec > 0 then "(" & Inner & ")"
+                             else Inner);
+                  end;
+               end if;
                return NM (Table, M.Info (N.Con).Name);
             when TFun_T =>
                declare

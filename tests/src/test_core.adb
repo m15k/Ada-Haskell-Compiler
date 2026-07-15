@@ -82,7 +82,8 @@ package body Test_Core is
                        TC_Kind => Star_K_Id, others => <>));
       T : Real_Type_Id;
    begin
-      --  Design rule 1: Phase 2 must not construct refinements.
+      --  A refinement id must name an entry in the arena; the module
+      --  has none, so id 1 dangles.
       T := M.Add (Type_Node'(Kind => TCon_T, Con => TC, Refine => 1));
       pragma Unreferenced (T);
    end Refinement_Constructed;
@@ -233,7 +234,28 @@ package body Test_Core is
          "default alternative not last is rejected");
       Check_Assertion_Error
         (Refinement_Constructed'Access,
-         "constructing a refinement in Phase 2 is rejected");
+         "a dangling refinement id is rejected");
+
+      --  Refinement arena (stage 1 of the extension).
+      declare
+         M : Core_Module;
+         Star_K_Id : constant Real_Kind_Id := M.Star;
+         pragma Unreferenced (Star_K_Id);
+         Int_TC : constant Real_TyCon_Id :=
+           M.Mint_TyCon ((Name => Table.Intern ("Int"), Arity => 0,
+                          TC_Kind => M.Star, others => <>));
+         R : constant Real_Refinement_Id :=
+           M.Add (Refinement_Info'(Lo => 0, Hi => 100));
+         T : constant Real_Type_Id :=
+           M.Add (Type_Node'(Kind => TCon_T, Con => Int_TC,
+                             Refine => Refinement_Id (R)));
+      begin
+         Check (M.Info (R).Lo = 0 and then M.Info (R).Hi = 100,
+                "refinement bounds are stored");
+         Check_Equal
+           (AHC.Core.Printer.Type_Image (M, Table, T),
+            "(tcon Int in 0 .. 100)", "refined type image");
+      end;
    end Run;
 
 end Test_Core;

@@ -231,7 +231,7 @@ package AHC.Syntax is
    ---------------------------------------------------------------------
 
    type Type_Kind is
-     (Var_T, Con_T, App_T, Fun_T, List_T, Tuple_T, Qual_T);
+     (Var_T, Con_T, App_T, Fun_T, List_T, Tuple_T, Qual_T, Refined_T);
 
    type Type_Node (Kind : Type_Kind := Var_T) is record
       Span : Diagnostics.Source_Span;
@@ -252,6 +252,14 @@ package AHC.Syntax is
          when Qual_T =>
             Context : Type_Id_Vectors.Vector;  --  class assertions
             Q_Body  : Real_Type_Id;
+         when Refined_T =>
+            --  Refinement-types extension: BASE in LO .. HI, with
+            --  integer-literal bounds (texts as lexed, sign split off).
+            R_Base  : Real_Type_Id;
+            Lo_Neg  : Boolean := False;
+            Hi_Neg  : Boolean := False;
+            Lo_Text : Names.Name_Id;
+            Hi_Text : Names.Name_Id;
       end case;
    end record;
 

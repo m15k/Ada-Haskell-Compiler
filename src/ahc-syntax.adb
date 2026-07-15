@@ -154,6 +154,10 @@ package body AHC.Syntax is
             return N.Items.Length >= 2 and then All_Ok (A, N.Items);
          when Qual_T =>
             return All_Ok (A, N.Context) and then Ok (A, N.Q_Body);
+         when Refined_T =>
+            return Ok (A, N.R_Base)
+              and then N.Lo_Text /= Names.No_Name
+              and then N.Hi_Text /= Names.No_Name;
       end case;
    end Well_Formed;
 

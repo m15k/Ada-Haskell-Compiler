@@ -126,6 +126,45 @@ package body AHC.Kinds is
         return Core.Real_Kind_Id
       is (Core.Real_Kind_Id (M.Info (TC).TC_Kind));
 
+      --  Refinement checks are inserted only at signature/annotation
+      --  boundaries (AHC.Refine); a refined data field would be a
+      --  silently unenforced promise, so reject it for now.
+      In_Data_Fields : Boolean := False;
+
+      --  Value of an integer literal lexeme (dec/hex/oct), signed.
+      function Bound_Value
+        (Text : Names.Name_Id; Neg : Boolean) return Long_Long_Integer
+      is
+         S     : constant String := Table.Text (Names.Real_Name_Id (Text));
+         V     : Long_Long_Integer := 0;
+         Base  : Long_Long_Integer := 10;
+         First : Positive := S'First;
+      begin
+         if S'Length > 2 and then S (S'First) = '0'
+           and then S (S'First + 1) in 'x' | 'X'
+         then
+            Base := 16;
+            First := S'First + 2;
+         elsif S'Length > 2 and then S (S'First) = '0'
+           and then S (S'First + 1) in 'o' | 'O'
+         then
+            Base := 8;
+            First := S'First + 2;
+         end if;
+         for I in First .. S'Last loop
+            declare
+               C : constant Character := S (I);
+               D : constant Long_Long_Integer :=
+                 (if C in '0' .. '9' then Character'Pos (C) - 48
+                  elsif C in 'a' .. 'f' then Character'Pos (C) - 87
+                  else Character'Pos (C) - 55);
+            begin
+               V := V * Base + D;
+            end;
+         end loop;
+         return (if Neg then -V else V);
+      end Bound_Value;
+
       procedure Convert
         (T          : Real_Type_Id;
          TvEnv      : in out Tv_Maps.Map;
@@ -391,6 +430,61 @@ package body AHC.Kinds is
             when Qual_T =>
                Bag.Add (Diagnostics.Error, Diagnostics.Kind_Error,
                         N.Span, "unexpected context in type");
+
+            when Refined_T =>
+               declare
+                  RB : Core.Type_Id;
+                  KB : Core.Kind_Id;
+               begin
+                  Convert (N.R_Base, TvEnv, Order, Implicit, Depth,
+                           RB, KB);
+                  if RB = Core.No_Type then
+                     return;
+                  end if;
+                  KUnify (Core.Real_Kind_Id (KB), Star_K, N.Span);
+                  declare
+                     BN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (RB));
+                  begin
+                     if BN.Kind /= Core.TCon_T
+                       or else (Core.TyCon_Id (BN.Con) /= Env.Int_TC
+                                and then Core.TyCon_Id (BN.Con) /=
+                                  Env.Integer_TC)
+                     then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "refinements are only supported on"
+                                 & " Int and Integer");
+                        return;
+                     end if;
+                     if In_Data_Fields then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "refined types in data declarations"
+                                 & " are not yet supported");
+                        return;
+                     end if;
+                     declare
+                        Lo : constant Long_Long_Integer :=
+                          Bound_Value (N.Lo_Text, N.Lo_Neg);
+                        Hi : constant Long_Long_Integer :=
+                          Bound_Value (N.Hi_Text, N.Hi_Neg);
+                     begin
+                        if Lo > Hi then
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Kind_Error, N.Span,
+                                    "empty refinement range");
+                           return;
+                        end if;
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TCon_T, Con => BN.Con,
+                              Refine => Core.Refinement_Id
+                                (M.Add (Core.Refinement_Info'
+                                   (Lo => Lo, Hi => Hi))))));
+                     end;
+                  end;
+               end;
          end case;
       end Convert;
 
@@ -552,7 +646,9 @@ package body AHC.Kinds is
                   R : Core.Type_Id;
                   K : Core.Kind_Id;
                begin
+                  In_Data_Fields := True;
                   Convert (T, TvEnv, Order, False, 0, R, K);
+                  In_Data_Fields := False;
                   if R /= Core.No_Type then
                      KUnify (Core.Real_Kind_Id (K), Star_K, CN.Span);
                      Field_Types.Append (Core.Real_Type_Id (R));

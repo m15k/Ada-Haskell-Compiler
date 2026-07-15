@@ -8,7 +8,8 @@ cd "$(dirname "$0")/.."
 src="$1"
 out="${2:-${1%.hs}}"
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
-./bin/ahc emit "$src" "$out" >/dev/null
+# AHC_UNCHECKED=1 compiles refinement checks out (release policy).
+./bin/ahc emit "$src" "$out" ${AHC_UNCHECKED:+--unchecked} >/dev/null
 gcflags=""
 if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
   gcflags="-I$prefix/include -DAHC_USE_BOEHM -L$prefix/lib -lgc"

@@ -25,6 +25,7 @@ with AHC.Lexer;
 with AHC.Names;
 with AHC.Parser;
 with AHC.Prelude_Core;
+with AHC.Refine;
 with AHC.Rename;
 with AHC.Source_Text;
 with AHC.Syntax.Printer;
@@ -42,7 +43,8 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc parse FILE.hs");
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
-      Put_Line (Target, "       ahc emit FILE.hs OUT   (writes OUT.c)");
+      Put_Line (Target, "       ahc emit FILE.hs OUT [--unchecked]"
+                        & "   (writes OUT.c)");
    end Print_Usage;
 
    procedure Usage_Error (Message : String) is
@@ -108,7 +110,8 @@ procedure AHC_Main is
    --  Pipeline through desugaring (+ typechecking for `check`).
    --  Mode: 'c' = Core dump, 't' = types, 'b' = build executable.
    procedure Run_Middle
-     (Path : String; Mode : Character; Out_Path : String := "") is
+     (Path     : String; Mode : Character; Out_Path : String := "";
+      Refined  : Boolean := True) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -225,6 +228,8 @@ procedure AHC_Main is
                   C_Src : Ada.Text_IO.File_Type;
                   C_Path : constant String := Out_Path & ".c";
                begin
+                  AHC.Refine.Insert_Checks
+                    (Table, M, Sigs, Prims, Checks_Enabled => Refined);
                   AHC.Prelude_Core.Install_Bodies (Table, M, Env, Prims);
                   Create (C_Src, Out_File, C_Path);
                   Put (C_Src,
@@ -238,6 +243,11 @@ procedure AHC_Main is
             AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
             if not Bag.Has_Errors then
                AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+               declare
+                  Prims : AHC.Prelude_Core.Prim_Maps.Map;
+               begin
+                  AHC.Refine.Insert_Checks (Table, M, Sigs, Prims);
+               end;
             end if;
             Put (AHC.Core.Printer.Dump
                    (M, Table, From_Group => Prelude_Groups + 1));
@@ -318,8 +328,14 @@ begin
       elsif Command = "emit" then
          if Argument_Count = 3 then
             Run_Middle (Argument (2), 'b', Argument (3));
+         elsif Argument_Count = 4
+           and then Argument (4) = "--unchecked"
+         then
+            Run_Middle (Argument (2), 'b', Argument (3),
+                        Refined => False);
          else
-            Usage_Error ("expected: ahc emit FILE.hs OUT");
+            Usage_Error
+              ("expected: ahc emit FILE.hs OUT [--unchecked]");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

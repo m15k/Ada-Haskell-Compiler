@@ -337,10 +337,55 @@ package body AHC.Parser is
          return Ctx;
       end To_Context;
 
+      --  Refinement bound: [-] integer literal.
+      procedure Parse_Bound
+        (Neg : out Boolean; Text : out Names.Name_Id) is
+      begin
+         Neg := False;
+         Text := Names.No_Name;
+         if Is_Minus then
+            Neg := True;
+            Advance;
+         end if;
+         if At_K (Int_Lit) then
+            Text := Names.Name_Id (Tok.Int_Text);
+            Advance;
+         else
+            Fail ("expected an integer literal refinement bound");
+         end if;
+      end Parse_Bound;
+
+      --  'in' introduces a refinement only when followed by a bound;
+      --  otherwise it belongs to an enclosing let (types can appear
+      --  in let-block signatures).
+      function At_Refinement return Boolean
+      is (At_K (Kw_In)
+          and then (Peek (1).Kind = Int_Lit
+                    or else (Peek (1).Kind = Varsym
+                             and then Peek (1).Qualifier = Names.No_Name
+                             and then Peek (1).Name = Minus_Name
+                             and then Peek (2).Kind = Int_Lit)));
+
       function Parse_Type return Real_Type_Id is
          Span   : constant Diagnostics.Source_Span := Tok.Span;
-         Result : constant Real_Type_Id := Parse_BType;
+         Result : Real_Type_Id := Parse_BType;
       begin
+         if At_Refinement then
+            Advance;   --  'in'
+            declare
+               Lo_Neg, Hi_Neg   : Boolean;
+               Lo_Text, Hi_Text : Names.Name_Id;
+            begin
+               Parse_Bound (Lo_Neg, Lo_Text);
+               Expect (Dot_Dot, "'..'");
+               Parse_Bound (Hi_Neg, Hi_Text);
+               Result := Arena.Add
+                 (Type_Node'(Kind => Refined_T, Span => Span,
+                             R_Base => Result,
+                             Lo_Neg => Lo_Neg, Hi_Neg => Hi_Neg,
+                             Lo_Text => Lo_Text, Hi_Text => Hi_Text));
+            end;
+         end if;
          if At_K (Fat_Arrow) then
             Advance;
             declare

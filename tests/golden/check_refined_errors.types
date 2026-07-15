@@ -1,0 +1,3 @@
+tests/golden/check_refined_errors.hs:7:15: error: refined types in data declarations are not yet supported
+tests/golden/check_refined_errors.hs:1:6: error: refinements are only supported on Int and Integer
+tests/golden/check_refined_errors.hs:4:6: error: empty refinement range

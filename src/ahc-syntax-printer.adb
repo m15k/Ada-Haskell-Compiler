@@ -275,6 +275,10 @@ package body AHC.Syntax.Printer is
             when Qual_T =>
                return "(ctx (" & Types_S (N.Context) & ") "
                  & Type_S (N.Q_Body) & ")";
+            when Refined_T =>
+               return "(refined " & Type_S (N.R_Base) & " "
+                 & (if N.Lo_Neg then "-" else "") & NM (N.Lo_Text) & " "
+                 & (if N.Hi_Neg then "-" else "") & NM (N.Hi_Text) & ")";
          end case;
       end Type_S;
 

@@ -1,0 +1,4 @@
+clamp :: Int -> Int in 0 .. 100
+scale :: (Int in 0 .. 100) -> (Int in 0 .. 100) -> Int
+offset :: Int in -10 .. 10
+weight :: Show a => a -> Int in 0 .. 60

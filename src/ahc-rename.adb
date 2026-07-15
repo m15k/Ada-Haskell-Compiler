@@ -280,6 +280,8 @@ package body AHC.Rename is
                   Rename_Assertion (A);
                end loop;
                Rename_Type (N.Q_Body);
+            when Refined_T =>
+               Rename_Type (N.R_Base);
          end case;
       end Rename_Type;
 

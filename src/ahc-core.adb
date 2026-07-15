@@ -24,9 +24,9 @@ package body AHC.Core is
          when TMeta_T =>
             return True;   --  meta cells live in the typechecker state
          when TCon_T =>
-            --  Design rule 1: Phase 2 never constructs refinements.
+            --  The refinement, if any, must exist in the arena.
             return N.Con <= M.Last_TyCon
-              and then N.Refine = No_Refinement;
+              and then N.Refine <= M.Last_Refinement;
          when TApp_T =>
             return N.T_Fun <= M.Last_Type and then N.T_Arg <= M.Last_Type;
          when TFun_T =>
@@ -141,6 +141,15 @@ package body AHC.Core is
       return M.Alts.Last_Index;
    end Add;
 
+   function Add
+     (M : in out Core_Module; R : Refinement_Info)
+      return Real_Refinement_Id
+   is
+   begin
+      M.Refinements.Append (R);
+      return Real_Refinement_Id (M.Refinements.Last_Index);
+   end Add;
+
    function Mint_Var
      (M : in out Core_Module; Info : Var_Info) return Real_Var_Id is
    begin
@@ -211,6 +220,9 @@ package body AHC.Core is
    function Info (M : Core_Module; Id : Real_Instance_Id)
      return Instance_Info
    is (M.Instances (Id));
+   function Info (M : Core_Module; Id : Real_Refinement_Id)
+     return Refinement_Info
+   is (M.Refinements (Positive (Id)));
 
    function Star (M : in out Core_Module) return Real_Kind_Id is
    begin
