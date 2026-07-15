@@ -220,4 +220,27 @@ package body AHC.Core is
       return M.Star_Cache;
    end Star;
 
+   function Mk_Dict
+     (M       : in out Core_Module;
+      Class   : Real_Class_Id;
+      Supers  : Expr_Id_Vectors.Vector;
+      Methods : Expr_Id_Vectors.Vector;
+      Span    : Diagnostics.Source_Span) return Real_Expr_Id
+   is
+      Result : Real_Expr_Id :=
+        M.Add (Expr_Node'
+          (Kind => Con_C, Span => Span,
+           Con => Real_DataCon_Id (M.Info (Class).Dict_Con)));
+   begin
+      for S of Supers loop
+         Result := M.Add (Expr_Node'
+           (Kind => App_C, Span => Span, Fun => Result, Arg => S));
+      end loop;
+      for Mth of Methods loop
+         Result := M.Add (Expr_Node'
+           (Kind => App_C, Span => Span, Fun => Result, Arg => Mth));
+      end loop;
+      return Result;
+   end Mk_Dict;
+
 end AHC.Core;

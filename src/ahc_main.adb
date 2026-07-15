@@ -15,6 +15,7 @@ with AHC.Builtins;
 with AHC.Core.Printer;
 with AHC.Desugar;
 with AHC.Diagnostics;
+with AHC.Elaborate;
 with AHC.Fixity;
 with AHC.Kinds;
 with AHC.Layout;
@@ -137,6 +138,9 @@ procedure AHC_Main is
          if Mode = 't' then
             AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
             if not Bag.Has_Errors then
+               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+            end if;
+            if not Bag.Has_Errors then
                for G of M.Top_Binds loop
                   for B of G.Binds loop
                      declare
@@ -162,6 +166,10 @@ procedure AHC_Main is
                end loop;
             end if;
          else
+            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            if not Bag.Has_Errors then
+               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+            end if;
             Put (AHC.Core.Printer.Dump (M, Table));
          end if;
       end if;

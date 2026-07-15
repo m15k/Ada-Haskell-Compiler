@@ -453,4 +453,22 @@ package AHC.Core is
    function Star (M : in out Core_Module) return Real_Kind_Id
      with Post => M.Node (Star'Result).Kind = Star_K;
 
+   --  Build a dictionary value: MkDict$C applied to the superclass
+   --  dictionaries then the method implementations. The precondition
+   --  is the PRD's dictionary-arity promise: a dictionary can only be
+   --  built with exactly the right number of fields.
+   function Mk_Dict
+     (M       : in out Core_Module;
+      Class   : Real_Class_Id;
+      Supers  : Expr_Id_Vectors.Vector;
+      Methods : Expr_Id_Vectors.Vector;
+      Span    : Diagnostics.Source_Span) return Real_Expr_Id
+     with
+       Pre => Class <= M.Last_Class
+              and then M.Info (Class).Dict_Con in 1 .. M.Last_DataCon
+              and then Natural (Supers.Length) =
+                         Natural (M.Info (Class).Supers.Length)
+              and then Natural (Methods.Length) =
+                         Natural (M.Info (Class).Methods.Length);
+
 end AHC.Core;

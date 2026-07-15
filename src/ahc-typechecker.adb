@@ -1278,6 +1278,8 @@ package body AHC.Typechecker is
                                        (Mth.Method_Scheme));
                            Givens_Mark : constant Natural :=
                              Natural (Givens.Length);
+                           W_Mark : constant Natural :=
+                             Natural (Wanted.Length);
                         begin
                            for C of Sch.Context loop
                               Assume (C);
@@ -1286,6 +1288,23 @@ package body AHC.Typechecker is
                            Unify (Infer (B.Rhs),
                                   Real_Type_Id (Sch.S_Body),
                                   M.Info (B.Binder).Span);
+                           declare
+                              Res2 : Constraint_Vectors.Vector;
+                           begin
+                              while Natural (Wanted.Length) > W_Mark
+                              loop
+                                 declare
+                                    C2 : constant Constraint :=
+                                      Wanted.Last_Element;
+                                 begin
+                                    Wanted.Delete_Last;
+                                    Solve (C2, 0, Res2);
+                                 end;
+                              end loop;
+                              for C2 of Res2 loop
+                                 Wanted.Append (C2);
+                              end loop;
+                           end;
                            while Natural (Givens.Length) > Givens_Mark
                            loop
                               Givens.Delete_Last;

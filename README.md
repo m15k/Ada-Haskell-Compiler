@@ -30,15 +30,24 @@ that violated contracts actually raise `Assert_Failure`.
 
 ## Status
 
-Phase 1 (frontend) is complete: lexer with the full literal grammar,
-Report 10.3 layout engine, recursive-descent parser for the whole
-Haskell 2010 surface, and Report 10.6 fixity resolution.
-`ahc parse Foo.hs` prints a canonical AST dump. Next up: Phase 2, the
-desugarer to a System-FC-like Core and the Hindley-Milner typechecker.
+Phases 1 and 2 are complete.
+
+Frontend: lexer with the full literal grammar, Report 10.3 layout
+engine, recursive-descent parser for the whole Haskell 2010 surface,
+Report 10.6 fixity resolution (`ahc parse`).
+
+Middle end: renamer over a wired-in Prelude signature, kind inference,
+desugaring to a System-FC-like Core (`ahc core`), Hindley-Milner
+typechecking with type classes, the monomorphism restriction and
+Report 4.3.4 defaulting (`ahc check`), and instance-dictionary
+elaboration through the contract-checked Mk_Dict constructor.
+Call-site dictionary application lands with Phase 3 code generation,
+along with the C backend and Boehm GC runtime.
 
 ```sh
-scripts/run_golden.sh          # golden lex/layout/parse expectations
-scripts/run_differential.sh    # agree-with-GHC corpus check (needs ghc)
+scripts/run_golden.sh              # golden lex/layout/parse/core/check
+scripts/run_differential.sh        # parse-level GHC agreement
+scripts/run_differential_types.sh  # type-level GHC agreement
 ```
 
 ## Layout
