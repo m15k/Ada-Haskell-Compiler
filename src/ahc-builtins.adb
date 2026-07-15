@@ -186,7 +186,9 @@ package body AHC.Builtins is
       procedure Def_Instance
         (Cl : Real_Class_Id; Head : Real_TyCon_Id;
          Context : Constraint_Vectors.Vector :=
-           Constraint_Vectors.Empty_Vector)
+           Constraint_Vectors.Empty_Vector;
+         Head_Vars : TyVar_Id_Vectors.Vector :=
+           TyVar_Id_Vectors.Empty_Vector)
       is
          Dict_Name : constant String :=
            "$d" & Table.Text (M.Info (Cl).Name)
@@ -200,8 +202,8 @@ package body AHC.Builtins is
       begin
          Ignore := M.Mint_Instance
            ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
-             Context => Context, Dict_Global => Var_Id (Dict),
-             Span => No_Span));
+             Head_Vars => Head_Vars, Context => Context,
+             Dict_Global => Var_Id (Dict), Span => No_Span));
          pragma Unreferenced (Ignore);
       end Def_Instance;
 
@@ -274,6 +276,84 @@ package body AHC.Builtins is
         (Table.Intern ("String"),
          (Arity => 0, Core_Rhs => Type_Id (LST (TC (Env.Char_TC))),
           others => <>));
+
+      --  Constructor schemes for the wired-in data constructors.
+      declare
+         procedure Set_Con_Scheme
+           (DC : Core.DataCon_Id; Sch : Real_Scheme_Id) is
+         begin
+            M.DataCons (Real_DataCon_Id (DC)).Con_Scheme :=
+              Scheme_Id (Sch);
+         end Set_Con_Scheme;
+
+         Bool_T : constant Real_Type_Id := TC (Env.Bool_TC);
+      begin
+         Set_Con_Scheme (Env.True_DC, Mono (Bool_T));
+         Set_Con_Scheme (Env.False_DC, Mono (Bool_T));
+         Set_Con_Scheme (Env.Unit_DC, Mono (TC (Env.Unit_TC)));
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Set_Con_Scheme (Env.Nil_DC, Poly1 (A, LST (TV (A))));
+         end;
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Set_Con_Scheme
+              (Env.Cons_DC,
+               Poly1 (A, FN (TV (A), LST (TV (A)), LST (TV (A)))));
+         end;
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+            Maybe_A : constant Real_Type_Id :=
+              AP (TC (Env.Maybe_TC), TV (A));
+         begin
+            Set_Con_Scheme (Env.Nothing_DC, Poly1 (A, Maybe_A));
+         end;
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Set_Con_Scheme
+              (Env.Just_DC,
+               Poly1 (A, FN (TV (A), AP (TC (Env.Maybe_TC), TV (A)))));
+         end;
+         --  Ordering constructors (ids follow Env.Ordering_TC's Cons).
+         for DC of M.TyCons (Real_TyCon_Id (Env.Ordering_TC)).Cons loop
+            Set_Con_Scheme (Core.DataCon_Id (DC),
+                            Mono (TC (Env.Ordering_TC)));
+         end loop;
+         --  Tuple constructors: forall a1..an. a1 -> .. -> (a1,..,an).
+         for N in 2 .. Max_Tuple loop
+            declare
+               Tvs : TyVar_Id_Vectors.Vector;
+               Args : array (1 .. N) of Real_Type_Id;
+               Result : Real_Type_Id := TC (Env.Tuple_TCs (N));
+               Fn_T : Real_Type_Id;
+            begin
+               for I in 1 .. N loop
+                  declare
+                     T_Var : constant Real_TyVar_Id := New_Tv ("a");
+                  begin
+                     Tvs.Append (T_Var);
+                     Args (I) := TV (T_Var);
+                  end;
+               end loop;
+               for I in 1 .. N loop
+                  Result := AP (Result, Args (I));
+               end loop;
+               Fn_T := Result;
+               for I in reverse 1 .. N loop
+                  Fn_T := FN (Args (I), Fn_T);
+               end loop;
+               Set_Con_Scheme
+                 (Env.Tuple_DCs (N),
+                  M.Add (Scheme'(Tvs => Tvs,
+                                 Context =>
+                                   Constraint_Vectors.Empty_Vector,
+                                 S_Body => Type_Id (Fn_T))));
+            end;
+         end loop;
+      end;
 
       ------------------------------------------------------------------
       --  Classes (Report chapter 9 signatures, abridged where defaults
@@ -571,13 +651,17 @@ package body AHC.Builtins is
          Numeric : constant array (1 .. 4) of Core.TyCon_Id :=
            [Env.Int_TC, Env.Integer_TC, Env.Float_TC, Env.Double_TC];
 
-         function List_Ctx (Class : Core.Class_Id)
-           return Constraint_Vectors.Vector
+         --  C a => C (T a): one fresh head tyvar carrying the context.
+         procedure Def_Ctx1_Instance
+           (Class : Core.Class_Id; Head : Core.TyCon_Id)
          is
             A : constant Real_TyVar_Id := New_Tv ("a");
+            Vars : TyVar_Id_Vectors.Vector;
          begin
-            return Ctx1 (Cl (Class), TV (A));
-         end List_Ctx;
+            Vars.Append (A);
+            Def_Instance (Cl (Class), TCn (Head),
+                          Ctx1 (Cl (Class), TV (A)), Vars);
+         end Def_Ctx1_Instance;
       begin
          for T of Ground loop
             Def_Instance (Cl (Env.Eq_Cl), TCn (T));
@@ -603,36 +687,31 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Double_TC));
 
          --  Eq a => Eq [a], etc.
-         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.List_TC),
-                       List_Ctx (Env.Eq_Cl));
-         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.List_TC),
-                       List_Ctx (Env.Ord_Cl));
-         Def_Instance (Cl (Env.Show_Cl), TCn (Env.List_TC),
-                       List_Ctx (Env.Show_Cl));
+         Def_Ctx1_Instance (Env.Eq_Cl, Env.List_TC);
+         Def_Ctx1_Instance (Env.Ord_Cl, Env.List_TC);
+         Def_Ctx1_Instance (Env.Show_Cl, Env.List_TC);
 
          --  Pair instances with two-constraint contexts.
          declare
-            A : constant Real_TyVar_Id := New_Tv ("a");
-            B : constant Real_TyVar_Id := New_Tv ("b");
-
-            function Pair_Ctx (Class : Core.Class_Id)
-              return Constraint_Vectors.Vector
-            is
+            procedure Def_Pair_Instance (Class : Core.Class_Id) is
+               A : constant Real_TyVar_Id := New_Tv ("a");
+               B : constant Real_TyVar_Id := New_Tv ("b");
                C : Constraint_Vectors.Vector;
+               Vars : TyVar_Id_Vectors.Vector;
             begin
                C.Append (Constraint'(Class => Cl (Class), Arg => TV (A),
                                      Span => No_Span));
                C.Append (Constraint'(Class => Cl (Class), Arg => TV (B),
                                      Span => No_Span));
-               return C;
-            end Pair_Ctx;
+               Vars.Append (A);
+               Vars.Append (B);
+               Def_Instance (Cl (Class), TCn (Env.Tuple_TCs (2)),
+                             C, Vars);
+            end Def_Pair_Instance;
          begin
-            Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Tuple_TCs (2)),
-                          Pair_Ctx (Env.Eq_Cl));
-            Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Tuple_TCs (2)),
-                          Pair_Ctx (Env.Ord_Cl));
-            Def_Instance (Cl (Env.Show_Cl), TCn (Env.Tuple_TCs (2)),
-                          Pair_Ctx (Env.Show_Cl));
+            Def_Pair_Instance (Env.Eq_Cl);
+            Def_Pair_Instance (Env.Ord_Cl);
+            Def_Pair_Instance (Env.Show_Cl);
          end;
 
          Def_Instance (Cl (Env.Functor_Cl), TCn (Env.List_TC));
@@ -641,12 +720,9 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Monad_Cl), TCn (Env.IO_TC));
          Def_Instance (Cl (Env.Functor_Cl), TCn (Env.Maybe_TC));
          Def_Instance (Cl (Env.Monad_Cl), TCn (Env.Maybe_TC));
-         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Maybe_TC),
-                       List_Ctx (Env.Eq_Cl));
-         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Maybe_TC),
-                       List_Ctx (Env.Ord_Cl));
-         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Maybe_TC),
-                       List_Ctx (Env.Show_Cl));
+         Def_Ctx1_Instance (Env.Eq_Cl, Env.Maybe_TC);
+         Def_Ctx1_Instance (Env.Ord_Cl, Env.Maybe_TC);
+         Def_Ctx1_Instance (Env.Show_Cl, Env.Maybe_TC);
       end;
 
       ------------------------------------------------------------------

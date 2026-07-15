@@ -213,10 +213,13 @@ package AHC.Core is
    end record;
 
    --  Haskell 2010 instance heads are always C (T a1..an), so keying
-   --  on the head TyCon is complete.
+   --  on the head TyCon is complete. Head_Vars lists a1..an in order;
+   --  Context constraints mention only these, so matching a wanted
+   --  C (T t1..tn) instantiates the context by position.
    type Instance_Info is record
       Of_Class    : Class_Id := No_Class;
       Head        : TyCon_Id := No_TyCon;
+      Head_Vars   : TyVar_Id_Vectors.Vector;
       Context     : Constraint_Vectors.Vector;
       Dict_Global : Var_Id := No_Var;
       Span        : Diagnostics.Source_Span;

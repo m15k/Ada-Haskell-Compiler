@@ -12,6 +12,7 @@ with Test_Parser;
 with Test_Fixity;
 with Test_Core;
 with Test_Rename;
+with Test_Kinds;
 
 procedure AHC_Tests_Main is
 begin
@@ -26,6 +27,7 @@ begin
    Test_Fixity.Run;
    Test_Core.Run;
    Test_Rename.Run;
+   Test_Kinds.Run;
 
    Test_Harness.Summarize_And_Exit;
 end AHC_Tests_Main;

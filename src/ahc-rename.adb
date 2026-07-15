@@ -756,6 +756,7 @@ package body AHC.Rename is
                      Cl : constant Core.Real_Class_Id :=
                        Builtins.Class_Maps.Element (C);
                      Ctx : Core.Constraint_Vectors.Vector;
+                     Vars : Core.TyVar_Id_Vectors.Vector;
                      Dict : Core.Real_Var_Id;
                      Ignore : Core.Real_Instance_Id;
                   begin
@@ -769,6 +770,7 @@ package body AHC.Rename is
                              M.Add (Core.Type_Node'
                                (Kind => Core.TVar_T, Tv => Tv));
                         begin
+                           Vars.Append (Tv);
                            Ctx.Append
                              (Core.Constraint'
                                 (Class => Cl, Arg => TvT,
@@ -783,6 +785,7 @@ package body AHC.Rename is
                      Ignore := M.Mint_Instance
                        ((Of_Class => Core.Class_Id (Cl),
                          Head => Core.TyCon_Id (TC),
+                         Head_Vars => Vars,
                          Context => Ctx,
                          Dict_Global => Core.Var_Id (Dict),
                          Span => N.Span));
@@ -971,8 +974,11 @@ package body AHC.Rename is
                      Span => N.Span, Is_Global => True, others => <>));
                Ignore : Core.Real_Instance_Id;
             begin
+               --  Head_Vars and Context are filled by AHC.Kinds once
+               --  the instance type is converted.
                Ignore := M.Mint_Instance
                  ((Of_Class => Core.Class_Id (Cl), Head => Head,
+                   Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict), Span => N.Span));
                pragma Unreferenced (Ignore);
