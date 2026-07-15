@@ -1,0 +1,775 @@
+with AHC.Diagnostics;
+
+package body AHC.Builtins is
+
+   use AHC.Core;
+
+   procedure Install
+     (M     : in out Core.Core_Module;
+      Table : in out Names.Name_Table;
+      Env   : in out Global_Env)
+   is
+      Star_K : constant Real_Kind_Id := M.Star;
+      No_Span : constant Diagnostics.Source_Span := (Start => 1, Stop => 1);
+
+      function K_Fun (From, To : Real_Kind_Id) return Real_Kind_Id
+      is (M.Add (Kind_Node'(Kind => KFun_K, KFrom => From, KTo => To)));
+
+      Star1 : constant Real_Kind_Id := K_Fun (Star_K, Star_K);
+      Star2 : constant Real_Kind_Id := K_Fun (Star_K, Star1);
+
+      ------------------------------------------------------------------
+      --  Entity helpers
+      ------------------------------------------------------------------
+
+      function Def_TyCon
+        (Name : String; Arity : Natural; Kind : Real_Kind_Id)
+         return Real_TyCon_Id
+      is
+         Id : constant Real_TyCon_Id :=
+           M.Mint_TyCon ((Name => Table.Intern (Name), Arity => Arity,
+                          TC_Kind => Kind, Is_Builtin => True,
+                          others => <>));
+      begin
+         Env.TyCons.Include (M.Info (Id).Name, Id);
+         return Id;
+      end Def_TyCon;
+
+      function Def_DataCon
+        (Name : String; TC : Real_TyCon_Id; Tag : Positive;
+         Arity : Natural) return Real_DataCon_Id
+      is
+         Id : constant Real_DataCon_Id :=
+           M.Mint_DataCon ((Name => Table.Intern (Name), TyCon => TC,
+                            Tag => Tag, Arity => Arity, others => <>));
+      begin
+         Env.DataCons.Include (M.Info (Id).Name, Id);
+         return Id;
+      end Def_DataCon;
+
+      ------------------------------------------------------------------
+      --  Type-building helpers
+      ------------------------------------------------------------------
+
+      function TC (Id : TyCon_Id) return Real_Type_Id
+      is (M.Add (Type_Node'(Kind => TCon_T, Con => Id,
+                            Refine => No_Refinement)));
+
+      function TV (Tv : Real_TyVar_Id) return Real_Type_Id
+      is (M.Add (Type_Node'(Kind => TVar_T, Tv => Tv)));
+
+      function AP (F, A : Real_Type_Id) return Real_Type_Id
+      is (M.Add (Type_Node'(Kind => TApp_T, T_Fun => F, T_Arg => A)));
+
+      function FN (A, B : Real_Type_Id) return Real_Type_Id
+      is (M.Add (Type_Node'(Kind => TFun_T, From => A, To => B)));
+
+      function FN (A, B, C : Real_Type_Id) return Real_Type_Id
+      is (FN (A, FN (B, C)));
+
+      function LST (T : Real_Type_Id) return Real_Type_Id
+      is (AP (TC (Env.List_TC), T));
+
+      function IO_T (T : Real_Type_Id) return Real_Type_Id
+      is (AP (TC (Env.IO_TC), T));
+
+      function New_Tv (Name : String) return Real_TyVar_Id
+      is (M.Mint_TyVar ((Name => Table.Intern (Name),
+                         Tv_Kind => Star_K)));
+
+      ------------------------------------------------------------------
+      --  Scheme and global helpers
+      ------------------------------------------------------------------
+
+      function Mono (T : Real_Type_Id) return Real_Scheme_Id
+      is (M.Add (Scheme'(Tvs => TyVar_Id_Vectors.Empty_Vector,
+                         Context => Constraint_Vectors.Empty_Vector,
+                         S_Body => Type_Id (T))));
+
+      function Poly1
+        (Tv : Real_TyVar_Id; T : Real_Type_Id;
+         Ctx : Constraint_Vectors.Vector := Constraint_Vectors.Empty_Vector)
+         return Real_Scheme_Id
+      is
+         Tvs : TyVar_Id_Vectors.Vector;
+      begin
+         Tvs.Append (Tv);
+         return M.Add (Scheme'(Tvs => Tvs, Context => Ctx,
+                               S_Body => Type_Id (T)));
+      end Poly1;
+
+      function Poly2
+        (Tv1, Tv2 : Real_TyVar_Id; T : Real_Type_Id;
+         Ctx : Constraint_Vectors.Vector := Constraint_Vectors.Empty_Vector)
+         return Real_Scheme_Id
+      is
+         Tvs : TyVar_Id_Vectors.Vector;
+      begin
+         Tvs.Append (Tv1);
+         Tvs.Append (Tv2);
+         return M.Add (Scheme'(Tvs => Tvs, Context => Ctx,
+                               S_Body => Type_Id (T)));
+      end Poly2;
+
+      function Ctx1 (Cl : Real_Class_Id; Arg : Real_Type_Id)
+        return Constraint_Vectors.Vector
+      is
+         C : Constraint_Vectors.Vector;
+      begin
+         C.Append (Constraint'(Class => Cl, Arg => Arg, Span => No_Span));
+         return C;
+      end Ctx1;
+
+      function Def_Global
+        (Name : String; Sch : Real_Scheme_Id) return Real_Var_Id
+      is
+         Id : constant Real_Var_Id :=
+           M.Mint_Var ((Name => Table.Intern (Name), Span => No_Span,
+                        Is_Global => True, Var_Scheme => Sch,
+                        others => <>));
+      begin
+         Env.Values.Include (M.Info (Id).Name, Id);
+         return Id;
+      end Def_Global;
+
+      ------------------------------------------------------------------
+      --  Class helpers
+      ------------------------------------------------------------------
+
+      function Def_Class
+        (Name : String; Var_Kind : Real_Kind_Id;
+         Supers : Class_Id_Vectors.Vector := Class_Id_Vectors.Empty_Vector)
+         return Real_Class_Id
+      is
+         Dict_TC : constant Real_TyCon_Id :=
+           Def_TyCon ("Dict$" & Name, 1, K_Fun (Var_Kind, Star_K));
+         Id : Real_Class_Id;
+      begin
+         Id := M.Mint_Class
+           ((Name => Table.Intern (Name), Var_Kind => Kind_Id (Var_Kind),
+             Supers => Supers, Dict_TyCon => TyCon_Id (Dict_TC),
+             others => <>));
+         --  Dict con arity is fixed when methods are complete; minted
+         --  here with 0 and patched by Finish_Class.
+         M.Classes (Id).Dict_Con := DataCon_Id
+           (Def_DataCon ("MkDict$" & Name, Dict_TC, 1, 0));
+         Env.Classes.Include (M.Info (Id).Name, Id);
+         return Id;
+      end Def_Class;
+
+      --  Add a method: define the selector global with the constrained
+      --  scheme and record it on the class.
+      function Def_Method
+        (Cl : Real_Class_Id; Name : String; Sch : Real_Scheme_Id;
+         Has_Default : Boolean := False) return Real_Var_Id
+      is
+         Sel : constant Real_Var_Id := Def_Global (Name, Sch);
+      begin
+         M.Classes (Cl).Methods.Append
+           (Method_Info'
+              (Name => M.Info (Sel).Name,
+               Method_Scheme => Scheme_Id (Sch),
+               Selector => Var_Id (Sel), Has_Default => Has_Default));
+         return Sel;
+      end Def_Method;
+
+      procedure Finish_Class (Cl : Real_Class_Id) is
+         Arity : constant Natural :=
+           Natural (M.Classes (Cl).Supers.Length)
+           + Natural (M.Classes (Cl).Methods.Length);
+      begin
+         M.DataCons (Real_DataCon_Id (M.Classes (Cl).Dict_Con)).Arity :=
+           Arity;
+      end Finish_Class;
+
+      --  Signature-only instance: an opaque dictionary global.
+      procedure Def_Instance
+        (Cl : Real_Class_Id; Head : Real_TyCon_Id;
+         Context : Constraint_Vectors.Vector :=
+           Constraint_Vectors.Empty_Vector)
+      is
+         Dict_Name : constant String :=
+           "$d" & Table.Text (M.Info (Cl).Name)
+           & Table.Text (M.Info (Head).Name);
+         Dict : constant Real_Var_Id :=
+           Def_Global (Dict_Name, Mono (TC (Head)));
+         --  The dict global's real type is Dict$C (T ...); Phase 2
+         --  never inspects it, so a placeholder scheme suffices until
+         --  Phase 4 provides bodies.
+         Ignore : Real_Instance_Id;
+      begin
+         Ignore := M.Mint_Instance
+           ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
+             Context => Context, Dict_Global => Var_Id (Dict),
+             Span => No_Span));
+         pragma Unreferenced (Ignore);
+      end Def_Instance;
+
+   begin
+      ------------------------------------------------------------------
+      --  Types
+      ------------------------------------------------------------------
+
+      Env.Int_TC      := TyCon_Id (Def_TyCon ("Int", 0, Star_K));
+      Env.Integer_TC  := TyCon_Id (Def_TyCon ("Integer", 0, Star_K));
+      Env.Float_TC    := TyCon_Id (Def_TyCon ("Float", 0, Star_K));
+      Env.Double_TC   := TyCon_Id (Def_TyCon ("Double", 0, Star_K));
+      Env.Char_TC     := TyCon_Id (Def_TyCon ("Char", 0, Star_K));
+      Env.Rational_TC := TyCon_Id (Def_TyCon ("Rational", 0, Star_K));
+      Env.Bool_TC     := TyCon_Id (Def_TyCon ("Bool", 0, Star_K));
+      Env.Unit_TC     := TyCon_Id (Def_TyCon ("()", 0, Star_K));
+      Env.List_TC     := TyCon_Id (Def_TyCon ("[]", 1, Star1));
+      Env.IO_TC       := TyCon_Id (Def_TyCon ("IO", 1, Star1));
+      Env.Ordering_TC := TyCon_Id (Def_TyCon ("Ordering", 0, Star_K));
+      Env.Maybe_TC    := TyCon_Id (Def_TyCon ("Maybe", 1, Star1));
+      Env.Arrow_TC    := TyCon_Id (Def_TyCon ("(->)", 2, Star2));
+
+      Env.False_DC := DataCon_Id
+        (Def_DataCon ("False", Real_TyCon_Id (Env.Bool_TC), 1, 0));
+      Env.True_DC := DataCon_Id
+        (Def_DataCon ("True", Real_TyCon_Id (Env.Bool_TC), 2, 0));
+      Env.Unit_DC := DataCon_Id
+        (Def_DataCon ("()", Real_TyCon_Id (Env.Unit_TC), 1, 0));
+      Env.Nil_DC := DataCon_Id
+        (Def_DataCon ("[]", Real_TyCon_Id (Env.List_TC), 1, 0));
+      Env.Cons_DC := DataCon_Id
+        (Def_DataCon (":", Real_TyCon_Id (Env.List_TC), 2, 2));
+      Env.Nothing_DC := DataCon_Id
+        (Def_DataCon ("Nothing", Real_TyCon_Id (Env.Maybe_TC), 1, 0));
+      Env.Just_DC := DataCon_Id
+        (Def_DataCon ("Just", Real_TyCon_Id (Env.Maybe_TC), 2, 1));
+
+      declare
+         Ignore : Real_DataCon_Id;
+         Ord_TC : constant Real_TyCon_Id :=
+           Real_TyCon_Id (Env.Ordering_TC);
+      begin
+         Ignore := Def_DataCon ("LT", Ord_TC, 1, 0);
+         Ignore := Def_DataCon ("EQ", Ord_TC, 2, 0);
+         Ignore := Def_DataCon ("GT", Ord_TC, 3, 0);
+         pragma Unreferenced (Ignore);
+      end;
+
+      for N in 2 .. Max_Tuple loop
+         declare
+            Text : String (1 .. N + 1) := [others => ','];
+            Kind : Real_Kind_Id := Star_K;
+            TC_Id : Real_TyCon_Id;
+            Ignore : Real_DataCon_Id;
+         begin
+            Text (1) := '(';
+            Text (Text'Last) := ')';
+            for I in 1 .. N loop
+               Kind := K_Fun (Star_K, Kind);
+            end loop;
+            TC_Id := Def_TyCon (Text, N, Kind);
+            Env.Tuple_TCs (N) := TyCon_Id (TC_Id);
+            Ignore := Def_DataCon (Text, TC_Id, 1, N);
+            Env.Tuple_DCs (N) := DataCon_Id (Ignore);
+         end;
+      end loop;
+
+      --  String = [Char]
+      Env.Synonyms.Include
+        (Table.Intern ("String"),
+         (Arity => 0, Core_Rhs => Type_Id (LST (TC (Env.Char_TC))),
+          others => <>));
+
+      ------------------------------------------------------------------
+      --  Classes (Report chapter 9 signatures, abridged where defaults
+      --  make methods optional)
+      ------------------------------------------------------------------
+
+      declare
+         Bool_T : constant Real_Type_Id := TC (Env.Bool_TC);
+         Int_T  : constant Real_Type_Id := TC (Env.Int_TC);
+         Integer_T : constant Real_Type_Id := TC (Env.Integer_TC);
+         Rational_T : constant Real_Type_Id := TC (Env.Rational_TC);
+         Ordering_T : constant Real_Type_Id := TC (Env.Ordering_TC);
+         Ignore : Real_Var_Id;
+
+         function Sup1 (Cl : Core.Class_Id) return Class_Id_Vectors.Vector
+         is
+            V : Class_Id_Vectors.Vector;
+         begin
+            V.Append (Real_Class_Id (Cl));
+            return V;
+         end Sup1;
+
+         function Sup2 (A, B : Core.Class_Id)
+           return Class_Id_Vectors.Vector
+         is
+            V : Class_Id_Vectors.Vector;
+         begin
+            V.Append (Real_Class_Id (A));
+            V.Append (Real_Class_Id (B));
+            return V;
+         end Sup2;
+      begin
+         --  Eq
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Eq", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            Cmp : constant Real_Type_Id :=
+              FN (TV (A), TV (A), Bool_T);
+         begin
+            Env.Eq_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "==", Poly1 (A, Cmp, Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "/=", Poly1 (A, Cmp, Ctx1 (Cl, TV (A))), True);
+            Finish_Class (Cl);
+         end;
+
+         --  Ord (Eq)
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Ord", Star_K, Sup1 (Env.Eq_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            Cmp2B : constant Real_Type_Id := FN (TV (A), TV (A), Bool_T);
+            Cmp2A : constant Real_Type_Id :=
+              FN (TV (A), TV (A), TV (A));
+         begin
+            Env.Ord_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "compare",
+               Poly1 (A, FN (TV (A), TV (A), Ordering_T),
+                      Ctx1 (Cl, TV (A))), True);
+            for Op in 1 .. 4 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "<", when 2 => "<=",
+                     when 3 => ">", when others => ">="),
+                  Poly1 (A, Cmp2B, Ctx1 (Cl, TV (A))), True);
+            end loop;
+            Ignore := Def_Method
+              (Cl, "max", Poly1 (A, Cmp2A, Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "min", Poly1 (A, Cmp2A, Ctx1 (Cl, TV (A))), True);
+            Finish_Class (Cl);
+         end;
+
+         --  Show
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Show", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            String_T : constant Real_Type_Id := LST (TC (Env.Char_TC));
+         begin
+            Env.Show_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "show",
+               Poly1 (A, FN (TV (A), String_T), Ctx1 (Cl, TV (A))),
+               True);
+            Ignore := Def_Method
+              (Cl, "showsPrec",
+               Poly1 (A, FN (Int_T, TV (A),
+                             FN (String_T, String_T)),
+                      Ctx1 (Cl, TV (A))), True);
+            Finish_Class (Cl);
+         end;
+
+         --  Functor (over f :: * -> *)
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Functor", Star1);
+            F  : constant Real_TyVar_Id :=
+              M.Mint_TyVar ((Name => Table.Intern ("f"),
+                             Tv_Kind => Kind_Id (Star1)));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            B  : constant Real_TyVar_Id := New_Tv ("b");
+            Tvs : TyVar_Id_Vectors.Vector;
+            Sch : Real_Scheme_Id;
+         begin
+            Env.Functor_Cl := Class_Id (Cl);
+            Tvs.Append (F);
+            Tvs.Append (A);
+            Tvs.Append (B);
+            Sch := M.Add
+              (Scheme'(Tvs => Tvs,
+                       Context => Ctx1 (Cl, TV (F)),
+                       S_Body => Type_Id
+                         (FN (FN (TV (A), TV (B)),
+                              AP (TV (F), TV (A)),
+                              AP (TV (F), TV (B))))));
+            Ignore := Def_Method (Cl, "fmap", Sch, False);
+            Finish_Class (Cl);
+         end;
+
+         --  Monad (over m :: * -> *)
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Monad", Star1);
+            Mv : constant Real_TyVar_Id :=
+              M.Mint_TyVar ((Name => Table.Intern ("m"),
+                             Tv_Kind => Kind_Id (Star1)));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            B  : constant Real_TyVar_Id := New_Tv ("b");
+
+            function Sch3 (T : Real_Type_Id) return Real_Scheme_Id is
+               Tvs : TyVar_Id_Vectors.Vector;
+            begin
+               Tvs.Append (Mv);
+               Tvs.Append (A);
+               Tvs.Append (B);
+               return M.Add (Scheme'(Tvs => Tvs,
+                                     Context => Ctx1 (Cl, TV (Mv)),
+                                     S_Body => Type_Id (T)));
+            end Sch3;
+         begin
+            Env.Monad_Cl := Class_Id (Cl);
+            Env.Bind_V := Var_Id (Def_Method
+              (Cl, ">>=",
+               Sch3 (FN (AP (TV (Mv), TV (A)),
+                         FN (TV (A), AP (TV (Mv), TV (B))),
+                         AP (TV (Mv), TV (B)))), False));
+            Env.Then_V := Var_Id (Def_Method
+              (Cl, ">>",
+               Sch3 (FN (AP (TV (Mv), TV (A)),
+                         AP (TV (Mv), TV (B)),
+                         AP (TV (Mv), TV (B)))), True));
+            Env.Return_V := Var_Id (Def_Method
+              (Cl, "return",
+               Sch3 (FN (TV (A), AP (TV (Mv), TV (A)))), False));
+            Env.Fail_V := Var_Id (Def_Method
+              (Cl, "fail",
+               Sch3 (FN (LST (TC (Env.Char_TC)),
+                         AP (TV (Mv), TV (A)))), True));
+            Finish_Class (Cl);
+         end;
+
+         --  Num (Eq, Show)
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Num", Star_K, Sup2 (Env.Eq_Cl, Env.Show_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            Bin : constant Real_Type_Id := FN (TV (A), TV (A), TV (A));
+            Un  : constant Real_Type_Id := FN (TV (A), TV (A));
+         begin
+            Env.Num_Cl := Class_Id (Cl);
+            for Op in 1 .. 3 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "+", when 2 => "-", when others => "*"),
+                  Poly1 (A, Bin, Ctx1 (Cl, TV (A))), Op = 2);
+            end loop;
+            Env.Negate_V := Var_Id (Def_Method
+              (Cl, "negate", Poly1 (A, Un, Ctx1 (Cl, TV (A))), True));
+            Ignore := Def_Method
+              (Cl, "abs", Poly1 (A, Un, Ctx1 (Cl, TV (A))), False);
+            Ignore := Def_Method
+              (Cl, "signum", Poly1 (A, Un, Ctx1 (Cl, TV (A))), False);
+            Env.From_Integer_V := Var_Id (Def_Method
+              (Cl, "fromInteger",
+               Poly1 (A, FN (Integer_T, TV (A)), Ctx1 (Cl, TV (A))),
+               False));
+            Finish_Class (Cl);
+         end;
+
+         --  Real (Num, Ord)
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Real", Star_K, Sup2 (Env.Num_Cl, Env.Ord_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Env.Real_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "toRational",
+               Poly1 (A, FN (TV (A), Rational_T), Ctx1 (Cl, TV (A))),
+               False);
+            Finish_Class (Cl);
+         end;
+
+         --  Fractional (Num)
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Fractional", Star_K, Sup1 (Env.Num_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Env.Fractional_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "/", Poly1 (A, FN (TV (A), TV (A), TV (A)),
+                               Ctx1 (Cl, TV (A))), False);
+            Ignore := Def_Method
+              (Cl, "recip", Poly1 (A, FN (TV (A), TV (A)),
+                                   Ctx1 (Cl, TV (A))), True);
+            Env.From_Rational_V := Var_Id (Def_Method
+              (Cl, "fromRational",
+               Poly1 (A, FN (Rational_T, TV (A)), Ctx1 (Cl, TV (A))),
+               False));
+            Finish_Class (Cl);
+         end;
+
+         --  Enum
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Enum", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            LA : constant Real_Type_Id := LST (TV (A));
+         begin
+            Env.Enum_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "succ", Poly1 (A, FN (TV (A), TV (A)),
+                                  Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "pred", Poly1 (A, FN (TV (A), TV (A)),
+                                  Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "toEnum", Poly1 (A, FN (Int_T, TV (A)),
+                                    Ctx1 (Cl, TV (A))), False);
+            Ignore := Def_Method
+              (Cl, "fromEnum", Poly1 (A, FN (TV (A), Int_T),
+                                      Ctx1 (Cl, TV (A))), False);
+            Env.Enum_From_V := Var_Id (Def_Method
+              (Cl, "enumFrom", Poly1 (A, FN (TV (A), LA),
+                                      Ctx1 (Cl, TV (A))), True));
+            Env.Enum_From_Then_V := Var_Id (Def_Method
+              (Cl, "enumFromThen",
+               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
+               True));
+            Env.Enum_From_To_V := Var_Id (Def_Method
+              (Cl, "enumFromTo",
+               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
+               True));
+            Env.Enum_From_Then_To_V := Var_Id (Def_Method
+              (Cl, "enumFromThenTo",
+               Poly1 (A, FN (TV (A), FN (TV (A), TV (A), LA)),
+                      Ctx1 (Cl, TV (A))),
+               True));
+            Finish_Class (Cl);
+         end;
+
+         --  Bounded
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Bounded", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Env.Bounded_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "minBound", Poly1 (A, TV (A), Ctx1 (Cl, TV (A))),
+               False);
+            Ignore := Def_Method
+              (Cl, "maxBound", Poly1 (A, TV (A), Ctx1 (Cl, TV (A))),
+               False);
+            Finish_Class (Cl);
+         end;
+
+         pragma Unreferenced (Ignore);
+      end;
+
+      ------------------------------------------------------------------
+      --  Instances (signature-only, opaque dictionaries)
+      ------------------------------------------------------------------
+
+      declare
+         function Cl (Id : Core.Class_Id) return Real_Class_Id
+         is (Real_Class_Id (Id));
+         function TCn (Id : Core.TyCon_Id) return Real_TyCon_Id
+         is (Real_TyCon_Id (Id));
+
+         Ground : constant array (1 .. 5) of Core.TyCon_Id :=
+           [Env.Int_TC, Env.Integer_TC, Env.Char_TC, Env.Bool_TC,
+            Env.Unit_TC];
+         Numeric : constant array (1 .. 4) of Core.TyCon_Id :=
+           [Env.Int_TC, Env.Integer_TC, Env.Float_TC, Env.Double_TC];
+
+         function List_Ctx (Class : Core.Class_Id)
+           return Constraint_Vectors.Vector
+         is
+            A : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            return Ctx1 (Cl (Class), TV (A));
+         end List_Ctx;
+      begin
+         for T of Ground loop
+            Def_Instance (Cl (Env.Eq_Cl), TCn (T));
+            Def_Instance (Cl (Env.Ord_Cl), TCn (T));
+            Def_Instance (Cl (Env.Show_Cl), TCn (T));
+            Def_Instance (Cl (Env.Enum_Cl), TCn (T));
+            Def_Instance (Cl (Env.Bounded_Cl), TCn (T));
+         end loop;
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Ordering_TC));
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ordering_TC));
+
+         for T of Numeric loop
+            Def_Instance (Cl (Env.Num_Cl), TCn (T));
+            Def_Instance (Cl (Env.Real_Cl), TCn (T));
+         end loop;
+         Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Double_TC));
+
+         --  Eq a => Eq [a], etc.
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.List_TC),
+                       List_Ctx (Env.Eq_Cl));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.List_TC),
+                       List_Ctx (Env.Ord_Cl));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.List_TC),
+                       List_Ctx (Env.Show_Cl));
+
+         --  Pair instances with two-constraint contexts.
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+            B : constant Real_TyVar_Id := New_Tv ("b");
+
+            function Pair_Ctx (Class : Core.Class_Id)
+              return Constraint_Vectors.Vector
+            is
+               C : Constraint_Vectors.Vector;
+            begin
+               C.Append (Constraint'(Class => Cl (Class), Arg => TV (A),
+                                     Span => No_Span));
+               C.Append (Constraint'(Class => Cl (Class), Arg => TV (B),
+                                     Span => No_Span));
+               return C;
+            end Pair_Ctx;
+         begin
+            Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Tuple_TCs (2)),
+                          Pair_Ctx (Env.Eq_Cl));
+            Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Tuple_TCs (2)),
+                          Pair_Ctx (Env.Ord_Cl));
+            Def_Instance (Cl (Env.Show_Cl), TCn (Env.Tuple_TCs (2)),
+                          Pair_Ctx (Env.Show_Cl));
+         end;
+
+         Def_Instance (Cl (Env.Functor_Cl), TCn (Env.List_TC));
+         Def_Instance (Cl (Env.Monad_Cl), TCn (Env.List_TC));
+         Def_Instance (Cl (Env.Functor_Cl), TCn (Env.IO_TC));
+         Def_Instance (Cl (Env.Monad_Cl), TCn (Env.IO_TC));
+         Def_Instance (Cl (Env.Functor_Cl), TCn (Env.Maybe_TC));
+         Def_Instance (Cl (Env.Monad_Cl), TCn (Env.Maybe_TC));
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Maybe_TC),
+                       List_Ctx (Env.Eq_Cl));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Maybe_TC),
+                       List_Ctx (Env.Ord_Cl));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Maybe_TC),
+                       List_Ctx (Env.Show_Cl));
+      end;
+
+      ------------------------------------------------------------------
+      --  Plain globals
+      ------------------------------------------------------------------
+
+      declare
+         Bool_T : constant Real_Type_Id := TC (Env.Bool_TC);
+         String_T : constant Real_Type_Id := LST (TC (Env.Char_TC));
+         Unit_T : constant Real_Type_Id := TC (Env.Unit_TC);
+         Ignore : Real_Var_Id;
+      begin
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+            B : constant Real_TyVar_Id := New_Tv ("b");
+         begin
+            Env.Map_V := Var_Id (Def_Global
+              ("map", Poly2 (A, B,
+                             FN (FN (TV (A), TV (B)),
+                                 LST (TV (A)), LST (TV (B))))));
+            Env.Concat_Map_V := Var_Id (Def_Global
+              ("concatMap",
+               Poly2 (A, B, FN (FN (TV (A), LST (TV (B))),
+                                LST (TV (A)), LST (TV (B))))));
+            Ignore := Def_Global
+              ("foldr", Poly2 (A, B,
+                               FN (FN (TV (A), FN (TV (B), TV (B))),
+                                   TV (B), FN (LST (TV (A)), TV (B)))));
+            Ignore := Def_Global
+              ("const", Poly2 (A, B, FN (TV (A), TV (B), TV (A))));
+            Ignore := Def_Global
+              ("fst", Poly2 (A, B,
+                             FN (AP (AP (TC (Env.Tuple_TCs (2)), TV (A)),
+                                     TV (B)), TV (A))));
+            Ignore := Def_Global
+              ("snd", Poly2 (A, B,
+                             FN (AP (AP (TC (Env.Tuple_TCs (2)), TV (A)),
+                                     TV (B)), TV (B))));
+         end;
+
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Env.Filter_V := Var_Id (Def_Global
+              ("filter", Poly1 (A, FN (FN (TV (A), Bool_T),
+                                       LST (TV (A)), LST (TV (A))))));
+            Env.Append_V := Var_Id (Def_Global
+              ("++", Poly1 (A, FN (LST (TV (A)), LST (TV (A)),
+                                   LST (TV (A))))));
+            Ignore := Def_Global
+              ("concat", Poly1 (A, FN (LST (LST (TV (A))),
+                                       LST (TV (A)))));
+            Env.Error_V := Var_Id (Def_Global
+              ("error", Poly1 (A, FN (String_T, TV (A)))));
+            Ignore := Def_Global ("undefined", Poly1 (A, TV (A)));
+            Ignore := Def_Global
+              ("id", Poly1 (A, FN (TV (A), TV (A))));
+            Ignore := Def_Global
+              ("print",
+               Poly1 (A, FN (TV (A), IO_T (Unit_T)),
+                      Ctx1 (Real_Class_Id (Env.Show_Cl), TV (A))));
+            Ignore := Def_Global
+              ("subtract",
+               Poly1 (A, FN (TV (A), TV (A), TV (A)),
+                      Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
+            Ignore := Def_Global
+              ("length", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
+         end;
+
+         declare
+            A : constant Real_TyVar_Id := New_Tv ("a");
+            B : constant Real_TyVar_Id := New_Tv ("b");
+            C : constant Real_TyVar_Id := New_Tv ("c");
+            Tvs : TyVar_Id_Vectors.Vector;
+         begin
+            Tvs.Append (A);
+            Tvs.Append (B);
+            Tvs.Append (C);
+            Ignore := Def_Global
+              (".", M.Add (Scheme'
+                 (Tvs => Tvs,
+                  Context => Constraint_Vectors.Empty_Vector,
+                  S_Body => Type_Id
+                    (FN (FN (TV (B), TV (C)), FN (TV (A), TV (B)),
+                         FN (TV (A), TV (C)))))));
+            declare
+               Tvs2 : TyVar_Id_Vectors.Vector;
+               Tvs3 : TyVar_Id_Vectors.Vector;
+            begin
+               Tvs2.Append (A);
+               Tvs2.Append (B);
+               Ignore := Def_Global
+                 ("$", M.Add (Scheme'
+                    (Tvs => Tvs2,
+                     Context => Constraint_Vectors.Empty_Vector,
+                     S_Body => Type_Id
+                       (FN (FN (TV (A), TV (B)), TV (A), TV (B))))));
+               Tvs3.Append (A);
+               Tvs3.Append (B);
+               Tvs3.Append (C);
+               Ignore := Def_Global
+                 ("flip", M.Add (Scheme'
+                    (Tvs => Tvs3,
+                     Context => Constraint_Vectors.Empty_Vector,
+                     S_Body => Type_Id
+                       (FN (FN (TV (A), TV (B), TV (C)),
+                            FN (TV (B), TV (A), TV (C)))))));
+            end;
+         end;
+
+         Env.Otherwise_V := Var_Id (Def_Global
+           ("otherwise", Mono (Bool_T)));
+         Ignore := Def_Global ("not", Mono (FN (Bool_T, Bool_T)));
+         Ignore := Def_Global
+           ("&&", Mono (FN (Bool_T, Bool_T, Bool_T)));
+         Ignore := Def_Global
+           ("||", Mono (FN (Bool_T, Bool_T, Bool_T)));
+         Ignore := Def_Global
+           ("putStr", Mono (FN (String_T, IO_T (Unit_T))));
+         Ignore := Def_Global
+           ("putStrLn", Mono (FN (String_T, IO_T (Unit_T))));
+         pragma Unreferenced (Ignore);
+      end;
+   end Install;
+
+end AHC.Builtins;

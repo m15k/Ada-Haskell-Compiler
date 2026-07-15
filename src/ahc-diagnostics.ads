@@ -42,7 +42,22 @@ package AHC.Diagnostics is
       Lex_Invalid_Name,
       Layout_Unmatched_Brace,
       Parse_Error,
-      Fixity_Error);
+      Fixity_Error,
+      Rename_Out_Of_Scope,
+      Rename_Duplicate,
+      Rename_Bad_Equations,
+      Rename_Field_Error,
+      Rename_Unsupported,
+      Kind_Error,
+      Type_Mismatch,
+      Type_Occurs_Check,
+      Type_Ambiguous,
+      Type_Signature_Too_General,
+      Class_No_Instance,
+      Class_Missing_Method,
+      Class_Duplicate_Instance,
+      Class_Context_Depth,
+      Arity_Mismatch);
 
    --  Errors beyond this many are counted but not stored.
    Max_Stored_Errors : constant := 50;
