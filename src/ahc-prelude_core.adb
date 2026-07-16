@@ -743,6 +743,37 @@ package body AHC.Prelude_Core is
                        or else Inst.Head = Env.Float_TC
                      then
                         Ms.Append (V (P_ShowD));
+                     elsif Inst.Head = Env.Unit_TC then
+                        declare
+                           U : constant Real_Var_Id := Fresh ("u");
+                        begin
+                           Ms.Append (Lam (U, Str ("()")));
+                        end;
+                     elsif Inst.Head = Env.Ordering_TC then
+                        --  case o of LT -> "LT"; EQ -> "EQ"; _ -> "GT"
+                        declare
+                           O : constant Real_Var_Id := Fresh ("o");
+                           Alts : Alt_Id_Vectors.Vector;
+                        begin
+                           Alts.Append (M.Add (Alt_Node'
+                             (Kind => Con_Alt, Span => Span,
+                              A_Con => Ordering_LT,
+                              Binders => Var_Id_Vectors.Empty_Vector,
+                              Alt_Body => Str ("LT"))));
+                           Alts.Append (M.Add (Alt_Node'
+                             (Kind => Con_Alt, Span => Span,
+                              A_Con => Ordering_LT + 1,
+                              Binders => Var_Id_Vectors.Empty_Vector,
+                              Alt_Body => Str ("EQ"))));
+                           Alts.Append (M.Add (Alt_Node'
+                             (Kind => Default_Alt, Span => Span,
+                              Alt_Body => Str ("GT"))));
+                           Ms.Append
+                             (Lam (O, M.Add (Expr_Node'
+                                (Kind => Case_C, Span => Span,
+                                 Scrutinee => V (Var_Id (O)),
+                                 Alts => Alts))));
+                        end;
                      else
                         Ms.Append (Err ("show: no runtime for this"
                                         & " type yet"));

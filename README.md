@@ -102,7 +102,22 @@ scripts/run_golden.sh              # golden lex/layout/parse/core/check
 scripts/run_differential.sh        # parse-level GHC agreement
 scripts/run_differential_types.sh  # type-level GHC agreement
 scripts/run_exec.sh                # compile-and-run output goldens
+scripts/run_conformance.sh         # Haskell 2010 conformance subset
 ```
+
+Conformance (the PRD success metric): `tests/conformance/` holds 30
+programs pinned to Haskell 2010 Report sections - lexical structure
+and layout, every expression form, declarations and classes, the
+predefined types, the Prelude subset, and non-strict semantics. Their
+goldens are GHC'S OUTPUT (regenerate with `--oracle`); AHC must
+reproduce them byte-for-byte. Report features AHC does not implement
+are documented in `tests/conformance/EXCLUSIONS.md` rather than
+tested weakly. Building the suite immediately caught and fixed five
+real bugs: record field selectors had no bodies, record update
+dropped unmentioned fields' sharing, a shared join-point node made
+the evidence rewriter apply dictionaries twice on nested-constructor
+matches, single-line nested `let .. in` failed under parser
+lookahead, and `(op) = e` bindings did not parse.
 
 ## Layout
 

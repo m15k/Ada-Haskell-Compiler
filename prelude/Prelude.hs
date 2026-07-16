@@ -167,13 +167,49 @@ until p f x = if p x then x else until p f (f x)
 
 -- Show instances over prelude types (real elaborated dictionaries) ----
 
+instance (Show a, Show b, Show c, Show d, Show e)
+    => Show (a, b, c, d, e) where
+  show (a, b, c, d, e) =
+    "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
+        ++ show d ++ "," ++ show e ++ ")"
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f)
+    => Show (a, b, c, d, e, f) where
+  show (a, b, c, d, e, f) =
+    "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
+        ++ show d ++ "," ++ show e ++ "," ++ show f ++ ")"
+
+instance (Show a, Show b, Show c, Show d, Show e, Show f, Show g)
+    => Show (a, b, c, d, e, f, g) where
+  show (a, b, c, d, e, f, g) =
+    "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
+        ++ show d ++ "," ++ show e ++ "," ++ show f ++ ","
+        ++ show g ++ ")"
+
+instance (Show a, Show b, Show c) => Show (a, b, c) where
+  show (a, b, c) =
+    "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ")"
+
+instance (Show a, Show b, Show c, Show d) => Show (a, b, c, d) where
+  show (a, b, c, d) =
+    "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
+        ++ show d ++ ")"
+
 instance (Show a, Show b) => Show (a, b) where
   show (a, b) = "(" ++ show a ++ "," ++ show b ++ ")"
 
+showConArg :: Show a => a -> String
+showConArg x = if needsParen s then "(" ++ s ++ ")" else s
+  where
+    s = show x
+    needsParen t = case t of
+      []       -> False
+      (c : cs) -> c == '-' || elem ' ' t
+
 instance Show a => Show (Maybe a) where
   show Nothing = "Nothing"
-  show (Just x) = "Just " ++ show x
+  show (Just x) = "Just " ++ showConArg x
 
 instance (Show a, Show b) => Show (Either a b) where
-  show (Left x) = "Left " ++ show x
-  show (Right y) = "Right " ++ show y
+  show (Left x) = "Left " ++ showConArg x
+  show (Right y) = "Right " ++ showConArg y

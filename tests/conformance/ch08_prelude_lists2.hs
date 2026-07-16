@@ -1,0 +1,15 @@
+-- More Prelude list functions.
+main :: IO ()
+main = do
+  print (zip [1, 2, 3] "abc")
+  print (zipWith (+) [1, 2, 3] [10, 20, 30])
+  print (takeWhile (< 4) [1 .. 9], dropWhile (< 4) [1 .. 9])
+  print (elem 3 [1 .. 5], notElem 3 [1 .. 5])
+  print (lookup 2 [(1, 'a'), (2, 'b')])
+  print (and [True, True], or [False, True])
+  print (any even [1, 3, 5], all odd [1, 3, 5])
+  print (sum [1 .. 10], product [1 .. 5])
+  print (maximum [3, 1, 4, 1, 5], minimum [3, 1, 4])
+  print (replicate 3 7)
+  print (take 4 (iterate (* 2) 1))
+  print (take 3 (repeat 9))

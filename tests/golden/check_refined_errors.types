@@ -1,2 +1,2 @@
-tests/golden/check_refined_errors.hs:4:6: error: empty refinement range
 tests/golden/check_refined_errors.hs:1:6: error: range refinements are only supported on Int, Integer, Double and Float
+tests/golden/check_refined_errors.hs:4:6: error: empty refinement range

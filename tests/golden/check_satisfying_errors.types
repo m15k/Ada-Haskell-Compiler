@@ -1,2 +1,2 @@
-tests/golden/check_satisfying_errors.hs:6:6: error: kind mismatch
 tests/golden/check_satisfying_errors.hs:3:6: error: a type cannot carry two refinements
+tests/golden/check_satisfying_errors.hs:6:6: error: kind mismatch

@@ -276,10 +276,24 @@ static AhcNode *p_show_int(AhcNode *a) {
   snprintf(buf, sizeof buf, "%ld", ahc_eval(a)->u.i);
   return ahc_mk_string(buf);
 }
+/* Report 11.4 (Show Char): common escapes by name, other
+   non-printables as decimal escapes. */
 static AhcNode *p_show_char(AhcNode *a) {
-  char buf[8];
-  snprintf(buf, sizeof buf, "'%c'", (char)ahc_eval(a)->u.c);
-  return ahc_mk_string(buf);
+  long v = ahc_eval(a)->u.c;
+  char buf[16];
+  switch (v) {
+  case '\n': return ahc_mk_string("'\\n'");
+  case '\t': return ahc_mk_string("'\\t'");
+  case '\r': return ahc_mk_string("'\\r'");
+  case '\\': return ahc_mk_string("'\\\\'");
+  case '\'': return ahc_mk_string("'\\''");
+  default:
+    if (v >= 32 && v <= 126)
+      snprintf(buf, sizeof buf, "'%c'", (char)v);
+    else
+      snprintf(buf, sizeof buf, "'\\%ld'", v);
+    return ahc_mk_string(buf);
+  }
 }
 static AhcNode *p_show_bool(AhcNode *a) {
   return ahc_mk_string(ahc_eval(a)->u.con.contag == TRUE_TAG

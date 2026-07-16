@@ -1,10 +1,17 @@
 with Ada.Containers.Vectors;
 
+with Ada.Containers.Hashed_Sets;
+
 package body AHC.Desugar is
 
    use AHC.Syntax;
    use Rename;
    use type Core.Var_Id;
+   use type Core.Expr_Kind;
+
+   package Var_Sets is new Ada.Containers.Hashed_Sets
+     (Core.Real_Var_Id, Rename.Var_Hash,
+      Equivalent_Elements => Core."=", "=" => Core."=");
    use type Core.DataCon_Id;
    use type Names.Name_Id;
 
@@ -141,6 +148,21 @@ package body AHC.Desugar is
       --  Pattern matching
       ------------------------------------------------------------------
 
+      --  Core expressions must form a tree: the evidence machinery
+      --  rewrites nodes per inferred occurrence, so a join-point
+      --  reference embedded in several alternatives needs a fresh
+      --  Var node per embedding.
+      function Fresh_Ref
+        (E : Core.Real_Expr_Id) return Core.Real_Expr_Id
+      is
+         N : constant Core.Expr_Node := M.Node (E);
+      begin
+         if N.Kind = Core.Var_C then
+            return M.Add (N);
+         end if;
+         return E;
+      end Fresh_Ref;
+
       type Pair is record
          Scrut : Core.Real_Var_Id;
          Pat   : Syntax.Pat_Id;
@@ -253,7 +275,7 @@ package body AHC.Desugar is
                       (Builtins.Var_Maps.Element (Eq_Sel)), Span),
                     VarE (Scrut, Span), Lit_E, Span);
          begin
-            return Bool_Case (Test, Inner, Fail, Span);
+            return Bool_Case (Test, Inner, Fresh_Ref (Fail), Span);
          end Lit_Test;
 
          function Con_Match
@@ -297,7 +319,7 @@ package body AHC.Desugar is
                A_Con => DC, Binders => Binders)));
             Alts.Append (M.Add (Core.Alt_Node'
               (Kind => Core.Default_Alt, Span => Span,
-               Alt_Body => Fail)));
+               Alt_Body => Fresh_Ref (Fail))));
             return M.Add (Core.Expr_Node'
               (Kind => Core.Case_C, Span => Span,
                Scrutinee => VarE (Scrut, Span), Alts => Alts));
@@ -439,7 +461,7 @@ package body AHC.Desugar is
                                 Core.Var_Id_Vectors.Empty_Vector)));
                            NAlts.Append (M.Add (Core.Alt_Node'
                              (Kind => Core.Default_Alt, Span => Span,
-                              Alt_Body => Fail)));
+                              Alt_Body => Fresh_Ref (Fail))));
                            Rest := M.Add (Core.Expr_Node'
                              (Kind => Core.Case_C, Span => Span,
                               Scrutinee => VarE (Tail_B, Span),
@@ -464,7 +486,7 @@ package body AHC.Desugar is
                         Binders => Binders)));
                      Alts.Append (M.Add (Core.Alt_Node'
                        (Kind => Core.Default_Alt, Span => Span,
-                        Alt_Body => Fail)));
+                        Alt_Body => Fresh_Ref (Fail))));
                      return M.Add (Core.Expr_Node'
                        (Kind => Core.Case_C, Span => Span,
                         Scrutinee => VarE (S, Span), Alts => Alts));
@@ -527,7 +549,7 @@ package body AHC.Desugar is
                         A_Con => R.Con, Binders => Binders)));
                      Alts.Append (M.Add (Core.Alt_Node'
                        (Kind => Core.Default_Alt, Span => Span,
-                        Alt_Body => Fail)));
+                        Alt_Body => Fresh_Ref (Fail))));
                      return M.Add (Core.Expr_Node'
                        (Kind => Core.Case_C, Span => Span,
                         Scrutinee => VarE (Scrut, Span),
@@ -552,7 +574,7 @@ package body AHC.Desugar is
          Result : Core.Real_Expr_Id;
       begin
          if R.Guarded then
-            Result := Fail;
+            Result := Fresh_Ref (Fail);
             for I in reverse 1 .. R.Guards.Last_Index loop
                Result := Bool_Case
                  (Ds_Expr (R.Guards (I).Guard),
@@ -1354,6 +1376,112 @@ package body AHC.Desugar is
             M.Top_Binds.Append (G);
          end;
       end loop;
+
+      --  Field selector bodies (Report 3.15.1): for every record
+      --  field F, `F = \r -> case r of { K .. bF .. -> bF; ... }`
+      --  with one alternative per constructor carrying the field.
+      --  Kinds minted the selector variables and schemes; only the
+      --  bodies are owed. Selectors already bound (a previous run
+      --  over this shared module) are skipped.
+      declare
+         Done : Var_Sets.Set;
+      begin
+         for G of M.Top_Binds loop
+            for B of G.Binds loop
+               Done.Include (B.Binder);
+            end loop;
+         end loop;
+         for DC in 1 .. M.Last_DataCon loop
+            declare
+               Info : constant Core.DataCon_Info :=
+                 M.Info (Core.Real_DataCon_Id (DC));
+            begin
+               for FI in 1 .. Info.Field_Names.Last_Index loop
+                  declare
+                     Sel_C : constant Builtins.Var_Maps.Cursor :=
+                       Env.Values.Find (Info.Field_Names (FI));
+                     Span : constant Diagnostics.Source_Span :=
+                       (Start => 1, Stop => 1);
+                  begin
+                     if Builtins.Var_Maps.Has_Element (Sel_C)
+                       and then not Done.Contains
+                         (Builtins.Var_Maps.Element (Sel_C))
+                     then
+                        declare
+                           Sel : constant Core.Real_Var_Id :=
+                             Builtins.Var_Maps.Element (Sel_C);
+                           R_V : constant Core.Real_Var_Id :=
+                             Fresh ("$r", Span);
+                           Alts : Core.Alt_Id_Vectors.Vector;
+                           G : Core.Top_Bind;
+                        begin
+                           --  One alternative per constructor that
+                           --  has this field (any TyCon; field names
+                           --  are globally unique).
+                           for DC2 in 1 .. M.Last_DataCon loop
+                              declare
+                                 I2 : constant Core.DataCon_Info :=
+                                   M.Info
+                                     (Core.Real_DataCon_Id (DC2));
+                              begin
+                                 for FJ in
+                                   1 .. I2.Field_Names.Last_Index
+                                 loop
+                                    if I2.Field_Names (FJ) =
+                                       Info.Field_Names (FI)
+                                    then
+                                       declare
+                                          Bs : Core.Var_Id_Vectors
+                                                 .Vector;
+                                       begin
+                                          for K in
+                                            1 .. I2.Field_Names
+                                                   .Last_Index
+                                          loop
+                                             Bs.Append
+                                               (Fresh ("$f", Span));
+                                          end loop;
+                                          Alts.Append (M.Add
+                                            (Core.Alt_Node'
+                                             (Kind => Core.Con_Alt,
+                                              Span => Span,
+                                              A_Con =>
+                                                Core.Real_DataCon_Id
+                                                  (DC2),
+                                              Binders => Bs,
+                                              Alt_Body =>
+                                                VarE (Bs (FJ),
+                                                      Span))));
+                                       end;
+                                    end if;
+                                 end loop;
+                              end;
+                           end loop;
+                           Alts.Append (M.Add (Core.Alt_Node'
+                             (Kind => Core.Default_Alt, Span => Span,
+                              Alt_Body => Error_Call
+                                ("no match in record selector "
+                                 & Table.Text
+                                     (Names.Real_Name_Id
+                                        (Info.Field_Names (FI))),
+                                 Span))));
+                           G.Is_Rec := False;
+                           G.Binds.Append (Core.Bind_Pair'
+                             (Binder => Sel,
+                              Rhs => Lam (R_V,
+                                M.Add (Core.Expr_Node'
+                                  (Kind => Core.Case_C, Span => Span,
+                                   Scrutinee => VarE (R_V, Span),
+                                   Alts => Alts)), Span)));
+                           M.Top_Binds.Append (G);
+                           Done.Include (Sel);
+                        end;
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end;
    end Desugar_Module;
 
 end AHC.Desugar;

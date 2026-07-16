@@ -32,6 +32,13 @@ package AHC.Layout is
    type Layout_Stream is tagged limited private
      with Type_Invariant => Balanced (Layout_Stream);
 
+   --  Pop the innermost implicit context WITHOUT emitting tokens; the
+   --  parser synthesizes the V_Right_Brace itself. Needed when parser
+   --  lookahead has already drained tokens past the failing one (the
+   --  queue-based Close_On_Parse_Error cannot help there).
+   procedure Pop_On_Parse_Error
+     (S : in out Layout_Stream; Closed : out Boolean);
+
    function Balanced (S : Layout_Stream) return Boolean;
 
    --  Number of implicit layout contexts currently open.

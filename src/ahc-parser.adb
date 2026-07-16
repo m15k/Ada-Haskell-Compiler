@@ -84,7 +84,41 @@ package body AHC.Parser is
       begin
          if not Pending.Is_Empty and then P_First <= Pending.Last_Index
          then
-            return False;  --  stream is ahead of us; cannot close here
+            --  Lookahead has drained tokens past the failing one, so
+            --  the layout queue cannot re-deliver. Within a single
+            --  source line the layout algorithm never consults the
+            --  stack, so the innermost close can happen here instead:
+            --  either the context is still open (pop it), or the
+            --  end-of-input flush already queued its virtual close
+            --  (relocate that brace to the failing position). Any
+            --  pending line-start token was laid out against the old
+            --  stack, so we must decline then.
+            declare
+               Jb : Natural := 0;
+            begin
+               for J in P_First .. Pending.Last_Index loop
+                  if Pending (J).Kind = V_Right_Brace then
+                     Jb := J;
+                     exit;
+                  end if;
+                  if Pending (J).First_On_Line then
+                     return False;
+                  end if;
+               end loop;
+               if Jb = 0 then
+                  Laid.Pop_On_Parse_Error (Closed);
+                  if not Closed then
+                     return False;
+                  end if;
+               else
+                  Pending.Delete (Jb);
+               end if;
+               Pending.Insert (P_First, Tok);
+               Tok := (Kind => V_Right_Brace, Span => Tok.Span,
+                       Line => Tok.Line, Column => Tok.Column,
+                       First_On_Line => False);
+               return True;
+            end;
          end if;
          if Laid.Finished then
             return False;
@@ -1829,7 +1863,8 @@ package body AHC.Parser is
                     and then Peek (3).Kind
                          in Varid | Conid | Qconid | Underscore
                           | Int_Lit | Float_Lit | Char_Lit | String_Lit
-                          | Left_Paren | Left_Bracket | Tilde)
+                          | Left_Paren | Left_Bracket | Tilde
+                          | Equals | Pipe)
          then
             declare
                Name : constant Names.Name_Id := Parse_Var_Name;
@@ -1842,6 +1877,17 @@ package body AHC.Parser is
                   R : constant Rhs := Parse_Guarded (Equals, "'='");
                begin
                   Parse_Where (Where_Ds);
+                  if Pats.Is_Empty then
+                     --  (op) = e: a plain variable binding for the
+                     --  operator name (Report 4.4.3 var form).
+                     return Arena.Add
+                       (Decl_Node'(Kind => Pat_D, Span => Span,
+                                   Pat => Arena.Add (Pat_Node'
+                                     (Kind => Var_P, Span => Span,
+                                      Var => Name)),
+                                   Pat_Rhs => R,
+                                   Pat_Where => Where_Ds));
+                  end if;
                   return Arena.Add
                     (Decl_Node'(Kind => Fun_D, Span => Span,
                                 Fun_Name => Name, Fun_Pats => Pats,

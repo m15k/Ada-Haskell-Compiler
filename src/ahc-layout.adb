@@ -219,6 +219,18 @@ package body AHC.Layout is
       end if;
    end Next;
 
+   procedure Pop_On_Parse_Error
+     (S : in out Layout_Stream; Closed : out Boolean) is
+   begin
+      if S.Stack.Is_Empty or else Top (S) = 0 then
+         Closed := False;
+         return;
+      end if;
+      Pop (S);
+      S.Closes := S.Closes + 1;
+      Closed := True;
+   end Pop_On_Parse_Error;
+
    procedure Close_On_Parse_Error
      (S : in out Layout_Stream; Closed : out Boolean) is
    begin
