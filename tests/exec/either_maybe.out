@@ -1,5 +1,5 @@
 Right 5
-Left ['d','i','v','i','d','e',' ','b','y',' ','z','e','r','o']
-[Just ['n','e','g','a','t','i','v','e'],Nothing,Just ['p','o','s','i','t','i','v','e']]
-['n','o','n','e']
+Left "divide by zero"
+[Just "negative",Nothing,Just "positive"]
+"none"
 True

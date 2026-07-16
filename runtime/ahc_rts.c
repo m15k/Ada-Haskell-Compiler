@@ -362,6 +362,57 @@ static AhcNode *p_enum_from(AhcNode *a) {
   return mk_enum_from(ahc_eval(a)->u.i);
 }
 
+/* Stepped enumerations (Report 3.10 / 6.3.4). enumFromThen is a
+   lazy infinite structure with the given stride; enumFromThenTo is
+   finite (empty when the stride points away from the bound). */
+static AhcNode *enum_ft_code(AhcNode **env);
+
+static AhcNode *mk_enum_ft(long n, long step) {
+  AhcNode **e = ahc_env(2);
+  e[0] = ahc_mk_int(n);
+  e[1] = ahc_mk_int(step);
+  return ahc_mk_thunk(enum_ft_code, e);
+}
+
+static AhcNode *enum_ft_code(AhcNode **env) {
+  long n = env[0]->u.i, step = env[1]->u.i;
+  AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+  c->u.con.fields[0] = ahc_mk_int(n);
+  c->u.con.fields[1] = mk_enum_ft(n + step, step);
+  return c;
+}
+
+static AhcNode *p_enum_from_then(AhcNode *a, AhcNode *b) {
+  long n = ahc_eval(a)->u.i;
+  return mk_enum_ft(n, ahc_eval(b)->u.i - n);
+}
+
+static AhcNode *p_enum_from_then_to(AhcNode *a, AhcNode *b,
+                                    AhcNode *t) {
+  long lo = ahc_eval(a)->u.i;
+  long step = ahc_eval(b)->u.i - lo;
+  long hi = ahc_eval(t)->u.i;
+  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
+  long count = 0;
+  if (step > 0) count = hi >= lo ? (hi - lo) / step + 1 : 0;
+  else if (step < 0) count = hi <= lo ? (lo - hi) / (-step) + 1 : 0;
+  else return mk_enum_ft(lo, 0);   /* infinite repeat per Report */
+  for (long i = count - 1; i >= 0; i--) {
+    AhcNode *cc = ahc_mk_con(CONS_TAG, 2);
+    cc->u.con.fields[0] = ahc_mk_int(lo + i * step);
+    cc->u.con.fields[1] = acc;
+    acc = cc;
+  }
+  return acc;
+}
+
+static AhcNode *p_succ_int(AhcNode *a) {
+  return ahc_mk_int(ahc_eval(a)->u.i + 1);
+}
+static AhcNode *p_pred_int(AhcNode *a) {
+  return ahc_mk_int(ahc_eval(a)->u.i - 1);
+}
+
 static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
   long lo = ahc_eval(a)->u.i, hi = ahc_eval(b)->u.i;
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
@@ -508,6 +559,115 @@ static AhcNode *p_show_d(AhcNode *a) {
   return ahc_mk_string(buf);
 }
 
+/* ----- Report 11.4 Show machinery ------------------------------- */
+
+typedef struct { char *p; size_t len, cap; } StrBuf;
+
+static void sb_ch(StrBuf *b, char ch) {
+  if (b->len + 1 >= b->cap) {
+    b->cap = b->cap ? b->cap * 2 : 64;
+    b->p = realloc(b->p, b->cap);
+    if (!b->p) ahc_die("out of memory");
+  }
+  b->p[b->len++] = ch;
+}
+
+static void sb_cstr(StrBuf *b, const char *s) {
+  while (*s) sb_ch(b, *s++);
+}
+
+/* Flatten a Haskell string (evaluated cons spine of chars). */
+static void sb_hs(StrBuf *b, AhcNode *s) {
+  AhcNode *w = ahc_eval(s);
+  while (w->u.con.contag == CONS_TAG) {
+    sb_ch(b, (char)ahc_eval(w->u.con.fields[0])->u.c);
+    w = ahc_eval(w->u.con.fields[1]);
+  }
+}
+
+static AhcNode *sb_take(StrBuf *b) {
+  AhcNode *r;
+  sb_ch(b, 0);
+  r = ahc_mk_string(b->p);
+  free(b->p);
+  return r;
+}
+
+/* Show Char's showList: the whole char list as one quoted, escaped
+   string literal - this is how show "abc" becomes "\"abc\"". */
+static AhcNode *p_show_string(AhcNode *xs) {
+  StrBuf b = {0, 0, 0};
+  AhcNode *w = ahc_eval(xs);
+  sb_ch(&b, '"');
+  while (w->u.con.contag == CONS_TAG) {
+    long v = ahc_eval(w->u.con.fields[0])->u.c;
+    switch (v) {
+    case '"':  sb_cstr(&b, "\\\""); break;
+    case '\\': sb_cstr(&b, "\\\\"); break;
+    case '\n': sb_cstr(&b, "\\n"); break;
+    case '\t': sb_cstr(&b, "\\t"); break;
+    case '\r': sb_cstr(&b, "\\r"); break;
+    default:
+      if (v >= 32 && v <= 126) sb_ch(&b, (char)v);
+      else {
+        char tmp[16];
+        snprintf(tmp, sizeof tmp, "\\%ld", v);
+        sb_cstr(&b, tmp);
+      }
+    }
+    w = ahc_eval(w->u.con.fields[1]);
+  }
+  sb_ch(&b, '"');
+  return sb_take(&b);
+}
+
+/* Generic showList: "[e1,e2,...]" rendering each element with f. */
+static AhcNode *p_shows_list(AhcNode *f, AhcNode *xs) {
+  StrBuf b = {0, 0, 0};
+  AhcNode *w = ahc_eval(xs);
+  int first = 1;
+  sb_ch(&b, '[');
+  while (w->u.con.contag == CONS_TAG) {
+    if (!first) sb_ch(&b, ',');
+    first = 0;
+    sb_hs(&b, ahc_apply(f, w->u.con.fields[0]));
+    w = ahc_eval(w->u.con.fields[1]);
+  }
+  sb_ch(&b, ']');
+  return sb_take(&b);
+}
+
+/* showsPrec at Int/Double: negatives are parenthesized when the
+   enclosing precedence exceeds 6 (Report 11.4). */
+static AhcNode *p_showsprec_int(AhcNode *d, AhcNode *x) {
+  long dv = ahc_eval(d)->u.i, v = ahc_eval(x)->u.i;
+  char tmp[40];
+  if (dv > 6 && v < 0) snprintf(tmp, sizeof tmp, "(%ld)", v);
+  else snprintf(tmp, sizeof tmp, "%ld", v);
+  return ahc_mk_string(tmp);
+}
+
+static void fmt_double(char *buf, size_t n, double v) {
+  int has_mark = 0;
+  size_t i;
+  snprintf(buf, n - 3, "%.15g", v);
+  for (i = 0; buf[i]; i++)
+    if (buf[i] == '.' || buf[i] == 'e' || buf[i] == 'n' ||
+        buf[i] == 'f')
+      has_mark = 1;
+  if (!has_mark) { buf[i] = '.'; buf[i + 1] = '0'; buf[i + 2] = 0; }
+}
+
+static AhcNode *p_showsprec_d(AhcNode *d, AhcNode *x) {
+  long dv = ahc_eval(d)->u.i;
+  double v = ahc_eval(x)->u.d;
+  char num[48], out[52];
+  fmt_double(num, sizeof num, v);
+  if (dv > 6 && v < 0) snprintf(out, sizeof out, "(%s)", num);
+  else snprintf(out, sizeof out, "%s", num);
+  return ahc_mk_string(out);
+}
+
 /* Refinement-types extension, stage 4: Double range check. */
 static AhcNode *p_check_range_d(AhcNode *lo, AhcNode *hi, AhcNode *x) {
   double l = ahc_eval(lo)->u.d;
@@ -585,6 +745,10 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
+  *ahc_prim_succ_int, *ahc_prim_pred_int,
+  *ahc_prim_show_string, *ahc_prim_shows_list,
+  *ahc_prim_showsprec_int, *ahc_prim_showsprec_d,
   *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
   *ahc_prim_check_range_d,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
@@ -620,6 +784,10 @@ void ahc_rts_init(void) {
   ahc_prim_show_bool = mk_prim1(p_show_bool);
   ahc_prim_enum_from_to_int = mk_prim2(p_enum_from_to);
   ahc_prim_enum_from_int = mk_prim1(p_enum_from);
+  ahc_prim_enum_from_then = mk_prim2(p_enum_from_then);
+  ahc_prim_enum_from_then_to = mk_prim3(p_enum_from_then_to);
+  ahc_prim_succ_int = mk_prim1(p_succ_int);
+  ahc_prim_pred_int = mk_prim1(p_pred_int);
   ahc_prim_eq_poly = mk_prim2(p_eq_poly);
   ahc_prim_compare_poly = mk_prim2(p_compare_poly);
   ahc_prim_put_str = mk_prim1(p_put_str);
@@ -633,6 +801,10 @@ void ahc_rts_init(void) {
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
   ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
+  ahc_prim_show_string = mk_prim1(p_show_string);
+  ahc_prim_shows_list = mk_prim2(p_shows_list);
+  ahc_prim_showsprec_int = mk_prim2(p_showsprec_int);
+  ahc_prim_showsprec_d = mk_prim2(p_showsprec_d);
   ahc_prim_check_range_d = mk_prim3(p_check_range_d);
   ahc_prim_add_d = mk_prim2(p_add_d);
   ahc_prim_sub_d = mk_prim2(p_sub_d);

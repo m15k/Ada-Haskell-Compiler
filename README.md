@@ -79,11 +79,19 @@ at signature and annotation boundaries, and `ahc emit --unchecked`
 mirroring Ada's release-mode contract policy - modular wrapping is
 arithmetic semantics, not a check, so it is always applied.
 
+Show is Report-complete where it counts: showsPrec/showList are real
+methods, strings print as escaped string literals ("show \"ab\"" and
+friends match GHC exactly), negative arguments parenthesize, and
+`deriving Show` generates showsPrec per constructor - positional,
+record syntax, and parametric types included. Enum at Int is
+complete (stepped ranges [1,3..9], succ/pred, to/fromEnum), and the
+Prelude gained span/break/splitAt/unzip/foldr1/foldl1/words/lines.
+
 Remaining gaps: Rational arithmetic and the Floating class (sqrt,
 trig), Integer bignum (Int is a C long), the Integral class proper,
 pattern guards, multi-module imports, exhaustiveness warnings, and
-Show for String prints as a char list (needs the Report's showList
-method).
+class defaults for builtin classes (a hand-written show-only Show
+instance lacks showsPrec/showList).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

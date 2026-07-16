@@ -463,6 +463,11 @@ package body AHC.Builtins is
                Poly1 (A, FN (Int_T, TV (A),
                              FN (String_T, String_T)),
                       Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "showList",
+               Poly1 (A, FN (LST (TV (A)),
+                             FN (String_T, String_T)),
+                      Ctx1 (Cl, TV (A))), True);
             Finish_Class (Cl);
          end;
 

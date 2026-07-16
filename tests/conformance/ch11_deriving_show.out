@@ -1,0 +1,8 @@
+[Red,Green,Blue]
+Rect 3 4
+Circle (-5)
+Just (Circle 5)
+Box (Just [1,2])
+Box "str"
+Pt {px = 1, py = -2}
+[Box 1,Box 2]

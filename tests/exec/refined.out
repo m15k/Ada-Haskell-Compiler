@@ -3,4 +3,4 @@
 True
 4
 [8,6,4,2,0]
-[7,5,3,refinement violation: -1 not in 0 .. 9
+refinement violation: -1 not in 0 .. 9

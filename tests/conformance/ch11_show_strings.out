@@ -1,0 +1,11 @@
+"hello"
+"tab\there \"quoted\" back\\slash"
+Just "abc"
+Just (-5)
+Just (Just 3)
+Just (Left (-2))
+["ab","cd",""]
+"(-3)"
+"42!"
+('a',"bc",[1,2])
+"(x)"

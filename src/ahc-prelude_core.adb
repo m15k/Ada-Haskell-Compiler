@@ -175,6 +175,24 @@ package body AHC.Prelude_Core is
         Prim ("primfromIntegerD", "ahc_prim_from_integer_d");
       P_ShowD : constant Real_Var_Id :=
         Prim ("primshowD", "ahc_prim_show_d");
+      P_ShowStr : constant Real_Var_Id :=
+        Prim ("primshowString", "ahc_prim_show_string");
+      P_ShowsL : constant Real_Var_Id :=
+        Prim ("primshowsList", "ahc_prim_shows_list");
+      P_SPI : constant Real_Var_Id :=
+        Prim ("primshowsPrecI", "ahc_prim_showsprec_int");
+      P_SPD : constant Real_Var_Id :=
+        Prim ("primshowsPrecD", "ahc_prim_showsprec_d");
+      P_GtI : constant Real_Var_Id :=
+        Prim ("primgtI", "ahc_prim_gt_int");
+      P_EnumFTh : constant Real_Var_Id :=
+        Prim ("primenumFromThen", "ahc_prim_enum_from_then");
+      P_EnumFTT : constant Real_Var_Id :=
+        Prim ("primenumFromThenTo", "ahc_prim_enum_from_then_to");
+      P_Succ : constant Real_Var_Id :=
+        Prim ("primsucc", "ahc_prim_succ_int");
+      P_Pred : constant Real_Var_Id :=
+        Prim ("primpred", "ahc_prim_pred_int");
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
@@ -296,6 +314,312 @@ package body AHC.Prelude_Core is
          end loop;
          Bind (Inst.Dict_Global, Dict);
       end Give_Dict;
+
+      --  Report 11.4 Show method shapes. Each helper embeds the given
+      --  show-function expression once (callers rebuild it per use to
+      --  keep Core a tree).
+      --  showsPrec via show: \_ x s -> show x ++ s
+      function F_SP (Show_Fn : Real_Expr_Id) return Real_Expr_Id is
+         D : constant Real_Var_Id := Fresh ("d");
+         X : constant Real_Var_Id := Fresh ("x");
+         S : constant Real_Var_Id := Fresh ("s");
+      begin
+         return Lam (D, Lam (X, Lam (S,
+           Ap2 (V (Env.Append_V), Ap (Show_Fn, V (Var_Id (X))),
+                V (Var_Id (S))))));
+      end F_SP;
+
+      --  showsPrec via a precedence-aware prim: \d x s -> p d x ++ s
+      function F_SP_Prim (P : Real_Var_Id) return Real_Expr_Id is
+         D : constant Real_Var_Id := Fresh ("d");
+         X : constant Real_Var_Id := Fresh ("x");
+         S : constant Real_Var_Id := Fresh ("s");
+      begin
+         return Lam (D, Lam (X, Lam (S,
+           Ap2 (V (Env.Append_V),
+                Ap2 (V (P), V (Var_Id (D)), V (Var_Id (X))),
+                V (Var_Id (S))))));
+      end F_SP_Prim;
+
+      --  showList: \xs s -> primshowsList show xs ++ s
+      function F_SL (Show_Fn : Real_Expr_Id) return Real_Expr_Id is
+         XS : constant Real_Var_Id := Fresh ("xs");
+         S  : constant Real_Var_Id := Fresh ("s");
+      begin
+         return Lam (XS, Lam (S,
+           Ap2 (V (Env.Append_V),
+                Ap2 (V (P_ShowsL), Show_Fn, V (Var_Id (XS))),
+                V (Var_Id (S)))));
+      end F_SL;
+
+      function Has_DataCons (TC : Real_TyCon_Id) return Boolean
+      is (not M.Info (TC).Cons.Is_Empty);
+
+      --  deriving Show (Report 11.5). Builds showsPrec directly:
+      --
+      --    \d x s -> case x of
+      --      K0        -> "K0" ++ s
+      --      K a b     -> if d > 10 then "(" ++ B ++ ")" ++ s
+      --                             else B ++ s
+      --        where B = "K " ++ showsPrec 11 a "" ++ " " ++ ...
+      --      R {f = v} -> "R {f = " ++ show v ++ ", ..." (records)
+      --
+      --  Field dictionaries resolve statically: type variables map to
+      --  the derived instance's context parameters, constructors to
+      --  their instance dictionaries (applied recursively for list /
+      --  Maybe / tuple arguments).
+      procedure Derive_Show (II : Real_Instance_Id) is
+         Inst : constant Instance_Info := M.Info (II);
+
+         --  Leaf-node copy (Var/Lit): every embedding of the d / s
+         --  parameters needs a fresh node - Core must stay a tree.
+         function Fresh_Copy
+           (E : Real_Expr_Id) return Real_Expr_Id
+         is (M.Add (M.Node (E)));
+         Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
+         SP_Sel : constant Var_Id := M.Info (Cl).Methods (2).Selector;
+         Params : Var_Id_Vectors.Vector;
+
+         --  Tvs is the constructor scheme's quantifier list, whose
+         --  order matches the data declaration's type variables (and
+         --  therefore the derived instance's context parameters); the
+         --  ids themselves differ, so map positionally.
+         function Dict_For
+           (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector)
+            return Expr_Id
+         is
+            N : constant Type_Node := M.Node (T);
+         begin
+            case N.Kind is
+               when TVar_T =>
+                  for I in 1 .. Tvs.Last_Index loop
+                     if Tvs (I) = N.Tv
+                       and then I <= Params.Last_Index
+                     then
+                        return Expr_Id (V (Var_Id (Params (I))));
+                     end if;
+                  end loop;
+                  return No_Expr;
+               when TCon_T =>
+                  for SI of M.Info (Cl).Instances loop
+                     if M.Info (SI).Head = TyCon_Id (N.Con)
+                       and then M.Info (SI).Dict_Global /= No_Var
+                     then
+                        return Expr_Id (V (M.Info (SI).Dict_Global));
+                     end if;
+                  end loop;
+                  return No_Expr;
+               when TApp_T =>
+                  --  Head instance dictionary applied to the
+                  --  arguments' dictionaries.
+                  declare
+                     Head : Real_Type_Id := T;
+                     Args : Type_Id_Vectors.Vector;
+                  begin
+                     while M.Node (Head).Kind = TApp_T loop
+                        Args.Prepend (M.Node (Head).T_Arg);
+                        Head := M.Node (Head).T_Fun;
+                     end loop;
+                     if M.Node (Head).Kind /= TCon_T then
+                        return No_Expr;
+                     end if;
+                     for SI of M.Info (Cl).Instances loop
+                        if M.Info (SI).Head =
+                             TyCon_Id (M.Node (Head).Con)
+                          and then M.Info (SI).Dict_Global /= No_Var
+                        then
+                           declare
+                              Acc : Expr_Id :=
+                                Expr_Id (V (M.Info (SI).Dict_Global));
+                           begin
+                              for A of Args loop
+                                 declare
+                                    DA : constant Expr_Id :=
+                                      Dict_For (A, Tvs);
+                                 begin
+                                    if DA = No_Expr then
+                                       return No_Expr;
+                                    end if;
+                                    Acc := Expr_Id
+                                      (Ap (Real_Expr_Id (Acc),
+                                           Real_Expr_Id (DA)));
+                                 end;
+                              end loop;
+                              return Acc;
+                           end;
+                        end if;
+                     end loop;
+                     return No_Expr;
+                  end;
+               when others =>
+                  return No_Expr;
+            end case;
+         end Dict_For;
+
+         --  showsPrec 11 <field> "" as a string expression, or show
+         --  at precedence 0 for record fields.
+         function Field_S
+           (FT : Real_Type_Id; B : Real_Var_Id; Prec : Natural;
+            Tvs : TyVar_Id_Vectors.Vector)
+            return Real_Expr_Id
+         is
+            D : constant Expr_Id := Dict_For (FT, Tvs);
+            P_Lit : constant Real_Expr_Id :=
+              M.Add (Expr_Node'
+                (Kind => Lit_C, Span => Span,
+                 Lit => (Kind => L_Int,
+                         Text => Names.Name_Id
+                           (Table.Intern
+                              (Natural'Image (Prec)
+                                 (2 .. Natural'Image (Prec)'Last))))));
+         begin
+            if D = No_Expr then
+               return Err ("deriving Show: unsupported field type");
+            end if;
+            return Ap2 (Ap2 (V (SP_Sel),
+                             Real_Expr_Id (D), P_Lit),
+                        V (Var_Id (B)), Str (""));
+         end Field_S;
+
+         --  The case over constructors; D_E/S_E are embedded once.
+         function Build_Case
+           (X : Real_Var_Id; D_E, S_E : Real_Expr_Id)
+            return Real_Expr_Id
+         is
+            Alts : Alt_Id_Vectors.Vector;
+         begin
+            for DCI of M.Info (Real_TyCon_Id (Inst.Head)).Cons loop
+               declare
+                  DC : constant Real_DataCon_Id :=
+                    Real_DataCon_Id (DCI);
+                  DInfo : constant DataCon_Info := M.Info (DC);
+                  CName : constant String :=
+                    Table.Text (Names.Real_Name_Id (DInfo.Name));
+                  Sch : constant Scheme :=
+                    M.Node (Real_Scheme_Id (DInfo.Con_Scheme));
+                  FTypes : Type_Id_Vectors.Vector;
+                  Bs : Var_Id_Vectors.Vector;
+
+                  function Inner return Real_Expr_Id is
+                     Acc : Real_Expr_Id;
+                  begin
+                     if DInfo.Field_Names.Is_Empty then
+                        Acc := Str (CName & " ");
+                        for I in 1 .. FTypes.Last_Index loop
+                           declare
+                              FS : constant Real_Expr_Id :=
+                                Field_S (FTypes (I), Bs (I), 11,
+                                         Sch.Tvs);
+                           begin
+                              Acc := Ap2 (V (Env.Append_V), Acc,
+                                (if I < FTypes.Last_Index
+                                 then Ap2 (V (Env.Append_V), FS,
+                                           Str (" "))
+                                 else FS));
+                           end;
+                        end loop;
+                     else
+                        Acc := Str (CName & " {");
+                        for I in 1 .. FTypes.Last_Index loop
+                           declare
+                              Lbl : constant String :=
+                                Table.Text (Names.Real_Name_Id
+                                  (DInfo.Field_Names (I)))
+                                & " = ";
+                              FS : constant Real_Expr_Id :=
+                                Field_S (FTypes (I), Bs (I), 0,
+                                         Sch.Tvs);
+                           begin
+                              Acc := Ap2 (V (Env.Append_V), Acc,
+                                Ap2 (V (Env.Append_V), Str (Lbl),
+                                  (if I < FTypes.Last_Index
+                                   then Ap2 (V (Env.Append_V), FS,
+                                             Str (", "))
+                                   else FS)));
+                           end;
+                        end loop;
+                        Acc := Ap2 (V (Env.Append_V), Acc, Str ("}"));
+                     end if;
+                     return Acc;
+                  end Inner;
+
+                  Body_E : Real_Expr_Id;
+               begin
+                  declare
+                     T : Real_Type_Id := Real_Type_Id (Sch.S_Body);
+                  begin
+                     while M.Node (T).Kind = TFun_T loop
+                        FTypes.Append (M.Node (T).From);
+                        Bs.Append (Fresh ("b"));
+                        T := M.Node (T).To;
+                     end loop;
+                  end;
+                  if FTypes.Is_Empty then
+                     Body_E := Ap2 (V (Env.Append_V), Str (CName),
+                                    Fresh_Copy (S_E));
+                  else
+                     Body_E := Bool_Case
+                       (Ap2 (V (P_GtI), Fresh_Copy (D_E),
+                             M.Add (Expr_Node'
+                               (Kind => Lit_C, Span => Span,
+                                Lit => (Kind => L_Int,
+                                        Text => Names.Name_Id
+                                          (Table.Intern ("10")))))),
+                        Ap2 (V (Env.Append_V), Str ("("),
+                          Ap2 (V (Env.Append_V), Inner,
+                            Ap2 (V (Env.Append_V), Str (")"),
+                                 Fresh_Copy (S_E)))),
+                        Ap2 (V (Env.Append_V), Inner,
+                             Fresh_Copy (S_E)));
+                  end if;
+                  Alts.Append (M.Add (Alt_Node'
+                    (Kind => Con_Alt, Span => Span, A_Con => DC,
+                     Binders => Bs, Alt_Body => Body_E)));
+               end;
+            end loop;
+            return M.Add (Expr_Node'
+              (Kind => Case_C, Span => Span,
+               Scrutinee => V (Var_Id (X)), Alts => Alts));
+         end Build_Case;
+
+         Ms : Expr_Id_Vectors.Vector;
+         Dict : Real_Expr_Id;
+      begin
+         for CI in 1 .. Inst.Context.Last_Index loop
+            Params.Append (Fresh ("$d"));
+         end loop;
+         declare
+            X1 : constant Real_Var_Id := Fresh ("x");
+            X2 : constant Real_Var_Id := Fresh ("x");
+            D1 : constant Real_Var_Id := Fresh ("d");
+            S1 : constant Real_Var_Id := Fresh ("s");
+
+            function Show_X return Real_Expr_Id is
+               XI : constant Real_Var_Id := Fresh ("x");
+            begin
+               return Lam (XI, Build_Case
+                 (XI,
+                  M.Add (Expr_Node'
+                    (Kind => Lit_C, Span => Span,
+                     Lit => (Kind => L_Int,
+                             Text => Names.Name_Id
+                               (Table.Intern ("0"))))),
+                  Str ("")));
+            end Show_X;
+            pragma Unreferenced (X2);
+         begin
+            Ms.Append (Show_X);
+            Ms.Append (Lam (D1, Lam (X1, Lam (S1,
+              Build_Case (X1, V (Var_Id (D1)), V (Var_Id (S1)))))));
+            Ms.Append (F_SL (Show_X));
+         end;
+         Dict := Mk_Dict (M, Cl, Expr_Id_Vectors.Empty_Vector, Ms,
+                          Span);
+         for PI in reverse 1 .. Params.Last_Index loop
+            Dict := Lam (Params (PI), Dict);
+         end loop;
+         Bind (Inst.Dict_Global, Dict);
+      end Derive_Show;
 
       function Errs (Cl : Real_Class_Id;
                      Fill : Expr_Id_Vectors.Vector :=
@@ -681,53 +1005,34 @@ package body AHC.Prelude_Core is
                   elsif Cl_Id = Env.Show_Cl
                     and then Inst.Head = Env.List_TC
                   then
-                     --  show xs = "[" ++ go xs ++ "]" with the element
-                     --  show extracted from the context dictionary.
+                     --  Show a => Show [a] (Report 11.4): show
+                     --  dispatches to the ELEMENT dictionary's
+                     --  showList, so strings render as string
+                     --  literals via Show Char's showList.
                      declare
-                        Go : constant Real_Var_Id :=
-                          M.Mint_Var
-                            ((Name => Table.Intern ("$showListGo"),
-                              Span => Span, Is_Global => True,
-                              others => <>));
-                        SE : constant Real_Var_Id := Fresh ("se");
-                        XS : constant Real_Var_Id := Fresh ("xs");
-                        H : constant Real_Var_Id := Fresh ("h");
-                        T : constant Real_Var_Id := Fresh ("t");
-                        H2 : constant Real_Var_Id := Fresh ("h2");
-                        T2 : constant Real_Var_Id := Fresh ("t2");
-                        Show_Sel : constant Var_Id :=
+                        SL_Sel : constant Var_Id :=
                           M.Info (Real_Class_Id (Env.Show_Cl))
-                            .Methods (1).Selector;
+                            .Methods (3).Selector;
                         D : constant Real_Var_Id := Fresh ("$d");
-                        XS2 : constant Real_Var_Id := Fresh ("xs");
-                        Cl2 : constant Real_Class_Id :=
-                          Real_Class_Id (Cl_Id);
+
+                        --  \xs -> showList-sel d xs ""
+                        function Show_XS return Real_Expr_Id is
+                           XS : constant Real_Var_Id := Fresh ("xs");
+                        begin
+                           return Lam (XS,
+                             Ap2 (Ap (V (SL_Sel), V (Var_Id (D))),
+                                  V (Var_Id (XS)), Str ("")));
+                        end Show_XS;
+
                         Supers2 : Expr_Id_Vectors.Vector;
                         Ms2 : Expr_Id_Vectors.Vector;
                         Dict : Real_Expr_Id;
-                        Inner : Real_Expr_Id;
                      begin
-                        Inner := List_Case
-                          (V (T), Ap (V (SE), V (H)), H2, T2,
-                           Ap2 (V (Env.Append_V),
-                                Ap (V (SE), V (H)),
-                                Ap2 (V (Env.Append_V), Str (","),
-                                     Ap2 (V (Var_Id (Go)), V (SE),
-                                          V (T)))));
-                        Bind (Var_Id (Go),
-                          Lam (SE, Lam (XS, List_Case
-                            (V (XS), Str (""), H, T, Inner))));
-                        Ms2.Append
-                          (Lam (XS2,
-                             Ap2 (V (Env.Append_V), Str ("["),
-                                  Ap2 (V (Env.Append_V),
-                                       Ap2 (V (Var_Id (Go)),
-                                            Ap (V (Show_Sel),
-                                                V (D)),
-                                            V (XS2)),
-                                       Str ("]")))));
-                        Ms2.Append (Err ("showsPrec"));
-                        Dict := Mk_Dict (M, Cl2, Supers2, Ms2, Span);
+                        Ms2.Append (Show_XS);
+                        Ms2.Append (F_SP (Show_XS));
+                        Ms2.Append (F_SL (Show_XS));
+                        Dict := Mk_Dict (M, Real_Class_Id (Cl_Id),
+                                         Supers2, Ms2, Span);
                         Bind (Inst.Dict_Global, Lam (D, Dict));
                      end;
                   elsif Cl_Id = Env.Show_Cl then
@@ -735,51 +1040,94 @@ package body AHC.Prelude_Core is
                        or else Inst.Head = Env.Integer_TC
                      then
                         Ms.Append (V (P_ShowI));
+                        Ms.Append (F_SP_Prim (P_SPI));
+                        Ms.Append (F_SL (V (P_ShowI)));
                      elsif Inst.Head = Env.Char_TC then
-                        Ms.Append (V (P_ShowC));
+                        --  showList at Char is string-literal
+                        --  rendering (Report 11.4).
+                        declare
+                           XS : constant Real_Var_Id := Fresh ("xs");
+                           St : constant Real_Var_Id := Fresh ("s");
+                        begin
+                           Ms.Append (V (P_ShowC));
+                           Ms.Append (F_SP (V (P_ShowC)));
+                           Ms.Append (Lam (XS, Lam (St,
+                             Ap2 (V (Env.Append_V),
+                                  Ap (V (P_ShowStr), V (Var_Id (XS))),
+                                  V (Var_Id (St))))));
+                        end;
                      elsif Inst.Head = Env.Bool_TC then
                         Ms.Append (V (P_ShowB));
+                        Ms.Append (F_SP (V (P_ShowB)));
+                        Ms.Append (F_SL (V (P_ShowB)));
                      elsif Inst.Head = Env.Double_TC
                        or else Inst.Head = Env.Float_TC
                      then
                         Ms.Append (V (P_ShowD));
+                        Ms.Append (F_SP_Prim (P_SPD));
+                        Ms.Append (F_SL (V (P_ShowD)));
                      elsif Inst.Head = Env.Unit_TC then
                         declare
-                           U : constant Real_Var_Id := Fresh ("u");
+                           function Show_U return Real_Expr_Id is
+                              U : constant Real_Var_Id := Fresh ("u");
+                           begin
+                              return Lam (U, Str ("()"));
+                           end Show_U;
                         begin
-                           Ms.Append (Lam (U, Str ("()")));
+                           Ms.Append (Show_U);
+                           Ms.Append (F_SP (Show_U));
+                           Ms.Append (F_SL (Show_U));
                         end;
                      elsif Inst.Head = Env.Ordering_TC then
-                        --  case o of LT -> "LT"; EQ -> "EQ"; _ -> "GT"
                         declare
-                           O : constant Real_Var_Id := Fresh ("o");
-                           Alts : Alt_Id_Vectors.Vector;
-                        begin
-                           Alts.Append (M.Add (Alt_Node'
-                             (Kind => Con_Alt, Span => Span,
-                              A_Con => Ordering_LT,
-                              Binders => Var_Id_Vectors.Empty_Vector,
-                              Alt_Body => Str ("LT"))));
-                           Alts.Append (M.Add (Alt_Node'
-                             (Kind => Con_Alt, Span => Span,
-                              A_Con => Ordering_LT + 1,
-                              Binders => Var_Id_Vectors.Empty_Vector,
-                              Alt_Body => Str ("EQ"))));
-                           Alts.Append (M.Add (Alt_Node'
-                             (Kind => Default_Alt, Span => Span,
-                              Alt_Body => Str ("GT"))));
-                           Ms.Append
-                             (Lam (O, M.Add (Expr_Node'
+                           --  case o of LT -> "LT"; EQ -> "EQ";
+                           --  _ -> "GT"
+                           function Show_O return Real_Expr_Id is
+                              O : constant Real_Var_Id := Fresh ("o");
+                              Alts : Alt_Id_Vectors.Vector;
+                           begin
+                              Alts.Append (M.Add (Alt_Node'
+                                (Kind => Con_Alt, Span => Span,
+                                 A_Con => Ordering_LT,
+                                 Binders =>
+                                   Var_Id_Vectors.Empty_Vector,
+                                 Alt_Body => Str ("LT"))));
+                              Alts.Append (M.Add (Alt_Node'
+                                (Kind => Con_Alt, Span => Span,
+                                 A_Con => Ordering_LT + 1,
+                                 Binders =>
+                                   Var_Id_Vectors.Empty_Vector,
+                                 Alt_Body => Str ("EQ"))));
+                              Alts.Append (M.Add (Alt_Node'
+                                (Kind => Default_Alt, Span => Span,
+                                 Alt_Body => Str ("GT"))));
+                              return Lam (O, M.Add (Expr_Node'
                                 (Kind => Case_C, Span => Span,
                                  Scrutinee => V (Var_Id (O)),
-                                 Alts => Alts))));
+                                 Alts => Alts)));
+                           end Show_O;
+                        begin
+                           Ms.Append (Show_O);
+                           Ms.Append (F_SP (Show_O));
+                           Ms.Append (F_SL (Show_O));
                         end;
+                     elsif Has_DataCons (Real_TyCon_Id (Inst.Head))
+                     then
+                        --  deriving Show (Report 11.5): per-
+                        --  constructor showsPrec with fields at
+                        --  precedence 11, record syntax for labelled
+                        --  constructors.
+                        Derive_Show (Real_Instance_Id (II));
                      else
                         Ms.Append (Err ("show: no runtime for this"
                                         & " type yet"));
                      end if;
-                     Give_Dict (Real_Instance_Id (II), Errs (Cl,
-                                Fill => Ms));
+                     if Ms.Is_Empty then
+                        null;   --  Derive_Show bound the dictionary
+                     else
+                        Give_Dict (Real_Instance_Id (II), Errs (Cl,
+                                   Fill => Ms));
+                     end if;
                   elsif Cl_Id = Env.Enum_Cl
                     and then (Inst.Head = Env.Int_TC
                               or else Inst.Head =
@@ -788,14 +1136,24 @@ package body AHC.Prelude_Core is
                      declare
                         Fill : Expr_Id_Vectors.Vector;
                      begin
-                        Fill.Append (Err ("succ"));
-                        Fill.Append (Err ("pred"));
-                        Fill.Append (Err ("toEnum"));
-                        Fill.Append (Err ("fromEnum"));
+                        Fill.Append (V (P_Succ));
+                        Fill.Append (V (P_Pred));
+                        declare
+                           N : constant Real_Var_Id := Fresh ("n");
+                        begin
+                           Fill.Append (Lam (N, V (Var_Id (N))));
+                           --  toEnum at Int is the identity ...
+                        end;
+                        declare
+                           N : constant Real_Var_Id := Fresh ("n");
+                        begin
+                           Fill.Append (Lam (N, V (Var_Id (N))));
+                           --  ... and so is fromEnum.
+                        end;
                         Fill.Append (V (P_EnumF));
-                        Fill.Append (Err ("enumFromThen"));
+                        Fill.Append (V (P_EnumFTh));
                         Fill.Append (V (P_EnumFT));
-                        Fill.Append (Err ("enumFromThenTo"));
+                        Fill.Append (V (P_EnumFTT));
                         Give_Dict (Real_Instance_Id (II), Fill);
                      end;
                   elsif Cl_Id = Env.Monad_Cl

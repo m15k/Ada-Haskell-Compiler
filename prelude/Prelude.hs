@@ -162,6 +162,39 @@ even n = n `mod` 2 == 0
 odd :: Int -> Bool
 odd n = not (even n)
 
+span :: (a -> Bool) -> [a] -> ([a], [a])
+span p xs = (takeWhile p xs, dropWhile p xs)
+
+break :: (a -> Bool) -> [a] -> ([a], [a])
+break p xs = span (\x -> not (p x)) xs
+
+splitAt :: Int -> [a] -> ([a], [a])
+splitAt n xs = (take n xs, drop n xs)
+
+unzip :: [(a, b)] -> ([a], [b])
+unzip xs = (map fst xs, map snd xs)
+
+foldr1 :: (a -> a -> a) -> [a] -> a
+foldr1 _ [x] = x
+foldr1 f (x : xs) = f x (foldr1 f xs)
+foldr1 _ [] = error "foldr1: empty list"
+
+foldl1 :: (a -> a -> a) -> [a] -> a
+foldl1 f (x : xs) = foldl f x xs
+foldl1 _ [] = error "foldl1: empty list"
+
+lines :: String -> [String]
+lines [] = []
+lines s = case break (== '\n') s of
+  (l, [])      -> [l]
+  (l, _ : r)   -> l : lines r
+
+words :: String -> [String]
+words s = case dropWhile (== ' ') s of
+  [] -> []
+  t  -> case break (== ' ') t of
+    (w, r) -> w : words r
+
 until :: (a -> Bool) -> (a -> a) -> a -> a
 until p f x = if p x then x else until p f (f x)
 
@@ -172,12 +205,16 @@ instance (Show a, Show b, Show c, Show d, Show e)
   show (a, b, c, d, e) =
     "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
         ++ show d ++ "," ++ show e ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b, Show c, Show d, Show e, Show f)
     => Show (a, b, c, d, e, f) where
   show (a, b, c, d, e, f) =
     "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
         ++ show d ++ "," ++ show e ++ "," ++ show f ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b, Show c, Show d, Show e, Show f, Show g)
     => Show (a, b, c, d, e, f, g) where
@@ -185,31 +222,58 @@ instance (Show a, Show b, Show c, Show d, Show e, Show f, Show g)
     "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
         ++ show d ++ "," ++ show e ++ "," ++ show f ++ ","
         ++ show g ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b, Show c) => Show (a, b, c) where
   show (a, b, c) =
     "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b, Show c, Show d) => Show (a, b, c, d) where
   show (a, b, c, d) =
     "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ","
         ++ show d ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b) => Show (a, b) where
   show (a, b) = "(" ++ show a ++ "," ++ show b ++ ")"
+  showsPrec _ x s = show x ++ s
+  showList xs s = showsList_ xs s
 
-showConArg :: Show a => a -> String
-showConArg x = if needsParen s then "(" ++ s ++ ")" else s
-  where
-    s = show x
-    needsParen t = case t of
-      []       -> False
-      (c : cs) -> c == '-' || elem ' ' t
+showParen :: Bool -> (String -> String) -> String -> String
+showParen b p s = if b then "(" ++ p (")" ++ s) else p s
+
+showString :: String -> String -> String
+showString x s = x ++ s
+
+shows :: Show a => a -> String -> String
+shows x s = showsPrec 0 x s
+
+showsList_ :: Show a => [a] -> String -> String
+showsList_ xs s = "[" ++ goSL xs ("]" ++ s)
+
+goSL :: Show a => [a] -> String -> String
+goSL [] s = s
+goSL (x : r) s = show x ++ restSL r s
+
+restSL :: Show a => [a] -> String -> String
+restSL [] s = s
+restSL (x : r) s = "," ++ show x ++ restSL r s
 
 instance Show a => Show (Maybe a) where
-  show Nothing = "Nothing"
-  show (Just x) = "Just " ++ showConArg x
+  showsPrec _ Nothing s = "Nothing" ++ s
+  showsPrec d (Just x) s =
+    showParen (d > 10) (\t -> "Just " ++ showsPrec 11 x t) s
+  show x = showsPrec 0 x ""
+  showList xs s = showsList_ xs s
 
 instance (Show a, Show b) => Show (Either a b) where
-  show (Left x) = "Left " ++ showConArg x
-  show (Right y) = "Right " ++ showConArg y
+  showsPrec d (Left x) s =
+    showParen (d > 10) (\t -> "Left " ++ showsPrec 11 x t) s
+  showsPrec d (Right y) s =
+    showParen (d > 10) (\t -> "Right " ++ showsPrec 11 y t) s
+  show x = showsPrec 0 x ""
+  showList xs s = showsList_ xs s
