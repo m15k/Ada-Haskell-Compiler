@@ -25,6 +25,7 @@ package body AHC.Parser is
       Minus_Name : constant Names.Real_Name_Id := Table.Intern ("-");
       Satisfying_Name : constant Names.Real_Name_Id :=
         Table.Intern ("satisfying");
+      Mod_Name : constant Names.Real_Name_Id := Table.Intern ("mod");
       Bang_Name  : constant Names.Real_Name_Id := Table.Intern ("!");
       Unit_Name  : constant Names.Real_Name_Id := Table.Intern ("()");
       Nil_Name   : constant Names.Real_Name_Id := Table.Intern ("[]");
@@ -127,6 +128,13 @@ package body AHC.Parser is
       function At_Satisfying return Boolean
       is (Tok.Kind = Varid and then Tok.Qualifier = Names.No_Name
           and then Tok.Name = Satisfying_Name);
+
+      --  Likewise 'mod', but only when an integer literal follows, so
+      --  'T mod a' still parses as a type application.
+      function At_Modular return Boolean
+      is (Tok.Kind = Varid and then Tok.Qualifier = Names.No_Name
+          and then Tok.Name = Mod_Name
+          and then Peek (1).Kind = Int_Lit);
 
       --  Operators usable in expression chains, including the reserved
       --  cons ':' (an operator everywhere except declarations heads).
@@ -325,7 +333,9 @@ package body AHC.Parser is
          Span   : constant Diagnostics.Source_Span := Tok.Span;
          Result : Real_Type_Id := Parse_AType;
       begin
-         while Can_Start_AType and then not At_Satisfying loop
+         while Can_Start_AType
+           and then not At_Satisfying and then not At_Modular
+         loop
             Result := Arena.Add
               (Type_Node'(Kind => App_T, Span => Span,
                           Fun => Result, Arg => Parse_AType));
@@ -411,6 +421,17 @@ package body AHC.Parser is
                  (Type_Node'(Kind => Pred_T, Span => Span,
                              P_Base => Result, P_Expr => P,
                              P_Name => P_Name));
+            end;
+         elsif At_Modular then
+            Advance;   --  'mod'
+            declare
+               M_Text : constant Names.Name_Id :=
+                 Names.Name_Id (Tok.Int_Text);
+            begin
+               Advance;   --  the literal
+               Result := Arena.Add
+                 (Type_Node'(Kind => Mod_T, Span => Span,
+                             M_Base => Result, M_Text => M_Text));
             end;
          end if;
          if At_K (Fat_Arrow) then

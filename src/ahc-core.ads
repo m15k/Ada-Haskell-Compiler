@@ -61,7 +61,7 @@ package AHC.Core is
    subtype Real_Refinement_Id is
      Refinement_Id range 1 .. Refinement_Id'Last;
 
-   type Refinement_Kind is (Range_R, Pred_R);
+   type Refinement_Kind is (Range_R, Pred_R, Mod_R);
 
    No_Var    : constant Var_Id    := 0;
    No_TyCon  : constant TyCon_Id  := 0;
@@ -91,6 +91,13 @@ package AHC.Core is
          when Pred_R =>
             Pred_Var : Real_Var_Id;
             P_Name   : Names.Name_Id := Names.No_Name;
+         when Mod_R =>
+            --  Stage 3: wraparound arithmetic. Unlike Range_R/Pred_R
+            --  this is not a contract but a coercion - values crossing
+            --  a declared `Int mod N` boundary are normalized into
+            --  [0, N) with mathematical mod, so it survives
+            --  --unchecked.
+            Modulus : Long_Long_Integer;
       end case;
    end record;
 
@@ -433,7 +440,8 @@ package AHC.Core is
       return Real_Refinement_Id
      with Pre  => (case R.Kind is
                      when Range_R => R.Lo <= R.Hi,
-                     when Pred_R  => R.Pred_Var <= M.Last_Var),
+                     when Pred_R  => R.Pred_Var <= M.Last_Var,
+                     when Mod_R   => R.Modulus >= 1),
           Post => Add'Result = M.Last_Refinement;
 
    --  Entity minting (no structural invariants beyond a real name

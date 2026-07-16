@@ -282,6 +282,9 @@ package body AHC.Syntax.Printer is
             when Pred_T =>
                return "(satisfying " & Type_S (N.P_Base) & " "
                  & Expr_S (N.P_Expr) & ")";
+            when Mod_T =>
+               return "(mod " & Type_S (N.M_Base) & " "
+                 & NM (N.M_Text) & ")";
          end case;
       end Type_S;
 

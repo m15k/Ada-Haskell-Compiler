@@ -449,6 +449,15 @@ void ahc_run_main(AhcNode *main_io) {
 
 /* ----- globals ---------------------------------------------------- */
 
+/* Refinement-types extension, stage 3: modular normalization. Not a
+   contract - values crossing an `Int mod N` boundary wrap into
+   [0, N) with mathematical mod (result is never negative). */
+static AhcNode *p_wrap_mod(AhcNode *n, AhcNode *x) {
+  long m = ahc_eval(n)->u.i;
+  long v = ahc_eval(x)->u.i;
+  return ahc_mk_int(((v % m) + m) % m);
+}
+
 /* Refinement-types extension, stage 2: lazily-fired predicate check.
    p is the compiled `$pred :: BASE -> Bool` global; fires like the
    range check, when the refined value is first demanded. */
@@ -503,7 +512,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
-  *ahc_prim_check_range, *ahc_prim_check_pred;
+  *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -546,4 +555,5 @@ void ahc_rts_init(void) {
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
+  ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
 }

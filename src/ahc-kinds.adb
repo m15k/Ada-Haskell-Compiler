@@ -570,6 +570,67 @@ package body AHC.Kinds is
                      end;
                   end;
                end;
+
+            when Mod_T =>
+               declare
+                  RB : Core.Type_Id;
+                  KB : Core.Kind_Id;
+               begin
+                  Convert (N.M_Base, TvEnv, Order, Implicit, Depth,
+                           RB, KB);
+                  if RB = Core.No_Type then
+                     return;
+                  end if;
+                  KUnify (Core.Real_Kind_Id (KB), Star_K, N.Span);
+                  declare
+                     BN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (RB));
+                  begin
+                     if BN.Kind /= Core.TCon_T
+                       or else (Core.TyCon_Id (BN.Con) /= Env.Int_TC
+                                and then Core.TyCon_Id (BN.Con) /=
+                                  Env.Integer_TC)
+                     then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "modular types are only supported"
+                                 & " on Int and Integer");
+                        return;
+                     end if;
+                     if BN.Refine /= Core.No_Refinement then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "a type cannot carry two"
+                                 & " refinements");
+                        return;
+                     end if;
+                     if In_Data_Fields then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "refined types in data declarations"
+                                 & " are not yet supported");
+                        return;
+                     end if;
+                     declare
+                        Modulus : constant Long_Long_Integer :=
+                          Bound_Value (N.M_Text, False);
+                     begin
+                        if Modulus < 1 then
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Kind_Error, N.Span,
+                                    "modulus must be at least 1");
+                           return;
+                        end if;
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TCon_T, Con => BN.Con,
+                              Refine => Core.Refinement_Id
+                                (M.Add (Core.Refinement_Info'
+                                   (Kind => Core.Mod_R,
+                                    Modulus => Modulus))))));
+                     end;
+                  end;
+               end;
          end case;
       end Convert;
 

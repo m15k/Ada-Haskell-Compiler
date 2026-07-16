@@ -1,0 +1,3 @@
+shift :: (Int mod 12) -> Int -> Int mod 12
+sumBytes :: (Int mod 256) -> (Int mod 256) -> Int mod 256
+modmap :: (a b -> a b) -> a b -> a b

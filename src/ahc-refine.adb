@@ -13,6 +13,7 @@ package body AHC.Refine is
    is
       Check_Prim : Var_Id := No_Var;   --  minted on first use
       Pred_Prim  : Var_Id := No_Var;
+      Mod_Prim   : Var_Id := No_Var;
 
       function Mint_Prim
         (Name, Symbol : String; Cache : in out Var_Id)
@@ -36,6 +37,19 @@ package body AHC.Refine is
       function PPrim return Real_Var_Id
       is (Mint_Prim ("$checkPred", "ahc_prim_check_pred",
                      Pred_Prim));
+
+      function MPrim return Real_Var_Id
+      is (Mint_Prim ("$wrapMod", "ahc_prim_wrap_mod", Mod_Prim));
+
+      --  Whether refinement R rewrites this compilation. Range and
+      --  predicate checks are contracts (skipped when checks are
+      --  disabled); modular wrapping is arithmetic semantics and is
+      --  always applied.
+      function Active (R : Refinement_Id) return Boolean
+      is (R /= No_Refinement
+          and then (Checks_Enabled
+                    or else M.Info (Real_Refinement_Id (R)).Kind =
+                              Mod_R));
 
       function Refinement_Of (T : Real_Type_Id) return Refinement_Id is
          N : constant Type_Node := M.Node (T);
@@ -88,6 +102,12 @@ package body AHC.Refine is
                                         Arg => M.Add (Expr_Node'
                                           (Kind => Var_C, Span => Span,
                                            V => Info.Pred_Var))));
+            when Mod_R =>
+               Acc := M.Add (Expr_Node'(Kind => Var_C, Span => Span,
+                                        V => MPrim));
+               Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
+                                        Fun => Acc,
+                                        Arg => Lit (Info.Modulus)));
          end case;
          return M.Add (Expr_Node'(Kind => App_C, Span => Span,
                                   Fun => Acc, Arg => E));
@@ -135,7 +155,7 @@ package body AHC.Refine is
                                    V => Params (I)));
                R : constant Refinement_Id := Refinement_Of (Args (I));
             begin
-               if R /= No_Refinement then
+               if Active (R) then
                   A := Check_E (Real_Refinement_Id (R), A, Span);
                end if;
                Core_E := M.Add
@@ -146,7 +166,7 @@ package body AHC.Refine is
          declare
             R : constant Refinement_Id := Refinement_Of (Result);
          begin
-            if R /= No_Refinement then
+            if Active (R) then
                Core_E := Check_E (Real_Refinement_Id (R), Core_E, Span);
             end if;
          end;
@@ -219,10 +239,6 @@ package body AHC.Refine is
       end Rewrite_Bind;
 
    begin
-      if not Checks_Enabled then
-         return;
-      end if;
-
       for C in Sigs.Iterate loop
          declare
             V      : constant Real_Var_Id := Kinds.Sig_Maps.Key (C);
@@ -241,9 +257,9 @@ package body AHC.Refine is
                      Result := M.Node (Result).To;
                   end loop;
                   Refined :=
-                    Refinement_Of (Result) /= No_Refinement
+                    Active (Refinement_Of (Result))
                     or else (for some A of Args =>
-                               Refinement_Of (A) /= No_Refinement);
+                               Active (Refinement_Of (A)));
                   if Refined then
                      Rewrite_Bind (V, Sch, Args, Result);
                   end if;

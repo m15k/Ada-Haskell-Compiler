@@ -232,7 +232,7 @@ package AHC.Syntax is
 
    type Type_Kind is
      (Var_T, Con_T, App_T, Fun_T, List_T, Tuple_T, Qual_T, Refined_T,
-      Pred_T);
+      Pred_T, Mod_T);
 
    type Type_Node (Kind : Type_Kind := Var_T) is record
       Span : Diagnostics.Source_Span;
@@ -269,6 +269,11 @@ package AHC.Syntax is
             P_Base : Real_Type_Id;
             P_Expr : Real_Expr_Id;
             P_Name : Names.Name_Id := Names.No_Name;
+         when Mod_T =>
+            --  Refinement-types extension, stage 3: BASE mod N with an
+            --  integer-literal modulus (wraparound arithmetic).
+            M_Base : Real_Type_Id;
+            M_Text : Names.Name_Id;
       end case;
    end record;
 

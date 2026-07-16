@@ -1,9 +1,10 @@
 # Design Note: Ada-Style Refinement Types as an AHC Extension
 
-**Status:** stages 1 and 2 IMPLEMENTED (July 2026) — integer range
-refinements on Int/Integer and arbitrary boolean predicate
-refinements on any nullary base type, with lazily-fired runtime
-checks at signature and annotation boundaries; see "As built" below.
+**Status:** stages 1-3 IMPLEMENTED (July 2026) — integer range
+refinements, arbitrary boolean predicate refinements on any nullary
+base type (both lazily-checked contracts), and modular types with
+wraparound arithmetic (a boundary coercion, not a check); see "As
+built" below.
 **Date:** July 2026.
 **Prompted by:** the observation that Ada can define types GHC cannot,
 and that an Ada-implemented Haskell compiler is uniquely positioned to
@@ -55,7 +56,7 @@ PRD 4.2:
 The extension proposal is to let *Haskell programs compiled by AHC* say
 the same kinds of things.
 
-## 2a. Stages 1 and 2 as built
+## 2a. Stages 1-3 as built
 
 Shipped with the refinement-types milestones (M23-M25), directly on
 the two Phase 2 design rules (the reserved `Refine` slot on Core
@@ -108,7 +109,22 @@ the two Phase 2 design rules (the reserved `Refine` slot on Core
   assumed total and effect-free (its `BASE -> Bool` type rules out
   IO but not divergence) - the same obligation Ada places on
   `Dynamic_Predicate`.
-- **Limits (both stages):** enforcement only at the direct
+- **Stage 3 — modular types (M29-M30):** `Int mod N` (Int/Integer,
+  literal modulus >= 1), Ada's wraparound arithmetic recast for the
+  erasure design: a modular refinement is a COERCION, not a
+  contract - every value crossing a declared `Int mod N` boundary is
+  normalized into `[0, N)` with mathematical mod (never negative:
+  `shift 3 (-7) :: Int mod 12` is 8), via `ahc_prim_wrap_mod` at the
+  same eta-wrapper positions as checks. Intermediate arithmetic is
+  plain Int; annotate the boundary and the result wraps -
+  `(25 :: Int mod 12)` is 1, and a `Byte -> Byte` increment of 255
+  is 0. Because wrapping is semantics rather than validation, it
+  SURVIVES `--unchecked` (exactly as Ada's release mode keeps
+  modular arithmetic while dropping contracts). `mod` is contextual
+  only when an integer literal follows, so `m mod` remains a valid
+  type application and value-level `\`mod\`` is untouched. Stacking
+  with ranges/predicates is rejected.
+- **Limits (all stages):** enforcement only at the direct
   argument/result positions of declared signatures and `::`
   annotations; refinements nested under constructors
   (`[Int in 0 .. 9]`) or on class-method signatures typecheck but

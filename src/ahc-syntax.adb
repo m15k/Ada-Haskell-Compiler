@@ -160,6 +160,9 @@ package body AHC.Syntax is
               and then N.Hi_Text /= Names.No_Name;
          when Pred_T =>
             return Ok (A, N.P_Base) and then Ok (A, N.P_Expr);
+         when Mod_T =>
+            return Ok (A, N.M_Base)
+              and then N.M_Text /= Names.No_Name;
       end case;
    end Well_Formed;
 

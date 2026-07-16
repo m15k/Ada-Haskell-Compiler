@@ -289,6 +289,8 @@ package body AHC.Rename is
             when Pred_T =>
                Rename_Type (N.P_Base);
                Rename_Expr (N.P_Expr);
+            when Mod_T =>
+               Rename_Type (N.M_Base);
          end case;
       end Rename_Type;
 

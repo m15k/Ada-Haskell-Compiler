@@ -1,0 +1,4 @@
+tests/golden/check_modular_errors.hs:10:15: error: refined types in data declarations are not yet supported
+tests/golden/check_modular_errors.hs:4:6: error: modulus must be at least 1
+tests/golden/check_modular_errors.hs:7:6: error: a type cannot carry two refinements
+tests/golden/check_modular_errors.hs:1:6: error: modular types are only supported on Int and Integer

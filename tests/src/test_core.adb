@@ -276,6 +276,21 @@ package body Test_Core is
                "(tcon Int satisfying even)",
                "predicate refined type image");
          end;
+
+         --  Stage 3: modular refinements store the modulus.
+         declare
+            MR : constant Real_Refinement_Id :=
+              M.Add (Refinement_Info'(Kind => Mod_R, Modulus => 12));
+            MT : constant Real_Type_Id :=
+              M.Add (Type_Node'(Kind => TCon_T, Con => Int_TC,
+                                Refine => Refinement_Id (MR)));
+         begin
+            Check (M.Info (MR).Modulus = 12,
+                   "modular refinement stores its modulus");
+            Check_Equal
+              (AHC.Core.Printer.Type_Image (M, Table, MT),
+               "(tcon Int mod 12)", "modular type image");
+         end;
       end;
    end Run;
 

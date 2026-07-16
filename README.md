@@ -58,15 +58,19 @@ AHC.Builtins / AHC.Prelude_Core.
 
 Extension - Ada-style refinement types
 (`docs/refinement-types-design-note.md`): ranges `type Percent = Int
-in 0 .. 100` and predicates `type Nat = Int satisfying (\n -> n >=
-0)` / `Color satisfying isWarm` (any nullary base type; predicates
-are ordinary typechecked Haskell compiled to hidden top-level
-functions, so class-constrained predicates like `even` just work).
+in 0 .. 100`, predicates `type Nat = Int satisfying (\n -> n >= 0)`
+/ `Color satisfying isWarm` (any nullary base type; predicates are
+ordinary typechecked Haskell compiled to hidden top-level functions,
+so class-constrained predicates like `even` just work), and modular
+types `type Clock = Int mod 12` with Ada-style wraparound - values
+crossing a declared boundary normalize into `[0, N)`, so
+`(25 :: Clock)` is 1 and incrementing a `Byte` past 255 wraps to 0.
 Refined types are erased for unification (transparent arithmetic, no
-smart constructors) and enforced by lazily-fired checks at signature
-and annotation boundaries; `ahc emit --unchecked` (or
-`AHC_UNCHECKED=1 scripts/ahc-build.sh`) compiles the checks out,
-mirroring Ada's release-mode contract policy.
+smart constructors); ranges and predicates are lazily-fired checks
+at signature and annotation boundaries, and `ahc emit --unchecked`
+(or `AHC_UNCHECKED=1 scripts/ahc-build.sh`) compiles the checks out,
+mirroring Ada's release-mode contract policy - modular wrapping is
+arithmetic semantics, not a check, so it is always applied.
 
 Remaining gaps: Double/Rational arithmetic and Integer bignum (Int is
 a C long), the Integral class proper, pattern guards, multi-module

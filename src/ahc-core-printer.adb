@@ -41,7 +41,10 @@ package body AHC.Core.Printer is
                     else Table.Text
                            (Names.Real_Name_Id
                               (M.Info (Real_Refinement_Id
-                                         (R)).P_Name)))));
+                                         (R)).P_Name))),
+               when Mod_R =>
+                 " mod "
+                 & LImg (M.Info (Real_Refinement_Id (R)).Modulus)));
 
    function Lit_Image
      (Table : Names.Name_Table; L : Literal) return String
