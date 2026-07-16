@@ -68,7 +68,10 @@ crossing a declared boundary normalize into `[0, N)`, so
 Ranges also work on Double (`type Latitude = Double in -90.0 ..
 90.0`), backed by a now-working Double runtime: Num/Fractional/Show
 at Double are real (`print (7 / 2 :: Double)` prints 3.5), with
-Rational and the Floating class still open.
+Rational and the Floating class still open. Refined types are legal
+in data/newtype fields (`data Port = Port (Int in 1 .. 65535)`) -
+every construction site checks (or, for `mod` fields, normalizes)
+the stored value; reads trust the constructor-established invariant.
 Refined types are erased for unification (transparent arithmetic, no
 smart constructors); ranges and predicates are lazily-fired checks
 at signature and annotation boundaries, and `ahc emit --unchecked`

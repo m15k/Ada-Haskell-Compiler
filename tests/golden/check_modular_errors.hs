@@ -6,5 +6,3 @@ g = 1
 
 h :: (Int mod 5) in 0 .. 3
 h = 2
-
-data T = MkT (Int mod 7)

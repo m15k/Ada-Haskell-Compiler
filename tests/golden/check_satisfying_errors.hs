@@ -5,5 +5,3 @@ f = 1
 
 g :: Maybe satisfying even
 g = Nothing
-
-data T = MkT (Int satisfying even)

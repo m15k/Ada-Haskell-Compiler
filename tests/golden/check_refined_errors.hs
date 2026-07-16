@@ -3,5 +3,3 @@ f = True
 
 g :: Int in 9 .. 3
 g = 4
-
-data T = MkT (Int in 0 .. 5)

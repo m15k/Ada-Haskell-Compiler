@@ -146,13 +146,26 @@ the two Phase 2 design rules (the reserved `Refine` slot on Core
   normalization for whole values, Eq/Ord via the structural
   comparator. `print 1.5` defaults Fractional to Double per Report
   4.3.4 and just works.
+- **Constructor-site checks (M33):** refined types are now legal in
+  data and newtype fields - the note's `newtype Port = Port (Int in
+  1 .. 65535)` example works. Every occurrence of a constructor
+  whose fields carry refinements is eta-wrapped by AHC.Refine, so
+  the check (or, for `mod` fields, the normalization) rides each
+  refined field's thunk: saturated construction, partial application
+  (`map Port ports`), record syntax and record update all route
+  through the same rewrite. Field READS are not re-checked - the
+  invariant is established at construction; a `Volume (Int mod 256)`
+  field stores normalized. Checks fire when the field is first
+  demanded, and `--unchecked` drops field contracts while keeping
+  modular field normalization, exactly as at signature boundaries.
 - **Limits (all stages):** enforcement only at the direct
-  argument/result positions of declared signatures and `::`
-  annotations; refinements nested under constructors
-  (`[Int in 0 .. 9]`) or on class-method signatures typecheck but
-  are not runtime-checked; unused (never-demanded) arguments are
-  never checked - that IS the lazy semantics; no compile-time
-  constant checking yet.
+  argument/result positions of declared signatures, `::`
+  annotations, and constructor fields; refinements nested under
+  other constructors (`[Int in 0 .. 9]`, a refined type inside a
+  field's list) or on class-method signatures typecheck but are not
+  runtime-checked; unused (never-demanded) values are never
+  checked - that IS the lazy semantics; no compile-time constant
+  checking yet.
 
 ## 3. Sketch of the extension (`{-# LANGUAGE AdaRefinements #-}`, working name)
 

@@ -126,11 +126,6 @@ package body AHC.Kinds is
         return Core.Real_Kind_Id
       is (Core.Real_Kind_Id (M.Info (TC).TC_Kind));
 
-      --  Refinement checks are inserted only at signature/annotation
-      --  boundaries (AHC.Refine); a refined data field would be a
-      --  silently unenforced promise, so reject it for now.
-      In_Data_Fields : Boolean := False;
-
       --  Value of an integer literal lexeme (dec/hex/oct), signed.
       function Bound_Value
         (Text : Names.Name_Id; Neg : Boolean) return Long_Long_Integer
@@ -495,13 +490,6 @@ package body AHC.Kinds is
                                  & " refinements");
                         return;
                      end if;
-                     if In_Data_Fields then
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Kind_Error, N.Span,
-                                 "refined types in data declarations"
-                                 & " are not yet supported");
-                        return;
-                     end if;
                      if Core.TyCon_Id (BN.Con) = Env.Double_TC
                        or else Core.TyCon_Id (BN.Con) = Env.Float_TC
                      then
@@ -589,13 +577,6 @@ package body AHC.Kinds is
                                  & " refinements");
                         return;
                      end if;
-                     if In_Data_Fields then
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Kind_Error, N.Span,
-                                 "refined types in data declarations"
-                                 & " are not yet supported");
-                        return;
-                     end if;
                      --  Hidden top-level predicate binder with the
                      --  signature BASE -> Bool; the desugarer supplies
                      --  its body from the pending list, and the
@@ -668,13 +649,6 @@ package body AHC.Kinds is
                                  Diagnostics.Kind_Error, N.Span,
                                  "a type cannot carry two"
                                  & " refinements");
-                        return;
-                     end if;
-                     if In_Data_Fields then
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Kind_Error, N.Span,
-                                 "refined types in data declarations"
-                                 & " are not yet supported");
                         return;
                      end if;
                      declare
@@ -858,9 +832,7 @@ package body AHC.Kinds is
                   R : Core.Type_Id;
                   K : Core.Kind_Id;
                begin
-                  In_Data_Fields := True;
                   Convert (T, TvEnv, Order, False, 0, R, K);
-                  In_Data_Fields := False;
                   if R /= Core.No_Type then
                      KUnify (Core.Real_Kind_Id (K), Star_K, CN.Span);
                      Field_Types.Append (Core.Real_Type_Id (R));

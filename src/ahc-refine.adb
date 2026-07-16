@@ -298,6 +298,110 @@ package body AHC.Refine is
             end if;
          end;
       end loop;
+
+      --  Constructor-site checks: every occurrence of a data
+      --  constructor whose fields carry refinements is eta-wrapped so
+      --  the check (or modular normalization) rides each refined
+      --  field's thunk - construction sites, partial applications,
+      --  record syntax and record update all route through Con_C.
+      --  Field reads are not re-checked: the invariant is established
+      --  here. Only expressions existing before this sweep are
+      --  rewritten; nodes minted by the rewrites are beyond Snapshot.
+      declare
+         Snapshot : constant Expr_Id := M.Last_Expr;
+
+         --  Refined field positions of DC's Con_Scheme spine, empty
+         --  if none are active.
+         function Field_Refs
+           (DC : Real_DataCon_Id) return Type_Id_Vectors.Vector
+         is
+            Empty : Type_Id_Vectors.Vector;
+            Sch_Id : constant Scheme_Id := M.Info (DC).Con_Scheme;
+            Fields : Type_Id_Vectors.Vector;
+            Any : Boolean := False;
+         begin
+            if Sch_Id = No_Scheme then
+               return Empty;
+            end if;
+            declare
+               T : Real_Type_Id :=
+                 M.Node (Real_Scheme_Id (Sch_Id)).S_Body;
+            begin
+               while M.Node (T).Kind = TFun_T loop
+                  Fields.Append (M.Node (T).From);
+                  Any := Any or else Active (Refinement_Of
+                                               (M.Node (T).From));
+                  T := M.Node (T).To;
+               end loop;
+            end;
+            return (if Any then Fields else Empty);
+         end Field_Refs;
+      begin
+         for EI in 1 .. Natural (Snapshot) loop
+            declare
+               N : constant Expr_Node := M.Node (Real_Expr_Id (EI));
+            begin
+               if N.Kind = Con_C then
+                  declare
+                     Fields : constant Type_Id_Vectors.Vector :=
+                       Field_Refs (N.Con);
+                     Span : constant Diagnostics.Source_Span := N.Span;
+                     DC : constant Real_DataCon_Id := N.Con;
+                  begin
+                     if not Fields.Is_Empty then
+                        declare
+                           Params : Var_Id_Vectors.Vector;
+                           Core_E : Real_Expr_Id;
+                        begin
+                           for I in 1 .. Fields.Last_Index loop
+                              Params.Append
+                                (M.Mint_Var
+                                   ((Name => Table.Intern ("$rf"),
+                                     Span => Span, others => <>)));
+                           end loop;
+                           Core_E := M.Add
+                             (Expr_Node'(Kind => Con_C, Span => Span,
+                                         Con => DC));
+                           for I in 1 .. Fields.Last_Index loop
+                              declare
+                                 A : Real_Expr_Id :=
+                                   M.Add (Expr_Node'
+                                     (Kind => Var_C, Span => Span,
+                                      V => Params (I)));
+                                 R : constant Refinement_Id :=
+                                   Refinement_Of (Fields (I));
+                              begin
+                                 if Active (R) then
+                                    A := Check_E
+                                      (Real_Refinement_Id (R), A,
+                                       Span);
+                                 end if;
+                                 Core_E := M.Add
+                                   (Expr_Node'
+                                      (Kind => App_C, Span => Span,
+                                       Fun => Core_E, Arg => A));
+                              end;
+                           end loop;
+                           for I in reverse 1 .. Params.Last_Index loop
+                              Core_E := M.Add
+                                (Expr_Node'
+                                   (Kind => Lam_C, Span => Span,
+                                    Binder => Params (I),
+                                    Lam_Body => Core_E));
+                           end loop;
+                           --  The wrapper's top lambda lands in the
+                           --  original node, so every reference to
+                           --  this occurrence sees the checked form.
+                           M.Exprs.Replace_Element
+                             (Real_Expr_Id (EI),
+                              M.Node (Core_E));
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end;
    end Insert_Checks;
 
 end AHC.Refine;

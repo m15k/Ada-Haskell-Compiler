@@ -1,0 +1,3 @@
+positive :: Int -> Bool
+portNum :: Port -> Int
+mkPoint :: Double -> Double -> Point
