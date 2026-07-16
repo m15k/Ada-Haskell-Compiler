@@ -876,6 +876,38 @@ package body AHC.Builtins is
            ("putStr", Mono (FN (String_T, IO_T (Unit_T))));
          Ignore := Def_Global
            ("putStrLn", Mono (FN (String_T, IO_T (Unit_T))));
+
+         --  Floating / RealFrac vocabulary, monomorphic at Double
+         --  (Report 6.4.3; the classes proper await a wider numeric
+         --  tower).
+         declare
+            D_T : constant Real_Type_Id := TC (Env.Double_TC);
+            DD  : constant Real_Type_Id := FN (D_T, D_T);
+            DDD : constant Real_Type_Id := FN (D_T, D_T, D_T);
+            DI  : constant Real_Type_Id := FN (D_T, TC (Env.Int_TC));
+         begin
+            Ignore := Def_Global ("pi", Mono (D_T));
+            Ignore := Def_Global ("exp", Mono (DD));
+            Ignore := Def_Global ("log", Mono (DD));
+            Ignore := Def_Global ("sqrt", Mono (DD));
+            Ignore := Def_Global ("**", Mono (DDD));
+            Ignore := Def_Global ("logBase", Mono (DDD));
+            Ignore := Def_Global ("sin", Mono (DD));
+            Ignore := Def_Global ("cos", Mono (DD));
+            Ignore := Def_Global ("tan", Mono (DD));
+            Ignore := Def_Global ("asin", Mono (DD));
+            Ignore := Def_Global ("acos", Mono (DD));
+            Ignore := Def_Global ("atan", Mono (DD));
+            Ignore := Def_Global ("sinh", Mono (DD));
+            Ignore := Def_Global ("cosh", Mono (DD));
+            Ignore := Def_Global ("tanh", Mono (DD));
+            Ignore := Def_Global ("floor", Mono (DI));
+            Ignore := Def_Global ("ceiling", Mono (DI));
+            Ignore := Def_Global ("round", Mono (DI));
+            Ignore := Def_Global ("truncate", Mono (DI));
+            Ignore := Def_Global ("fromIntegral",
+                                  Mono (FN (TC (Env.Int_TC), D_T)));
+         end;
          pragma Unreferenced (Ignore);
       end;
    end Install;

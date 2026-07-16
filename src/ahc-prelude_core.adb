@@ -885,6 +885,40 @@ package body AHC.Prelude_Core is
       Bind_Name ("putStr", V (P_PutStr));
       Bind_Name ("putStrLn", V (P_PutStrLn));
 
+      --  Floating / RealFrac at Double.
+      declare
+         procedure BP (Name, Symbol : String) is
+         begin
+            Bind_Name (Name, V (Prim ("prim" & Name, Symbol)));
+         end BP;
+      begin
+         Bind_Name ("pi",
+           M.Add (Expr_Node'
+             (Kind => Lit_C, Span => Span,
+              Lit => (Kind => L_Float,
+                      Text => Names.Name_Id
+                        (Table.Intern ("3.141592653589793"))))));
+         BP ("exp", "ahc_prim_exp_d");
+         BP ("log", "ahc_prim_log_d");
+         BP ("sqrt", "ahc_prim_sqrt_d");
+         BP ("**", "ahc_prim_pow_d");
+         BP ("logBase", "ahc_prim_logbase_d");
+         BP ("sin", "ahc_prim_sin_d");
+         BP ("cos", "ahc_prim_cos_d");
+         BP ("tan", "ahc_prim_tan_d");
+         BP ("asin", "ahc_prim_asin_d");
+         BP ("acos", "ahc_prim_acos_d");
+         BP ("atan", "ahc_prim_atan_d");
+         BP ("sinh", "ahc_prim_sinh_d");
+         BP ("cosh", "ahc_prim_cosh_d");
+         BP ("tanh", "ahc_prim_tanh_d");
+         BP ("floor", "ahc_prim_floor_d");
+         BP ("ceiling", "ahc_prim_ceiling_d");
+         BP ("round", "ahc_prim_round_d");
+         BP ("truncate", "ahc_prim_truncate_d");
+         BP ("fromIntegral", "ahc_prim_int_to_d");
+      end;
+
       --  div/mod/quot/rem take a (ignored) Num dictionary.
       declare
          procedure Wrap2 (Name : String; P : Real_Var_Id) is

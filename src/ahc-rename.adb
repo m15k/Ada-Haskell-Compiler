@@ -427,12 +427,20 @@ package body AHC.Rename is
          Scopes.Delete_Last;
       end Pop_Scope;
 
+      procedure Rename_Stmt (Id : Real_Stmt_Id);
+
       procedure Rename_Rhs (R : Rhs) is
       begin
          if R.Guarded then
+            --  Pattern-guard binders scope over the later qualifiers
+            --  and the alternative's body (Report 3.13).
             for G of R.Guards loop
-               Rename_Expr (G.Guard);
+               Push_Scope;
+               for Q of G.Quals loop
+                  Rename_Stmt (Q);
+               end loop;
                Rename_Expr (G.G_Body);
+               Pop_Scope;
             end loop;
          else
             Rename_Expr (R.Plain);

@@ -91,9 +91,11 @@ package body AHC.Syntax.Printer is
          if R.Guarded then
             Append (Buf, "(guards");
             for G of R.Guards loop
-               Append
-                 (Buf, " (" & Expr_S (G.Guard) & " " & Expr_S (G.G_Body)
-                       & ")");
+               Append (Buf, " ((quals");
+               for Q of G.Quals loop
+                  Append (Buf, " " & Stmt_S (Q));
+               end loop;
+               Append (Buf, ") " & Expr_S (G.G_Body) & ")");
             end loop;
             Append (Buf, ")");
             return To_String (Buf);

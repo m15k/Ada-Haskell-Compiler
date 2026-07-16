@@ -87,11 +87,20 @@ record syntax, and parametric types included. Enum at Int is
 complete (stepped ranges [1,3..9], succ/pred, to/fromEnum), and the
 Prelude gained span/break/splitAt/unzip/foldr1/foldl1/words/lines.
 
-Remaining gaps: Rational arithmetic and the Floating class (sqrt,
-trig), Integer bignum (Int is a C long), the Integral class proper,
-pattern guards, multi-module imports, exhaustiveness warnings, and
-class defaults for builtin classes (a hand-written show-only Show
-instance lacks showsPrec/showList).
+The Floating/RealFrac vocabulary works at Double (sqrt, pi, exp/log,
+**, logBase, trig, hyperbolics, floor/ceiling/round/truncate with
+round-to-even, fromIntegral), and Double's show now produces GHC's
+exact output: shortest round-trip digits with the fixed-vs-scientific
+switch (0.1 + 0.2 prints 0.30000000000000004; 1.0e7 stays
+scientific). Guards are full Report 3.13 qualifier sequences: boolean
+tests, pattern guards (Just v <- lookup k m), and let, in any
+comma-separated combination, in equations and case alternatives.
+
+Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
+classes (the vocabulary is monomorphic at Double), Integer bignum
+(Int is a C long), the Integral class proper, multi-module imports,
+exhaustiveness warnings, and class defaults for builtin classes (a
+hand-written show-only Show instance lacks showsPrec/showList).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

@@ -79,8 +79,12 @@ package AHC.Syntax is
 
    package Op_Occ_Vectors is new Ada.Containers.Vectors (Positive, Op_Occ);
 
+   --  One guard alternative (Report 3.13): a nonempty sequence of
+   --  qualifiers - boolean tests, pattern guards `pat <- exp`, and
+   --  `let` - reusing the statement node (same shapes as list
+   --  comprehension qualifiers), followed by the alternative's body.
    type Guarded_Rhs is record
-      Guard : Real_Expr_Id;
+      Quals  : Stmt_Id_Vectors.Vector;
       G_Body : Real_Expr_Id;
    end record;
 

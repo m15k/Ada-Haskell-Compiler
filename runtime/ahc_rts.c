@@ -1,6 +1,7 @@
 #include "ahc_rts.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #ifdef AHC_USE_BOEHM
@@ -546,17 +547,56 @@ static AhcNode *p_from_integer_d(AhcNode *a) {
 /* %.15g round-trips typical values; append .0 when the image has no
    fractional or exponent part, matching Haskell's show for whole
    doubles (show 12.0 = "12.0"). */
+static void fmt_double(char *buf, size_t n, double v);
+
 static AhcNode *p_show_d(AhcNode *a) {
-  char buf[48];
-  int has_mark = 0;
-  size_t i;
-  snprintf(buf, sizeof buf - 3, "%.15g", ahc_eval(a)->u.d);
-  for (i = 0; buf[i]; i++)
-    if (buf[i] == '.' || buf[i] == 'e' || buf[i] == 'n' ||
-        buf[i] == 'f')
-      has_mark = 1;
-  if (!has_mark) { buf[i] = '.'; buf[i + 1] = '0'; buf[i + 2] = 0; }
+  char buf[64];
+  fmt_double(buf, sizeof buf, ahc_eval(a)->u.d);
   return ahc_mk_string(buf);
+}
+
+/* ----- Floating / RealFrac at Double ----------------------------- */
+
+#define DUOP(name, fn)                                                \
+  static AhcNode *name(AhcNode *a) {                                  \
+    return ahc_mk_double(fn(ahc_eval(a)->u.d));                       \
+  }
+
+DUOP(p_exp_d, exp)
+DUOP(p_log_d, log)
+DUOP(p_sqrt_d, sqrt)
+DUOP(p_sin_d, sin)
+DUOP(p_cos_d, cos)
+DUOP(p_tan_d, tan)
+DUOP(p_asin_d, asin)
+DUOP(p_acos_d, acos)
+DUOP(p_atan_d, atan)
+DUOP(p_sinh_d, sinh)
+DUOP(p_cosh_d, cosh)
+DUOP(p_tanh_d, tanh)
+
+static AhcNode *p_pow_d(AhcNode *a, AhcNode *b) {
+  return ahc_mk_double(pow(ahc_eval(a)->u.d, ahc_eval(b)->u.d));
+}
+static AhcNode *p_logbase_d(AhcNode *a, AhcNode *b) {
+  return ahc_mk_double(log(ahc_eval(b)->u.d) / log(ahc_eval(a)->u.d));
+}
+static AhcNode *p_floor_d(AhcNode *a) {
+  return ahc_mk_int((long)floor(ahc_eval(a)->u.d));
+}
+static AhcNode *p_ceiling_d(AhcNode *a) {
+  return ahc_mk_int((long)ceil(ahc_eval(a)->u.d));
+}
+/* Report: round is to nearest even (rint under the default rounding
+   mode). */
+static AhcNode *p_round_d(AhcNode *a) {
+  return ahc_mk_int((long)rint(ahc_eval(a)->u.d));
+}
+static AhcNode *p_truncate_d(AhcNode *a) {
+  return ahc_mk_int((long)ahc_eval(a)->u.d);
+}
+static AhcNode *p_int_to_d(AhcNode *a) {
+  return ahc_mk_double((double)ahc_eval(a)->u.i);
 }
 
 /* ----- Report 11.4 Show machinery ------------------------------- */
@@ -647,15 +687,55 @@ static AhcNode *p_showsprec_int(AhcNode *d, AhcNode *x) {
   return ahc_mk_string(tmp);
 }
 
+/* GHC's show for Double: shortest digit string that round-trips,
+   fixed notation when 0.1 <= |v| < 1e7, scientific (d.ddde<exp>)
+   otherwise; "Infinity" / "NaN" for the specials. */
 static void fmt_double(char *buf, size_t n, double v) {
-  int has_mark = 0;
-  size_t i;
-  snprintf(buf, n - 3, "%.15g", v);
-  for (i = 0; buf[i]; i++)
-    if (buf[i] == '.' || buf[i] == 'e' || buf[i] == 'n' ||
-        buf[i] == 'f')
-      has_mark = 1;
-  if (!has_mark) { buf[i] = '.'; buf[i + 1] = '0'; buf[i + 2] = 0; }
+  char sci[64], digits[32];
+  int prec, e10, nd, i, j;
+  if (isnan(v)) { snprintf(buf, n, "NaN"); return; }
+  if (isinf(v)) {
+    snprintf(buf, n, v < 0 ? "-Infinity" : "Infinity");
+    return;
+  }
+  if (v == 0.0) { snprintf(buf, n, "0.0"); return; }
+  for (prec = 0; prec < 17; prec++) {
+    snprintf(sci, sizeof sci, "%.*e", prec, v);
+    if (strtod(sci, NULL) == v) break;
+  }
+  /* sci is [-]d[.ddd]e±XX; pull out the digits and exponent. */
+  i = 0; j = 0;
+  if (sci[i] == '-') i++;
+  for (; sci[i] && sci[i] != 'e'; i++)
+    if (sci[i] != '.') digits[j++] = sci[i];
+  digits[j] = 0;
+  nd = j;
+  e10 = (int)strtol(sci + i + 1, NULL, 10);
+  j = 0;
+  if (v < 0) buf[j++] = '-';
+  if (e10 >= 0 && e10 < 7) {
+    /* fixed: e10+1 integer digits */
+    for (i = 0; i <= e10; i++)
+      buf[j++] = i < nd ? digits[i] : '0';
+    buf[j++] = '.';
+    if (e10 + 1 < nd)
+      for (i = e10 + 1; i < nd; i++) buf[j++] = digits[i];
+    else buf[j++] = '0';
+    buf[j] = 0;
+  } else if (e10 < 0) {
+    /* GHC keeps fixed form down to 0.1 only */
+    if (e10 == -1) {
+      buf[j++] = '0'; buf[j++] = '.';
+      for (i = 0; i < nd; i++) buf[j++] = digits[i];
+      buf[j] = 0;
+    } else {
+      j += snprintf(buf + j, n - j, "%c.%se%d", digits[0],
+                    nd > 1 ? digits + 1 : "0", e10);
+    }
+  } else {
+    j += snprintf(buf + j, n - j, "%c.%se%d", digits[0],
+                  nd > 1 ? digits + 1 : "0", e10);
+  }
 }
 
 static AhcNode *p_showsprec_d(AhcNode *d, AhcNode *x) {
@@ -745,6 +825,13 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
+  *ahc_prim_pow_d, *ahc_prim_logbase_d,
+  *ahc_prim_sin_d, *ahc_prim_cos_d, *ahc_prim_tan_d,
+  *ahc_prim_asin_d, *ahc_prim_acos_d, *ahc_prim_atan_d,
+  *ahc_prim_sinh_d, *ahc_prim_cosh_d, *ahc_prim_tanh_d,
+  *ahc_prim_floor_d, *ahc_prim_ceiling_d, *ahc_prim_round_d,
+  *ahc_prim_truncate_d, *ahc_prim_int_to_d,
   *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
   *ahc_prim_succ_int, *ahc_prim_pred_int,
   *ahc_prim_show_string, *ahc_prim_shows_list,
@@ -801,6 +888,25 @@ void ahc_rts_init(void) {
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
   ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
+  ahc_prim_exp_d = mk_prim1(p_exp_d);
+  ahc_prim_log_d = mk_prim1(p_log_d);
+  ahc_prim_sqrt_d = mk_prim1(p_sqrt_d);
+  ahc_prim_pow_d = mk_prim2(p_pow_d);
+  ahc_prim_logbase_d = mk_prim2(p_logbase_d);
+  ahc_prim_sin_d = mk_prim1(p_sin_d);
+  ahc_prim_cos_d = mk_prim1(p_cos_d);
+  ahc_prim_tan_d = mk_prim1(p_tan_d);
+  ahc_prim_asin_d = mk_prim1(p_asin_d);
+  ahc_prim_acos_d = mk_prim1(p_acos_d);
+  ahc_prim_atan_d = mk_prim1(p_atan_d);
+  ahc_prim_sinh_d = mk_prim1(p_sinh_d);
+  ahc_prim_cosh_d = mk_prim1(p_cosh_d);
+  ahc_prim_tanh_d = mk_prim1(p_tanh_d);
+  ahc_prim_floor_d = mk_prim1(p_floor_d);
+  ahc_prim_ceiling_d = mk_prim1(p_ceiling_d);
+  ahc_prim_round_d = mk_prim1(p_round_d);
+  ahc_prim_truncate_d = mk_prim1(p_truncate_d);
+  ahc_prim_int_to_d = mk_prim1(p_int_to_d);
   ahc_prim_show_string = mk_prim1(p_show_string);
   ahc_prim_shows_list = mk_prim2(p_shows_list);
   ahc_prim_showsprec_int = mk_prim2(p_showsprec_int);

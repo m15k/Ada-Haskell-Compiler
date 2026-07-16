@@ -123,12 +123,15 @@ package body AHC.Fixity is
       procedure Resolve_Expr (Id : Real_Expr_Id);
       procedure Resolve_Pat (Id : Real_Pat_Id);
       procedure Resolve_Group (Decls : Decl_Id_Vectors.Vector);
+      procedure Resolve_Stmt (Id : Real_Stmt_Id);
 
       procedure Resolve_Rhs (R : Rhs) is
       begin
          if R.Guarded then
             for G of R.Guards loop
-               Resolve_Expr (G.Guard);
+               for Q of G.Quals loop
+                  Resolve_Stmt (Q);
+               end loop;
                Resolve_Expr (G.G_Body);
             end loop;
          else

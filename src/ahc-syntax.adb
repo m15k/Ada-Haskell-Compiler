@@ -42,7 +42,9 @@ package body AHC.Syntax is
    is (if R.Guarded
        then R.Guards.Length >= 1
             and then (for all G of R.Guards =>
-                        Ok (A, G.Guard) and then Ok (A, G.G_Body))
+                        G.Quals.Length >= 1
+                        and then (for all Q of G.Quals => Ok (A, Q))
+                        and then Ok (A, G.G_Body))
        else R.Plain in Real_Expr_Id and then Ok (A, R.Plain));
 
    ---------------------------------------------------------------------

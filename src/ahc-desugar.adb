@@ -574,12 +574,81 @@ package body AHC.Desugar is
          Result : Core.Real_Expr_Id;
       begin
          if R.Guarded then
+            --  Report 3.13: each alternative is a qualifier chain; a
+            --  failing qualifier falls through to the next
+            --  alternative. The fall-through continuation is Let-bound
+            --  per alternative so multiple qualifiers can reference it
+            --  without duplicating code (fresh Var node per use).
             Result := Fresh_Ref (Fail);
             for I in reverse 1 .. R.Guards.Last_Index loop
-               Result := Bool_Case
-                 (Ds_Expr (R.Guards (I).Guard),
-                  Ds_Expr (R.Guards (I).G_Body),
-                  Result, Span);
+               declare
+                  G : constant Syntax.Guarded_Rhs := R.Guards (I);
+                  GK : constant Core.Real_Var_Id :=
+                    Fresh ("$gk", Span);
+                  Acc : Core.Real_Expr_Id := Ds_Expr (G.G_Body);
+                  Single_Bool : Boolean := False;
+               begin
+                  if Natural (G.Quals.Length) = 1 then
+                     declare
+                        QN : constant Stmt_Node :=
+                          Arena.Node (G.Quals (1));
+                     begin
+                        Single_Bool := QN.Kind = Syntax.Expr_S;
+                        if Single_Bool then
+                           Result := Bool_Case
+                             (Ds_Expr (QN.Expr), Acc, Result, Span);
+                        end if;
+                     end;
+                  end if;
+                  if not Single_Bool then
+                     for QI in reverse 1 .. G.Quals.Last_Index loop
+                        declare
+                           QN : constant Stmt_Node :=
+                             Arena.Node (G.Quals (QI));
+                        begin
+                           case QN.Kind is
+                              when Syntax.Expr_S =>
+                                 Acc := Bool_Case
+                                   (Ds_Expr (QN.Expr), Acc,
+                                    Fresh_Ref (VarE (GK, Span)),
+                                    Span);
+                              when Bind_S =>
+                                 declare
+                                    Scrut : constant Core.Real_Var_Id
+                                      := Fresh ("$pg", Span);
+                                 begin
+                                    Acc := Let1
+                                      (Scrut,
+                                       Ds_Expr (QN.Bind_Expr),
+                                       Match_One
+                                         (Scrut,
+                                          QN.Bind_Pat,
+                                          Acc,
+                                          Fresh_Ref
+                                            (VarE (GK, Span))),
+                                       Span);
+                                 end;
+                              when Let_S =>
+                                 declare
+                                    Binds : Core.Bind_Vectors.Vector;
+                                 begin
+                                    Ds_Group (QN.Let_Binds, Binds);
+                                    if not Binds.Is_Empty then
+                                       Acc := M.Add
+                                         (Core.Expr_Node'
+                                            (Kind => Core.Let_C,
+                                             Span => Span,
+                                             Is_Rec => True,
+                                             Binds => Binds,
+                                             Let_Body => Acc));
+                                    end if;
+                                 end;
+                           end case;
+                        end;
+                     end loop;
+                     Result := Let1 (GK, Result, Acc, Span);
+                  end if;
+               end;
             end loop;
          else
             Result := Ds_Expr (R.Plain);

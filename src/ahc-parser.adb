@@ -1362,11 +1362,17 @@ package body AHC.Parser is
                while At_K (Pipe) loop
                   Advance;
                   declare
-                     G : constant Real_Expr_Id := Parse_Expr;
+                     Quals : Stmt_Id_Vectors.Vector;
                   begin
+                     loop
+                        Quals.Append (Parse_Qual);
+                        exit when not At_K (Comma);
+                        Advance;
+                     end loop;
                      Expect (Sep, Sep_Name);
                      Guards.Append
-                       (Guarded_Rhs'(Guard => G, G_Body => Parse_Expr));
+                       (Guarded_Rhs'(Quals => Quals,
+                                     G_Body => Parse_Expr));
                   end;
                end loop;
                return Rhs'(Guarded => True, Guards => Guards);
