@@ -44,7 +44,17 @@ package body AHC.Core.Printer is
                                          (R)).P_Name))),
                when Mod_R =>
                  " mod "
-                 & LImg (M.Info (Real_Refinement_Id (R)).Modulus)));
+                 & LImg (M.Info (Real_Refinement_Id (R)).Modulus),
+               when FRange_R =>
+                 " in "
+                 & (if M.Info (Real_Refinement_Id (R)).FLo_Neg
+                    then "-" else "")
+                 & NM (Table, M.Info (Real_Refinement_Id (R)).FLo_Text)
+                 & " .. "
+                 & (if M.Info (Real_Refinement_Id (R)).FHi_Neg
+                    then "-" else "")
+                 & NM (Table,
+                       M.Info (Real_Refinement_Id (R)).FHi_Text)));
 
    function Lit_Image
      (Table : Names.Name_Table; L : Literal) return String

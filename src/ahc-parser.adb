@@ -357,7 +357,8 @@ package body AHC.Parser is
          return Ctx;
       end To_Context;
 
-      --  Refinement bound: [-] integer literal.
+      --  Refinement bound: [-] integer or float literal (which base
+      --  types admit which lexemes is decided by kind checking).
       procedure Parse_Bound
         (Neg : out Boolean; Text : out Names.Name_Id) is
       begin
@@ -370,8 +371,11 @@ package body AHC.Parser is
          if At_K (Int_Lit) then
             Text := Names.Name_Id (Tok.Int_Text);
             Advance;
+         elsif At_K (Float_Lit) then
+            Text := Names.Name_Id (Tok.Float_Text);
+            Advance;
          else
-            Fail ("expected an integer literal refinement bound");
+            Fail ("expected a numeric literal refinement bound");
          end if;
       end Parse_Bound;
 
@@ -380,11 +384,12 @@ package body AHC.Parser is
       --  in let-block signatures).
       function At_Refinement return Boolean
       is (At_K (Kw_In)
-          and then (Peek (1).Kind = Int_Lit
+          and then (Peek (1).Kind in Int_Lit | Float_Lit
                     or else (Peek (1).Kind = Varsym
                              and then Peek (1).Qualifier = Names.No_Name
                              and then Peek (1).Name = Minus_Name
-                             and then Peek (2).Kind = Int_Lit)));
+                             and then Peek (2).Kind in
+                               Int_Lit | Float_Lit)));
 
       function Parse_Type return Real_Type_Id is
          Span   : constant Diagnostics.Source_Span := Tok.Span;

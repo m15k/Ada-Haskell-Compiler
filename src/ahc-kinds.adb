@@ -165,6 +165,32 @@ package body AHC.Kinds is
          return (if Neg then -V else V);
       end Bound_Value;
 
+      --  A lexeme is a float if it has a point or exponent (hex/octal
+      --  integer prefixes checked first: 0xE is an integer).
+      function Is_Float_Lexeme (Text : Names.Name_Id) return Boolean is
+         S : constant String := Table.Text (Names.Real_Name_Id (Text));
+      begin
+         if S'Length > 2 and then S (S'First) = '0'
+           and then S (S'First + 1) in 'x' | 'X' | 'o' | 'O'
+         then
+            return False;
+         end if;
+         return (for some C of S => C in '.' | 'e' | 'E');
+      end Is_Float_Lexeme;
+
+      --  Numeric value of a bound lexeme for Double ranges.
+      function F_Value
+        (Text : Names.Name_Id; Neg : Boolean) return Long_Float
+      is
+         V : constant Long_Float :=
+           (if Is_Float_Lexeme (Text)
+            then Long_Float'Value
+                   (Table.Text (Names.Real_Name_Id (Text)))
+            else Long_Float (Bound_Value (Text, False)));
+      begin
+         return (if Neg then -V else V);
+      end F_Value;
+
       procedure Convert
         (T          : Real_Type_Id;
          TvEnv      : in out Tv_Maps.Map;
@@ -449,12 +475,17 @@ package body AHC.Kinds is
                      if BN.Kind /= Core.TCon_T
                        or else (Core.TyCon_Id (BN.Con) /= Env.Int_TC
                                 and then Core.TyCon_Id (BN.Con) /=
-                                  Env.Integer_TC)
+                                  Env.Integer_TC
+                                and then Core.TyCon_Id (BN.Con) /=
+                                  Env.Double_TC
+                                and then Core.TyCon_Id (BN.Con) /=
+                                  Env.Float_TC)
                      then
                         Bag.Add (Diagnostics.Error,
                                  Diagnostics.Kind_Error, N.Span,
                                  "range refinements are only supported"
-                                 & " on Int and Integer");
+                                 & " on Int, Integer, Double and"
+                                 & " Float");
                         return;
                      end if;
                      if BN.Refine /= Core.No_Refinement then
@@ -469,6 +500,41 @@ package body AHC.Kinds is
                                  Diagnostics.Kind_Error, N.Span,
                                  "refined types in data declarations"
                                  & " are not yet supported");
+                        return;
+                     end if;
+                     if Core.TyCon_Id (BN.Con) = Env.Double_TC
+                       or else Core.TyCon_Id (BN.Con) = Env.Float_TC
+                     then
+                        --  Double range: either lexeme form; the
+                        --  original texts are kept for exact
+                        --  reproduction in C and in printed types.
+                        if F_Value (N.Lo_Text, N.Lo_Neg) >
+                           F_Value (N.Hi_Text, N.Hi_Neg)
+                        then
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Kind_Error, N.Span,
+                                    "empty refinement range");
+                           return;
+                        end if;
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TCon_T, Con => BN.Con,
+                              Refine => Core.Refinement_Id
+                                (M.Add (Core.Refinement_Info'
+                                   (Kind => Core.FRange_R,
+                                    FLo_Neg => N.Lo_Neg,
+                                    FHi_Neg => N.Hi_Neg,
+                                    FLo_Text => N.Lo_Text,
+                                    FHi_Text => N.Hi_Text))))));
+                        return;
+                     end if;
+                     if Is_Float_Lexeme (N.Lo_Text)
+                       or else Is_Float_Lexeme (N.Hi_Text)
+                     then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Kind_Error, N.Span,
+                                 "integer range bounds required for"
+                                 & " an Int range");
                         return;
                      end if;
                      declare

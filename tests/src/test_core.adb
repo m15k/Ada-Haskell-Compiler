@@ -291,6 +291,30 @@ package body Test_Core is
               (AHC.Core.Printer.Type_Image (M, Table, MT),
                "(tcon Int mod 12)", "modular type image");
          end;
+
+         --  Stage 4: Double ranges keep their bound lexemes.
+         declare
+            DBL_TC : constant Real_TyCon_Id :=
+              M.Mint_TyCon ((Name => Table.Intern ("Double"),
+                             Arity => 0, TC_Kind => M.Star,
+                             others => <>));
+            FR : constant Real_Refinement_Id :=
+              M.Add (Refinement_Info'
+                (Kind => FRange_R, FLo_Neg => True, FHi_Neg => False,
+                 FLo_Text => AHC.Names.Name_Id (Table.Intern ("90.0")),
+                 FHi_Text => AHC.Names.Name_Id
+                               (Table.Intern ("90.0"))));
+            FT : constant Real_Type_Id :=
+              M.Add (Type_Node'(Kind => TCon_T, Con => DBL_TC,
+                                Refine => Refinement_Id (FR)));
+         begin
+            Check (M.Info (FR).FLo_Neg and then not M.Info (FR).FHi_Neg,
+                   "float range keeps bound signs");
+            Check_Equal
+              (AHC.Core.Printer.Type_Image (M, Table, FT),
+               "(tcon Double in -90.0 .. 90.0)",
+               "float range type image");
+         end;
       end;
    end Run;
 

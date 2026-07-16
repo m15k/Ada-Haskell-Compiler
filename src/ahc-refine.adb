@@ -14,6 +14,7 @@ package body AHC.Refine is
       Check_Prim : Var_Id := No_Var;   --  minted on first use
       Pred_Prim  : Var_Id := No_Var;
       Mod_Prim   : Var_Id := No_Var;
+      FRange_Prim : Var_Id := No_Var;
 
       function Mint_Prim
         (Name, Symbol : String; Cache : in out Var_Id)
@@ -40,6 +41,10 @@ package body AHC.Refine is
 
       function MPrim return Real_Var_Id
       is (Mint_Prim ("$wrapMod", "ahc_prim_wrap_mod", Mod_Prim));
+
+      function FPrim return Real_Var_Id
+      is (Mint_Prim ("$checkRangeD", "ahc_prim_check_range_d",
+                     FRange_Prim));
 
       --  Whether refinement R rewrites this compilation. Range and
       --  predicate checks are contracts (skipped when checks are
@@ -108,6 +113,32 @@ package body AHC.Refine is
                Acc := M.Add (Expr_Node'(Kind => App_C, Span => Span,
                                         Fun => Acc,
                                         Arg => Lit (Info.Modulus)));
+            when FRange_R =>
+               declare
+                  function FLit
+                    (Neg : Boolean; Text : Names.Name_Id)
+                     return Real_Expr_Id
+                  is
+                     Image : constant String :=
+                       (if Neg then "-" else "")
+                       & Table.Text (Names.Real_Name_Id (Text));
+                  begin
+                     return M.Add (Expr_Node'
+                       (Kind => Lit_C, Span => Span,
+                        Lit => (Kind => L_Float,
+                                Text => Names.Name_Id
+                                          (Table.Intern (Image)))));
+                  end FLit;
+               begin
+                  Acc := M.Add (Expr_Node'(Kind => Var_C, Span => Span,
+                                           V => FPrim));
+                  Acc := M.Add (Expr_Node'
+                    (Kind => App_C, Span => Span, Fun => Acc,
+                     Arg => FLit (Info.FLo_Neg, Info.FLo_Text)));
+                  Acc := M.Add (Expr_Node'
+                    (Kind => App_C, Span => Span, Fun => Acc,
+                     Arg => FLit (Info.FHi_Neg, Info.FHi_Text)));
+               end;
          end case;
          return M.Add (Expr_Node'(Kind => App_C, Span => Span,
                                   Fun => Acc, Arg => E));

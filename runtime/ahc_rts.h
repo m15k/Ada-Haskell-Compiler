@@ -72,7 +72,11 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
-  *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod;
+  *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
+  *ahc_prim_check_range_d,
+  *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
+  *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
+  *ahc_prim_from_integer_d, *ahc_prim_show_d;
 
 void ahc_rts_init(void);
 

@@ -65,6 +65,10 @@ so class-constrained predicates like `even` just work), and modular
 types `type Clock = Int mod 12` with Ada-style wraparound - values
 crossing a declared boundary normalize into `[0, N)`, so
 `(25 :: Clock)` is 1 and incrementing a `Byte` past 255 wraps to 0.
+Ranges also work on Double (`type Latitude = Double in -90.0 ..
+90.0`), backed by a now-working Double runtime: Num/Fractional/Show
+at Double are real (`print (7 / 2 :: Double)` prints 3.5), with
+Rational and the Floating class still open.
 Refined types are erased for unification (transparent arithmetic, no
 smart constructors); ranges and predicates are lazily-fired checks
 at signature and annotation boundaries, and `ahc emit --unchecked`
@@ -72,10 +76,11 @@ at signature and annotation boundaries, and `ahc emit --unchecked`
 mirroring Ada's release-mode contract policy - modular wrapping is
 arithmetic semantics, not a check, so it is always applied.
 
-Remaining gaps: Double/Rational arithmetic and Integer bignum (Int is
-a C long), the Integral class proper, pattern guards, multi-module
-imports, exhaustiveness warnings, and Show for String prints as a
-char list (needs the Report's showList method).
+Remaining gaps: Rational arithmetic and the Floating class (sqrt,
+trig), Integer bignum (Int is a C long), the Integral class proper,
+pattern guards, multi-module imports, exhaustiveness warnings, and
+Show for String prints as a char list (needs the Report's showList
+method).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

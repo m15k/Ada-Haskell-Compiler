@@ -61,7 +61,7 @@ package AHC.Core is
    subtype Real_Refinement_Id is
      Refinement_Id range 1 .. Refinement_Id'Last;
 
-   type Refinement_Kind is (Range_R, Pred_R, Mod_R);
+   type Refinement_Kind is (Range_R, Pred_R, Mod_R, FRange_R);
 
    No_Var    : constant Var_Id    := 0;
    No_TyCon  : constant TyCon_Id  := 0;
@@ -98,6 +98,15 @@ package AHC.Core is
             --  [0, N) with mathematical mod, so it survives
             --  --unchecked.
             Modulus : Long_Long_Integer;
+         when FRange_R =>
+            --  Stage 4: ranges on Double/Float. Bounds keep their
+            --  surface lexemes (sign split off) so the generated C
+            --  and the pretty printer reproduce the user's literals
+            --  exactly; AHC.Kinds validates Lo <= Hi numerically.
+            FLo_Neg  : Boolean := False;
+            FHi_Neg  : Boolean := False;
+            FLo_Text : Names.Name_Id;
+            FHi_Text : Names.Name_Id;
       end case;
    end record;
 
@@ -439,9 +448,11 @@ package AHC.Core is
      (M : in out Core_Module; R : Refinement_Info)
       return Real_Refinement_Id
      with Pre  => (case R.Kind is
-                     when Range_R => R.Lo <= R.Hi,
-                     when Pred_R  => R.Pred_Var <= M.Last_Var,
-                     when Mod_R   => R.Modulus >= 1),
+                     when Range_R  => R.Lo <= R.Hi,
+                     when Pred_R   => R.Pred_Var <= M.Last_Var,
+                     when Mod_R    => R.Modulus >= 1,
+                     when FRange_R => R.FLo_Text /= Names.No_Name
+                                      and R.FHi_Text /= Names.No_Name),
           Post => Add'Result = M.Last_Refinement;
 
    --  Entity minting (no structural invariants beyond a real name

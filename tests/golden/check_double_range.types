@@ -1,0 +1,3 @@
+move :: (Double in -90.0 .. 90.0) -> Double -> Double in -90.0 .. 90.0
+blend :: (Double in 0 .. 1) -> Double -> Double -> Double
+speed :: Double in 0.0 .. 3.0e2

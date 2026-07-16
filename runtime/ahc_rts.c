@@ -449,6 +449,65 @@ void ahc_run_main(AhcNode *main_io) {
 
 /* ----- globals ---------------------------------------------------- */
 
+/* ----- Double arithmetic (Num/Fractional/Show at Double) --------- */
+
+#define DWOP(name, expr)                                              \
+  static AhcNode *name(AhcNode *a, AhcNode *b) {                      \
+    double x = ahc_eval(a)->u.d, y = ahc_eval(b)->u.d;                \
+    (void)x; (void)y;                                                 \
+    return (expr);                                                    \
+  }
+
+DWOP(p_add_d, ahc_mk_double(x + y))
+DWOP(p_sub_d, ahc_mk_double(x - y))
+DWOP(p_mul_d, ahc_mk_double(x * y))
+DWOP(p_div_d, ahc_mk_double(x / y))
+
+static AhcNode *p_neg_d(AhcNode *a) {
+  return ahc_mk_double(-ahc_eval(a)->u.d);
+}
+static AhcNode *p_abs_d(AhcNode *a) {
+  double v = ahc_eval(a)->u.d;
+  return ahc_mk_double(v < 0 ? -v : v);
+}
+static AhcNode *p_signum_d(AhcNode *a) {
+  double v = ahc_eval(a)->u.d;
+  return ahc_mk_double(v > 0 ? 1.0 : v < 0 ? -1.0 : 0.0);
+}
+/* Num Double's fromInteger: the argument is an AHC_INT node. */
+static AhcNode *p_from_integer_d(AhcNode *a) {
+  return ahc_mk_double((double)ahc_eval(a)->u.i);
+}
+/* %.15g round-trips typical values; append .0 when the image has no
+   fractional or exponent part, matching Haskell's show for whole
+   doubles (show 12.0 = "12.0"). */
+static AhcNode *p_show_d(AhcNode *a) {
+  char buf[48];
+  int has_mark = 0;
+  size_t i;
+  snprintf(buf, sizeof buf - 3, "%.15g", ahc_eval(a)->u.d);
+  for (i = 0; buf[i]; i++)
+    if (buf[i] == '.' || buf[i] == 'e' || buf[i] == 'n' ||
+        buf[i] == 'f')
+      has_mark = 1;
+  if (!has_mark) { buf[i] = '.'; buf[i + 1] = '0'; buf[i + 2] = 0; }
+  return ahc_mk_string(buf);
+}
+
+/* Refinement-types extension, stage 4: Double range check. */
+static AhcNode *p_check_range_d(AhcNode *lo, AhcNode *hi, AhcNode *x) {
+  double l = ahc_eval(lo)->u.d;
+  double h = ahc_eval(hi)->u.d;
+  AhcNode *v = ahc_eval(x);
+  if (v->u.d < l || v->u.d > h) {
+    fflush(stdout);
+    fprintf(stderr, "refinement violation: %g not in %g .. %g\n",
+            v->u.d, l, h);
+    exit(1);
+  }
+  return v;
+}
+
 /* Refinement-types extension, stage 3: modular normalization. Not a
    contract - values crossing an `Int mod N` boundary wrap into
    [0, N) with mathematical mod (result is never negative). */
@@ -512,7 +571,11 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
-  *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod;
+  *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
+  *ahc_prim_check_range_d,
+  *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
+  *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
+  *ahc_prim_from_integer_d, *ahc_prim_show_d;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -556,4 +619,14 @@ void ahc_rts_init(void) {
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
   ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
+  ahc_prim_check_range_d = mk_prim3(p_check_range_d);
+  ahc_prim_add_d = mk_prim2(p_add_d);
+  ahc_prim_sub_d = mk_prim2(p_sub_d);
+  ahc_prim_mul_d = mk_prim2(p_mul_d);
+  ahc_prim_div_d = mk_prim2(p_div_d);
+  ahc_prim_neg_d = mk_prim1(p_neg_d);
+  ahc_prim_abs_d = mk_prim1(p_abs_d);
+  ahc_prim_signum_d = mk_prim1(p_signum_d);
+  ahc_prim_from_integer_d = mk_prim1(p_from_integer_d);
+  ahc_prim_show_d = mk_prim1(p_show_d);
 }

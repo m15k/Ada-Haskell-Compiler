@@ -1,10 +1,11 @@
 # Design Note: Ada-Style Refinement Types as an AHC Extension
 
-**Status:** stages 1-3 IMPLEMENTED (July 2026) — integer range
-refinements, arbitrary boolean predicate refinements on any nullary
-base type (both lazily-checked contracts), and modular types with
-wraparound arithmetic (a boundary coercion, not a check); see "As
-built" below.
+**Status:** stages 1-4 IMPLEMENTED (July 2026) — integer and Double
+range refinements, arbitrary boolean predicate refinements on any
+nullary base type (all lazily-checked contracts), and modular types
+with wraparound arithmetic (a boundary coercion, not a check); see
+"As built" below. Stage 4 also brought up the Double runtime itself
+(Num/Fractional/Show dictionaries over C doubles).
 **Date:** July 2026.
 **Prompted by:** the observation that Ada can define types GHC cannot,
 and that an Ada-implemented Haskell compiler is uniquely positioned to
@@ -56,7 +57,7 @@ PRD 4.2:
 The extension proposal is to let *Haskell programs compiled by AHC* say
 the same kinds of things.
 
-## 2a. Stages 1-3 as built
+## 2a. Stages 1-4 as built
 
 Shipped with the refinement-types milestones (M23-M25), directly on
 the two Phase 2 design rules (the reserved `Refine` slot on Core
@@ -124,6 +125,27 @@ the two Phase 2 design rules (the reserved `Refine` slot on Core
   only when an integer literal follows, so `m mod` remains a valid
   type application and value-level `\`mod\`` is untouched. Stacking
   with ranges/predicates is rejected.
+- **Stage 4 — Double ranges (M31-M32):** the note's original
+  `Latitude` example, verbatim:
+
+  ```haskell
+  type Latitude = Double in -90.0 .. 90.0
+  type Unit     = Double in 0 .. 1      -- integer bounds allowed
+  ```
+
+  Bounds may be float or integer lexemes (integer bounds on an Int
+  range stay integer-only); the lexemes are preserved through the
+  refinement arena, so both the printed type and the generated C
+  reproduce the user's literals exactly - including scientific
+  notation (`Double in 0.0 .. 3.0e2`). Checks fire through
+  `ahc_prim_check_range_d` with the usual demand-time laziness and
+  are compiled out by `--unchecked`. Prerequisite shipped alongside:
+  Double now RUNS - Num/Fractional dictionaries over C doubles
+  (fromInteger converts, fromRational is identity because float
+  literals are already double nodes), Show Double with `.0`
+  normalization for whole values, Eq/Ord via the structural
+  comparator. `print 1.5` defaults Fractional to Double per Report
+  4.3.4 and just works.
 - **Limits (all stages):** enforcement only at the direct
   argument/result positions of declared signatures and `::`
   annotations; refinements nested under constructors

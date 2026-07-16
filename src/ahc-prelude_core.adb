@@ -157,6 +157,24 @@ package body AHC.Prelude_Core is
         Prim ("primsignum", "ahc_prim_signum_int");
       P_FromI : constant Real_Var_Id :=
         Prim ("primfromInteger", "ahc_prim_from_integer");
+      P_AddD  : constant Real_Var_Id :=
+        Prim ("primaddD", "ahc_prim_add_d");
+      P_SubD  : constant Real_Var_Id :=
+        Prim ("primsubD", "ahc_prim_sub_d");
+      P_MulD  : constant Real_Var_Id :=
+        Prim ("primmulD", "ahc_prim_mul_d");
+      P_DivD  : constant Real_Var_Id :=
+        Prim ("primdivD", "ahc_prim_div_d");
+      P_NegD  : constant Real_Var_Id :=
+        Prim ("primnegD", "ahc_prim_neg_d");
+      P_AbsD  : constant Real_Var_Id :=
+        Prim ("primabsD", "ahc_prim_abs_d");
+      P_SigD  : constant Real_Var_Id :=
+        Prim ("primsignumD", "ahc_prim_signum_d");
+      P_FromID : constant Real_Var_Id :=
+        Prim ("primfromIntegerD", "ahc_prim_from_integer_d");
+      P_ShowD : constant Real_Var_Id :=
+        Prim ("primshowD", "ahc_prim_show_d");
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
@@ -625,6 +643,41 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_Sig));
                      Ms.Append (V (P_FromI));
                      Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Num_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     Ms.Append (V (P_AddD));
+                     Ms.Append (V (P_SubD));
+                     Ms.Append (V (P_MulD));
+                     Ms.Append (V (P_NegD));
+                     Ms.Append (V (P_AbsD));
+                     Ms.Append (V (P_SigD));
+                     Ms.Append (V (P_FromID));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Fractional_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     --  Float literals are already double nodes at
+                     --  run time (codegen emits the lexeme through
+                     --  ahc_mk_double), so fromRational is identity.
+                     declare
+                        R : constant Real_Var_Id := Fresh ("r");
+                        X : constant Real_Var_Id := Fresh ("x");
+                        One : constant Real_Expr_Id :=
+                          M.Add (Expr_Node'
+                            (Kind => Lit_C, Span => Span,
+                             Lit => (Kind => L_Float,
+                                     Text => Names.Name_Id
+                                       (Table.Intern ("1.0")))));
+                     begin
+                        Ms.Append (V (P_DivD));
+                        Ms.Append
+                          (Lam (X, Ap2 (V (P_DivD), One, V (X))));
+                        Ms.Append (Lam (R, V (R)));
+                     end;
+                     Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Show_Cl
                     and then Inst.Head = Env.List_TC
                   then
@@ -686,6 +739,10 @@ package body AHC.Prelude_Core is
                         Ms.Append (V (P_ShowC));
                      elsif Inst.Head = Env.Bool_TC then
                         Ms.Append (V (P_ShowB));
+                     elsif Inst.Head = Env.Double_TC
+                       or else Inst.Head = Env.Float_TC
+                     then
+                        Ms.Append (V (P_ShowD));
                      else
                         Ms.Append (Err ("show: no runtime for this"
                                         & " type yet"));
