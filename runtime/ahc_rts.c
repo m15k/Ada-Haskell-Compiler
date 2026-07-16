@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <limits.h>
+#include <string.h>
 #include <string.h>
 
 #ifdef AHC_USE_BOEHM
@@ -168,6 +170,323 @@ AhcNode *ahc_mk_string(const char *s) {
   return acc;
 }
 
+/* ----- Integer bignum -------------------------------------------- */
+/* Sign+magnitude, uint32 limbs little-endian. CANONICAL FORM: any
+   value that fits a C long lives in an AHC_INT node; AHC_BIGINT
+   appears only beyond long range. All integer prims accept both. */
+
+typedef uint32_t limb;
+
+static limb *limb_alloc(int n) {
+  limb *d = (limb *)AHC_ALLOC(sizeof(limb) * (n > 0 ? n : 1));
+  if (!d) ahc_die("out of memory");
+  return d;
+}
+
+static int mag_norm(const limb *d, int n) {
+  while (n > 0 && d[n - 1] == 0) n--;
+  return n;
+}
+
+static int mag_cmp(const limb *a, int na, const limb *b, int nb) {
+  if (na != nb) return na > nb ? 1 : -1;
+  for (int i = na - 1; i >= 0; i--)
+    if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
+  return 0;
+}
+
+/* Build the canonical node for sign * d[0..n). */
+static AhcNode *mk_big(int sign, limb *d, int n) {
+  n = mag_norm(d, n);
+  if (n == 0) return ahc_mk_int(0);
+  if (n <= 2) {
+    unsigned long v = d[0];
+    if (n == 2) v |= (unsigned long)d[1] << 32;
+    if (sign > 0 && v <= (unsigned long)LONG_MAX)
+      return ahc_mk_int((long)v);
+    if (sign < 0 && v <= (unsigned long)LONG_MAX + 1)
+      return ahc_mk_int((long)(0UL - v));
+  }
+  {
+    AhcNode *r = alloc_node();
+    r->tag = AHC_BIGINT;
+    r->u.big.sign = sign;
+    r->u.big.n = n;
+    r->u.big.d = d;
+    return r;
+  }
+}
+
+typedef struct { int sign; int n; const limb *d; } BigView;
+
+/* View an evaluated INT/BIGINT node; tmp backs the INT case. */
+static BigView big_view(AhcNode *v, limb tmp[2]) {
+  BigView r;
+  if (v->tag == AHC_BIGINT) {
+    r.sign = v->u.big.sign; r.n = v->u.big.n; r.d = v->u.big.d;
+    return r;
+  }
+  {
+    long x = v->u.i;
+    unsigned long m = x < 0 ? 0UL - (unsigned long)x
+                            : (unsigned long)x;
+    tmp[0] = (limb)m; tmp[1] = (limb)(m >> 32);
+    r.sign = x > 0 ? 1 : x < 0 ? -1 : 0;
+    r.n = mag_norm(tmp, 2); r.d = tmp;
+    return r;
+  }
+}
+
+static limb *mag_add(const limb *a, int na, const limb *b, int nb,
+                     int *nr) {
+  int n = (na > nb ? na : nb) + 1, i;
+  limb *r = limb_alloc(n);
+  uint64_t carry = 0;
+  for (i = 0; i < n - 1; i++) {
+    uint64_t s = carry + (i < na ? a[i] : 0) + (i < nb ? b[i] : 0);
+    r[i] = (limb)s; carry = s >> 32;
+  }
+  r[n - 1] = (limb)carry;
+  *nr = n;
+  return r;
+}
+
+/* a - b, requires |a| >= |b|. */
+static limb *mag_sub(const limb *a, int na, const limb *b, int nb,
+                     int *nr) {
+  limb *r = limb_alloc(na);
+  int64_t borrow = 0;
+  for (int i = 0; i < na; i++) {
+    int64_t s = (int64_t)a[i] - (i < nb ? b[i] : 0) - borrow;
+    borrow = s < 0;
+    r[i] = (limb)(s + (borrow ? ((int64_t)1 << 32) : 0));
+  }
+  *nr = na;
+  return r;
+}
+
+static limb *mag_mul(const limb *a, int na, const limb *b, int nb,
+                     int *nr) {
+  int n = na + nb, i, j;
+  limb *r = limb_alloc(n);
+  for (i = 0; i < n; i++) r[i] = 0;
+  for (i = 0; i < na; i++) {
+    uint64_t carry = 0;
+    for (j = 0; j < nb; j++) {
+      uint64_t s = (uint64_t)a[i] * b[j] + r[i + j] + carry;
+      r[i + j] = (limb)s; carry = s >> 32;
+    }
+    r[i + nb] = (limb)carry;
+  }
+  *nr = n;
+  return r;
+}
+
+/* Binary long division: |a| = q*|b| + r with 0 <= r < |b|. */
+static void mag_divmod(const limb *a, int na, const limb *b, int nb,
+                       limb **q_out, int *nq, limb **r_out, int *nr) {
+  limb *q = limb_alloc(na > 0 ? na : 1);
+  limb *r = limb_alloc(nb + 1);
+  int i, bit;
+  for (i = 0; i < na; i++) q[i] = 0;
+  for (i = 0; i < nb + 1; i++) r[i] = 0;
+  for (i = na - 1; i >= 0; i--)
+    for (bit = 31; bit >= 0; bit--) {
+      /* r = (r << 1) | next bit of a */
+      uint32_t carry = (a[i] >> bit) & 1u;
+      for (int k = 0; k < nb + 1; k++) {
+        uint32_t nc = r[k] >> 31;
+        r[k] = (r[k] << 1) | carry;
+        carry = nc;
+      }
+      if (mag_cmp(r, mag_norm(r, nb + 1), b, nb) >= 0) {
+        int64_t borrow = 0;
+        for (int k = 0; k < nb + 1; k++) {
+          int64_t s = (int64_t)r[k] - (k < nb ? b[k] : 0) - borrow;
+          borrow = s < 0;
+          r[k] = (limb)(s + (borrow ? ((int64_t)1 << 32) : 0));
+        }
+        q[i] |= 1u << bit;
+      }
+    }
+  *q_out = q; *nq = na > 0 ? na : 1;
+  *r_out = r; *nr = nb + 1;
+}
+
+/* In-place divide by a small divisor, returning the remainder. */
+static limb mag_divmod_small(limb *a, int n, limb m) {
+  uint64_t rem = 0;
+  for (int i = n - 1; i >= 0; i--) {
+    uint64_t cur = (rem << 32) | a[i];
+    a[i] = (limb)(cur / m);
+    rem = cur % m;
+  }
+  return (limb)rem;
+}
+
+/* Signed helpers over evaluated nodes. */
+static AhcNode *big_add_sv(BigView A, BigView B) {
+  int n;
+  limb *r;
+  if (A.sign == 0) {
+    r = limb_alloc(B.n > 0 ? B.n : 1);
+    for (int i = 0; i < B.n; i++) r[i] = B.d[i];
+    return mk_big(B.sign, r, B.n);
+  }
+  if (B.sign == 0) {
+    r = limb_alloc(A.n > 0 ? A.n : 1);
+    for (int i = 0; i < A.n; i++) r[i] = A.d[i];
+    return mk_big(A.sign, r, A.n);
+  }
+  if (A.sign == B.sign) {
+    r = mag_add(A.d, A.n, B.d, B.n, &n);
+    return mk_big(A.sign, r, n);
+  }
+  {
+    int c = mag_cmp(A.d, A.n, B.d, B.n);
+    if (c == 0) return ahc_mk_int(0);
+    if (c > 0) {
+      r = mag_sub(A.d, A.n, B.d, B.n, &n);
+      return mk_big(A.sign, r, n);
+    }
+    r = mag_sub(B.d, B.n, A.d, A.n, &n);
+    return mk_big(B.sign, r, n);
+  }
+}
+
+static BigView big_negv(BigView A) { A.sign = -A.sign; return A; }
+
+static int big_cmp_sv(BigView A, BigView B) {
+  if (A.sign != B.sign) return A.sign > B.sign ? 1 : -1;
+  {
+    int c = mag_cmp(A.d, A.n, B.d, B.n);
+    return A.sign >= 0 ? c : -c;
+  }
+}
+
+/* Compare two evaluated integer nodes of either representation. */
+static int int_cmp(AhcNode *a, AhcNode *b) {
+  limb t1[2], t2[2];
+  if (a->tag == AHC_INT && b->tag == AHC_INT)
+    return (a->u.i > b->u.i) - (a->u.i < b->u.i);
+  return big_cmp_sv(big_view(a, t1), big_view(b, t2));
+}
+
+/* Truncated division of evaluated nodes (both may be big);
+   quotient/remainder returned as canonical nodes. */
+static void big_quotrem(AhcNode *a, AhcNode *b,
+                        AhcNode **q_node, AhcNode **r_node) {
+  limb t1[2], t2[2];
+  BigView A = big_view(a, t1), B = big_view(b, t2);
+  limb *q, *r;
+  int nq, nr;
+  if (B.sign == 0) ahc_die("divide by zero");
+  if (A.sign == 0) { *q_node = ahc_mk_int(0); *r_node = ahc_mk_int(0); return; }
+  mag_divmod(A.d, A.n, B.d, B.n, &q, &nq, &r, &nr);
+  *q_node = mk_big(A.sign * B.sign, q, nq);
+  *r_node = mk_big(A.sign, r, nr);
+}
+
+/* Report 6.4.2: div/mod floor toward negative infinity. */
+static void big_divmod_fl(AhcNode *a, AhcNode *b,
+                          AhcNode **q_node, AhcNode **r_node) {
+  AhcNode *q, *r;
+  limb t1[2], t2[2], t3[2];
+  big_quotrem(a, b, &q, &r);
+  {
+    BigView R = big_view(r, t1);
+    BigView A = big_view(a, t2), B = big_view(b, t3);
+    if (R.sign != 0 && A.sign * B.sign < 0) {
+      limb one[1] = {1};
+      BigView ONE; ONE.sign = -1; ONE.n = 1; ONE.d = one;
+      limb tq[2];
+      q = big_add_sv(big_view(q, tq), ONE);            /* q - 1 */
+      {
+        limb tr[2], tb[2];
+        r = big_add_sv(big_view(r, tr), big_view(b, tb)); /* r + b */
+      }
+    }
+  }
+  *q_node = q; *r_node = r;
+}
+
+/* Literal beyond long range: parse the lexeme (dec/hex/oct,
+   optional leading '-') into a canonical node. */
+AhcNode *ahc_mk_big_str(const char *s) {
+  int sign = 1, base = 10, cap = 4, n = 0;
+  limb *d;
+  if (*s == '-') { sign = -1; s++; }
+  if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) { base = 16; s += 2; }
+  else if (s[0] == '0' && (s[1] == 'o' || s[1] == 'O')) { base = 8; s += 2; }
+  d = limb_alloc(cap);
+  for (; *s; s++) {
+    uint64_t carry;
+    int digit = *s >= '0' && *s <= '9' ? *s - '0'
+              : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10
+              : *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
+    if (digit < 0) continue;
+    carry = digit;
+    for (int i = 0; i < n; i++) {
+      uint64_t cur = (uint64_t)d[i] * base + carry;
+      d[i] = (limb)cur; carry = cur >> 32;
+    }
+    if (carry) {
+      if (n == cap) {
+        limb *nd = limb_alloc(cap * 2);
+        for (int i = 0; i < n; i++) nd[i] = d[i];
+        d = nd; cap *= 2;
+      }
+      d[n++] = (limb)carry;
+    }
+  }
+  return mk_big(sign, d, n);
+}
+
+/* Decimal image of an evaluated integer node into a StrBuf-free
+   static-capable buffer; caller frees. */
+static char *big_image(AhcNode *v) {
+  limb t[2];
+  BigView A;
+  limb *w;
+  char *out, *tmp;
+  int n, i, pos = 0, tl = 0;
+  if (v->tag == AHC_INT) {
+    out = malloc(32);
+    if (!out) ahc_die("out of memory");
+    snprintf(out, 32, "%ld", v->u.i);
+    return out;
+  }
+  A = big_view(v, t);
+  w = limb_alloc(A.n);
+  for (i = 0; i < A.n; i++) w[i] = A.d[i];
+  n = A.n;
+  /* peel 9 decimal digits at a time, least significant group first;
+     every group except the final (most significant) one is written
+     zero-padded to exactly 9 chars */
+  tmp = malloc(10 * ((size_t)A.n + 2));
+  out = malloc(10 * ((size_t)A.n + 2) + 2);
+  if (!tmp || !out) ahc_die("out of memory");
+  while (mag_norm(w, n) > 0) {
+    limb rch = mag_divmod_small(w, n, 1000000000u);
+    n = mag_norm(w, n);
+    tl += snprintf(tmp + tl, 11, n > 0 ? "%09u" : "%u", rch);
+  }
+  if (A.sign < 0) out[pos++] = '-';
+  {
+    /* groups start at multiples of 9; emit in reverse order */
+    int gcount = (tl + 8) / 9;
+    int lastlen = tl - (gcount - 1) * 9;
+    for (i = gcount - 1; i >= 0; i--) {
+      int len = (i == gcount - 1) ? lastlen : 9;
+      memcpy(out + pos, tmp + i * 9, (size_t)len);
+      pos += len;
+    }
+    out[pos] = 0;
+  }
+  free(tmp);
+  return out;
+}
+
 /* ----- primitives ------------------------------------------------ */
 
 typedef AhcNode *(*Prim2)(AhcNode *, AhcNode *);
@@ -227,40 +546,149 @@ static AhcNode *mk_prim1(Prim1 f) {
   return ahc_mk_fun(prim1_apply, e);
 }
 
-#define IWOP(name, expr)                                              \
+/* Integer arithmetic: fast long path, promoting to bignum on
+   overflow; every prim accepts either representation. */
+
+static AhcNode *p_add(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  limb t1[2], t2[2];
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long r;
+    if (!__builtin_add_overflow(ea->u.i, eb->u.i, &r))
+      return ahc_mk_int(r);
+  }
+  return big_add_sv(big_view(ea, t1), big_view(eb, t2));
+}
+
+static AhcNode *p_sub(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  limb t1[2], t2[2];
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long r;
+    if (!__builtin_sub_overflow(ea->u.i, eb->u.i, &r))
+      return ahc_mk_int(r);
+  }
+  return big_add_sv(big_view(ea, t1), big_negv(big_view(eb, t2)));
+}
+
+static AhcNode *p_mul(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  limb t1[2], t2[2];
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long r;
+    if (!__builtin_mul_overflow(ea->u.i, eb->u.i, &r))
+      return ahc_mk_int(r);
+  }
+  {
+    BigView A = big_view(ea, t1), B = big_view(eb, t2);
+    int n;
+    limb *r;
+    if (A.sign == 0 || B.sign == 0) return ahc_mk_int(0);
+    r = mag_mul(A.d, A.n, B.d, B.n, &n);
+    return mk_big(A.sign * B.sign, r, n);
+  }
+}
+
+static AhcNode *p_div(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long x = ea->u.i, y = eb->u.i;
+    if (y == 0) ahc_die("divide by zero");
+    if (!(x == LONG_MIN && y == -1))
+      return ahc_mk_int((x % y != 0 && ((x < 0) != (y < 0)))
+                          ? x / y - 1 : x / y);
+  }
+  {
+    AhcNode *q, *r;
+    big_divmod_fl(ea, eb, &q, &r);
+    return q;
+  }
+}
+
+static AhcNode *p_mod(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long x = ea->u.i, y = eb->u.i;
+    if (y == 0) ahc_die("divide by zero");
+    if (!(x == LONG_MIN && y == -1))
+      return ahc_mk_int(((x % y) + y) % y);
+  }
+  {
+    AhcNode *q, *r;
+    big_divmod_fl(ea, eb, &q, &r);
+    return r;
+  }
+}
+
+static AhcNode *p_quot(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long x = ea->u.i, y = eb->u.i;
+    if (y == 0) ahc_die("divide by zero");
+    if (!(x == LONG_MIN && y == -1)) return ahc_mk_int(x / y);
+  }
+  {
+    AhcNode *q, *r;
+    big_quotrem(ea, eb, &q, &r);
+    return q;
+  }
+}
+
+static AhcNode *p_rem(AhcNode *a, AhcNode *b) {
+  AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
+  if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
+    long x = ea->u.i, y = eb->u.i;
+    if (y == 0) ahc_die("divide by zero");
+    if (!(x == LONG_MIN && y == -1)) return ahc_mk_int(x % y);
+  }
+  {
+    AhcNode *q, *r;
+    big_quotrem(ea, eb, &q, &r);
+    return r;
+  }
+}
+
+#define ICMP(name, op)                                                \
   static AhcNode *name(AhcNode *a, AhcNode *b) {                      \
-    long x = ahc_eval(a)->u.i, y = ahc_eval(b)->u.i;                  \
-    (void)x; (void)y;                                                 \
-    return (expr);                                                    \
+    return mk_bool(int_cmp(ahc_eval(a), ahc_eval(b)) op 0);           \
   }
 
-IWOP(p_add, ahc_mk_int(x + y))
-IWOP(p_sub, ahc_mk_int(x - y))
-IWOP(p_mul, ahc_mk_int(x * y))
-IWOP(p_div, y == 0 ? (ahc_die("divide by zero"), (AhcNode *)0)
-                   : ahc_mk_int((x % y != 0 && ((x < 0) != (y < 0)))
-                                  ? x / y - 1 : x / y))
-IWOP(p_mod, y == 0 ? (ahc_die("divide by zero"), (AhcNode *)0)
-                   : ahc_mk_int(((x % y) + y) % y))
-IWOP(p_quot, y == 0 ? (ahc_die("divide by zero"), (AhcNode *)0)
-                    : ahc_mk_int(x / y))
-IWOP(p_rem, y == 0 ? (ahc_die("divide by zero"), (AhcNode *)0)
-                   : ahc_mk_int(x % y))
-IWOP(p_eq, mk_bool(x == y))
-IWOP(p_ne, mk_bool(x != y))
-IWOP(p_lt, mk_bool(x < y))
-IWOP(p_le, mk_bool(x <= y))
-IWOP(p_gt, mk_bool(x > y))
-IWOP(p_ge, mk_bool(x >= y))
+ICMP(p_eq, ==)
+ICMP(p_ne, !=)
+ICMP(p_lt, <)
+ICMP(p_le, <=)
+ICMP(p_gt, >)
+ICMP(p_ge, >=)
 
-static AhcNode *p_neg(AhcNode *a) { return ahc_mk_int(-ahc_eval(a)->u.i); }
+static AhcNode *p_neg(AhcNode *a) {
+  AhcNode *e = ahc_eval(a);
+  limb t[2];
+  if (e->tag == AHC_INT && e->u.i != LONG_MIN)
+    return ahc_mk_int(-e->u.i);
+  {
+    BigView A = big_negv(big_view(e, t));
+    limb *r = limb_alloc(A.n > 0 ? A.n : 1);
+    for (int i = 0; i < A.n; i++) r[i] = A.d[i];
+    return mk_big(A.sign, r, A.n);
+  }
+}
 static AhcNode *p_abs(AhcNode *a) {
-  long x = ahc_eval(a)->u.i; return ahc_mk_int(x < 0 ? -x : x);
+  AhcNode *e = ahc_eval(a);
+  if (e->tag == AHC_INT)
+    return e->u.i >= 0 ? e
+           : e->u.i != LONG_MIN ? ahc_mk_int(-e->u.i) : p_neg(a);
+  return e->u.big.sign >= 0 ? e : p_neg(a);
 }
 static AhcNode *p_signum(AhcNode *a) {
-  long x = ahc_eval(a)->u.i;
-  return ahc_mk_int(x > 0 ? 1 : (x < 0 ? -1 : 0));
+  AhcNode *e = ahc_eval(a);
+  long s = e->tag == AHC_INT
+             ? (e->u.i > 0 ? 1 : e->u.i < 0 ? -1 : 0)
+             : e->u.big.sign;
+  return ahc_mk_int(s);
 }
+/* fromInteger at Int/Integer: identity on the canonical value (Int
+   overflow behavior is undefined per the Report; we keep the exact
+   value). */
 static AhcNode *p_from_integer(AhcNode *a) { return a; }
 static AhcNode *p_ord(AhcNode *a) { return ahc_mk_int(ahc_eval(a)->u.c); }
 static AhcNode *p_chr(AhcNode *a) { return ahc_mk_char(ahc_eval(a)->u.i); }
@@ -273,9 +701,10 @@ static AhcNode *p_lt_char(AhcNode *a, AhcNode *b) {
 }
 
 static AhcNode *p_show_int(AhcNode *a) {
-  char buf[32];
-  snprintf(buf, sizeof buf, "%ld", ahc_eval(a)->u.i);
-  return ahc_mk_string(buf);
+  char *img = big_image(ahc_eval(a));
+  AhcNode *r = ahc_mk_string(img);
+  free(img);
+  return r;
 }
 /* Report 11.4 (Show Char): common escapes by name, other
    non-printables as decimal escapes. */
@@ -306,6 +735,9 @@ static AhcNode *p_show_bool(AhcNode *a) {
  * (deriving-friendly). */
 static int poly_cmp(AhcNode *a, AhcNode *b) {
   a = ahc_eval(a); b = ahc_eval(b);
+  if ((a->tag == AHC_INT || a->tag == AHC_BIGINT) &&
+      (b->tag == AHC_INT || b->tag == AHC_BIGINT))
+    return int_cmp(a, b);
   if (a->tag != b->tag) ahc_die("comparing different runtime shapes");
   switch (a->tag) {
   case AHC_INT:
@@ -542,7 +974,14 @@ static AhcNode *p_signum_d(AhcNode *a) {
 }
 /* Num Double's fromInteger: the argument is an AHC_INT node. */
 static AhcNode *p_from_integer_d(AhcNode *a) {
-  return ahc_mk_double((double)ahc_eval(a)->u.i);
+  AhcNode *e = ahc_eval(a);
+  if (e->tag == AHC_INT) return ahc_mk_double((double)e->u.i);
+  {
+    double v = 0;
+    for (int i = e->u.big.n - 1; i >= 0; i--)
+      v = v * 4294967296.0 + e->u.big.d[i];
+    return ahc_mk_double(e->u.big.sign < 0 ? -v : v);
+  }
 }
 /* %.15g round-trips typical values; append .0 when the image has no
    fractional or exponent part, matching Haskell's show for whole
@@ -680,11 +1119,25 @@ static AhcNode *p_shows_list(AhcNode *f, AhcNode *xs) {
 /* showsPrec at Int/Double: negatives are parenthesized when the
    enclosing precedence exceeds 6 (Report 11.4). */
 static AhcNode *p_showsprec_int(AhcNode *d, AhcNode *x) {
-  long dv = ahc_eval(d)->u.i, v = ahc_eval(x)->u.i;
-  char tmp[40];
-  if (dv > 6 && v < 0) snprintf(tmp, sizeof tmp, "(%ld)", v);
-  else snprintf(tmp, sizeof tmp, "%ld", v);
-  return ahc_mk_string(tmp);
+  long dv = ahc_eval(d)->u.i;
+  AhcNode *v = ahc_eval(x);
+  int neg = v->tag == AHC_INT ? v->u.i < 0 : v->u.big.sign < 0;
+  char *img = big_image(v);
+  AhcNode *r;
+  if (dv > 6 && neg) {
+    size_t l = strlen(img);
+    char *p = malloc(l + 3);
+    if (!p) ahc_die("out of memory");
+    p[0] = '(';
+    memcpy(p + 1, img, l);
+    p[l + 1] = ')'; p[l + 2] = 0;
+    r = ahc_mk_string(p);
+    free(p);
+  } else {
+    r = ahc_mk_string(img);
+  }
+  free(img);
+  return r;
 }
 
 /* GHC's show for Double: shortest digit string that round-trips,
@@ -767,8 +1220,17 @@ static AhcNode *p_check_range_d(AhcNode *lo, AhcNode *hi, AhcNode *x) {
    [0, N) with mathematical mod (result is never negative). */
 static AhcNode *p_wrap_mod(AhcNode *n, AhcNode *x) {
   long m = ahc_eval(n)->u.i;
-  long v = ahc_eval(x)->u.i;
-  return ahc_mk_int(((v % m) + m) % m);
+  AhcNode *e = ahc_eval(x);
+  if (e->tag == AHC_INT)
+    return ahc_mk_int(((e->u.i % m) + m) % m);
+  {
+    limb *w = limb_alloc(e->u.big.n);
+    long r;
+    for (int i = 0; i < e->u.big.n; i++) w[i] = e->u.big.d[i];
+    r = (long)mag_divmod_small(w, e->u.big.n, (limb)m);
+    if (e->u.big.sign < 0) r = -r;
+    return ahc_mk_int(((r % m) + m) % m);
+  }
 }
 
 /* Refinement-types extension, stage 2: lazily-fired predicate check.
@@ -797,10 +1259,17 @@ static AhcNode *p_check_pred(AhcNode *p, AhcNode *x) {
 /* Refinement-types extension: lazily-fired range check. Strict in
    the checked value; the check application itself is a thunk, so the
    check fires exactly when the refined value is first demanded. */
+static long long_clamp(AhcNode *e) {
+  if (e->tag == AHC_INT) return e->u.i;
+  return e->u.big.sign < 0 ? LONG_MIN : LONG_MAX;
+}
+
 static AhcNode *p_check_range(AhcNode *lo, AhcNode *hi, AhcNode *x) {
   long l = ahc_eval(lo)->u.i;
   long h = ahc_eval(hi)->u.i;
-  AhcNode *v = ahc_eval(x);
+  AhcNode *ev = ahc_eval(x);
+  AhcNode *v = ev->tag == AHC_BIGINT
+                 ? ahc_mk_int(long_clamp(ev)) : ev;
   if (v->u.i < l || v->u.i > h) {
     fflush(stdout);
     fprintf(stderr, "refinement violation: %ld not in %ld .. %ld\n",

@@ -96,11 +96,21 @@ scientific). Guards are full Report 3.13 qualifier sequences: boolean
 tests, pattern guards (Just v <- lookup k m), and let, in any
 comma-separated combination, in equations and case alternatives.
 
+Integer is arbitrary-precision: a hand-rolled sign+magnitude bignum
+(uint32 limbs) lives in the runtime, and every integer primitive
+takes the C-long fast path until overflow promotes - product
+[1 .. 25], 2^100 and 30-digit literals print exactly what GHC
+prints, including floored div/mod on negative bignums. Values are
+canonical (anything that fits a long stays a plain int node), so
+comparisons, Show and the structural Eq/Ord see mixed
+representations transparently. Int overflow promotes rather than
+wrapping - behavior the Report leaves undefined.
+
 Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
-classes (the vocabulary is monomorphic at Double), Integer bignum
-(Int is a C long), the Integral class proper, multi-module imports,
-exhaustiveness warnings, and class defaults for builtin classes (a
-hand-written show-only Show instance lacks showsPrec/showList).
+classes (the vocabulary is monomorphic at Double), the Integral
+class proper, multi-module imports, exhaustiveness warnings, and
+class defaults for builtin classes (a hand-written show-only Show
+instance lacks showsPrec/showList).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

@@ -18,7 +18,7 @@
 
 typedef enum {
   AHC_THUNK, AHC_BLACKHOLE, AHC_FUN, AHC_CON, AHC_IND,
-  AHC_INT, AHC_DOUBLE, AHC_CHAR
+  AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT
 } AhcTag;
 
 typedef struct AhcNode AhcNode;
@@ -35,6 +35,7 @@ struct AhcNode {
     long i;
     double d;
     long c;
+    struct { int32_t sign; int32_t n; uint32_t *d; } big;
   } u;
 };
 
@@ -45,6 +46,7 @@ AhcNode **ahc_env(int n);                      /* allocate env array  */
 AhcNode *ahc_mk_thunk(AhcCode code, AhcNode **env);
 AhcNode *ahc_mk_fun(AhcFn fn, AhcNode **env);
 AhcNode *ahc_mk_int(long v);
+AhcNode *ahc_mk_big_str(const char *lexeme);   /* literal > long */
 AhcNode *ahc_mk_double(double v);
 AhcNode *ahc_mk_char(long v);
 AhcNode *ahc_mk_con(int contag, int arity);    /* fields set after    */

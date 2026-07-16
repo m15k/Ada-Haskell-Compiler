@@ -344,8 +344,41 @@ package body AHC.CodeGen is
             when Lit_C =>
                case N.Lit.Kind is
                   when L_Int =>
-                     return "ahc_mk_int(" & Int_Text (N.Lit.Text)
-                       & "L)";
+                     --  Literals beyond a C long go through the
+                     --  runtime bignum parser (which canonicalizes
+                     --  small values back to plain ints, so an
+                     --  over-conservative digit-count test is safe).
+                     declare
+                        Raw : constant String :=
+                          Table.Text (Names.Real_Name_Id (N.Lit.Text));
+                        First : Natural := Raw'First;
+                        Limit : Natural := 18;
+                     begin
+                        if Raw'Length > 0
+                          and then Raw (Raw'First) = '-'
+                        then
+                           First := First + 1;
+                        end if;
+                        if Raw'Last - First >= 1
+                          and then Raw (First) = '0'
+                          and then Raw (First + 1) in 'x' | 'X'
+                        then
+                           First := First + 2;
+                           Limit := 15;
+                        elsif Raw'Last - First >= 1
+                          and then Raw (First) = '0'
+                          and then Raw (First + 1) in 'o' | 'O'
+                        then
+                           First := First + 2;
+                           Limit := 20;
+                        end if;
+                        if Raw'Last - First + 1 > Limit then
+                           return "ahc_mk_big_str("""
+                             & Raw & """)";
+                        end if;
+                        return "ahc_mk_int(" & Int_Text (N.Lit.Text)
+                          & "L)";
+                     end;
                   when L_Float =>
                      return "ahc_mk_double("
                        & Table.Text (Names.Real_Name_Id (N.Lit.Text))

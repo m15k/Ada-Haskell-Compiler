@@ -7,8 +7,7 @@ the reason a conformance program does not exist for it.
 | Report | Feature | Status |
 |---|---|---|
 | 5 | Multi-module programs, imports/exports | single-module compiler; only the `module M where` header parses |
-| 6.4 | `Integer` bignum | `Int`/`Integer` are a C `long` |
-| 6.4 | `Rational`, `toRational`/`fromRational` beyond Double literals | no runtime |
+| 6.4 | `Rational`, `toRational`/`fromRational` beyond Double literals | no runtime (`Integer` IS arbitrary-precision now; `Int` overflow promotes rather than wrapping, which Report 6.4 leaves undefined) |
 | 6.4.3 | `Floating`/`RealFrac` as CLASSES | the full vocabulary (pi, exp/log/sqrt, `**`, logBase, trig, hyperbolics, floor/ceiling/round/truncate, fromIntegral) works, monomorphic at Double/Int |
 | 6.3.4 | `Enum` at Char/Double (`['a'..'z']`) | `Enum` is complete at `Int` (incl. stepped ranges, succ/pred, to/fromEnum); other types have no runtime |
 | 11.1 | `deriving (Enum, Bounded, Ix, Read)` | `Eq`/`Ord`/`Show` derive |
