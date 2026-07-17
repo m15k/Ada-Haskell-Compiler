@@ -115,6 +115,15 @@ abstract types (a type exported without its constructors) hold.
 Instances flow program-wide as the Report requires. Compilation is
 whole-program: no interface files.
 
+AHC.Optimizer (the PRD stretch goal) simplifies Core before code
+generation: atom inlining, beta-to-let, dead-binding elimination,
+case-of-known-constructor and default-only-case elision - each
+exactly sharing- and laziness-preserving - iterated to a bounded
+fixpoint. On a fib/sum/factorial bench it cuts the generated C ~7%
+and wall time ~25%; `ahc emit --no-opt` / AHC_NOOPT=1 disables it.
+Generated executables link with a 512MB stack so million-element
+thunk chains evaluate instead of overflowing.
+
 Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
 classes (the vocabulary is monomorphic at Double), the Integral
 class proper, exhaustiveness warnings, class defaults for builtin

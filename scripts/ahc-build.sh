@@ -9,11 +9,16 @@ src="$1"
 out="${2:-${1%.hs}}"
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
 # AHC_UNCHECKED=1 compiles refinement checks out (release policy).
-./bin/ahc emit "$src" "$out" ${AHC_UNCHECKED:+--unchecked} >/dev/null
+# AHC_NOOPT=1 skips the Core simplifier.
+./bin/ahc emit "$src" "$out" ${AHC_UNCHECKED:+--unchecked} ${AHC_NOOPT:+--no-opt} >/dev/null
 gcflags=""
 if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
   gcflags="-I$prefix/include -DAHC_USE_BOEHM -L$prefix/lib -lgc"
 fi
 # shellcheck disable=SC2086
-clang -O1 -o "$out" -I runtime "$out.c" runtime/ahc_rts.c $gcflags
+# Graph reduction evaluates long thunk chains (a 1M-element foldl)
+# by C recursion; give the main thread a 512MB stack so depth limits
+# match practical programs rather than the 8MB default.
+clang -O1 -o "$out" -I runtime -Wl,-stack_size,0x20000000 \
+  "$out.c" runtime/ahc_rts.c $gcflags
 echo "built $out"

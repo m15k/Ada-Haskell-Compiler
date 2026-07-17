@@ -26,6 +26,7 @@ with AHC.Fixity;
 with AHC.Kinds;
 with AHC.Layout;
 with AHC.Modules;
+with AHC.Optimizer;
 with AHC.Lexer;
 with AHC.Names;
 with AHC.Parser;
@@ -117,7 +118,7 @@ procedure AHC_Main is
    --  Mode: 'c' = Core dump, 't' = types, 'b' = build executable.
    procedure Run_Middle
      (Path     : String; Mode : Character; Out_Path : String := "";
-      Refined  : Boolean := True) is
+      Refined  : Boolean := True; Optimize : Boolean := True) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -449,6 +450,13 @@ procedure AHC_Main is
                   AHC.Refine.Insert_Checks
                     (Table, M, Sigs, Prims, Checks_Enabled => Refined);
                   AHC.Prelude_Core.Install_Bodies (Table, M, Env, Prims);
+                  if Optimize then
+                     declare
+                        Rounds : Natural;
+                     begin
+                        AHC.Optimizer.Optimize (M, Rounds);
+                     end;
+                  end if;
                   Create (C_Src, Out_File, C_Path);
                   Put (C_Src,
                        Ada.Strings.Unbounded.To_String
@@ -551,9 +559,15 @@ begin
          then
             Run_Middle (Argument (2), 'b', Argument (3),
                         Refined => False);
+         elsif Argument_Count = 4
+           and then Argument (4) = "--no-opt"
+         then
+            Run_Middle (Argument (2), 'b', Argument (3),
+                        Optimize => False);
          else
             Usage_Error
-              ("expected: ahc emit FILE.hs OUT [--unchecked]");
+              ("expected: ahc emit FILE.hs OUT"
+               & " [--unchecked|--no-opt]");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");
