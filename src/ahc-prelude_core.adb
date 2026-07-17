@@ -919,6 +919,19 @@ package body AHC.Prelude_Core is
          BP ("fromIntegral", "ahc_prim_int_to_d");
          BP ("ord", "ahc_prim_ord");
          BP ("chr", "ahc_prim_chr");
+         BP ("getLine", "ahc_prim_getline");
+         BP ("getContents", "ahc_prim_getcontents");
+         BP ("readFile", "ahc_prim_readfile");
+         BP ("getArgs", "ahc_prim_getargs");
+         BP ("getProgName", "ahc_prim_getprogname");
+         BP ("exitWithCode", "ahc_prim_exit_with");
+         BP ("primAndI", "ahc_prim_band");
+         BP ("primOrI", "ahc_prim_bor");
+         BP ("primXorI", "ahc_prim_bxor");
+         BP ("primShiftLI", "ahc_prim_bshl");
+         BP ("primShiftRI", "ahc_prim_bshr");
+         BP ("primComplementI", "ahc_prim_bcompl");
+         BP ("primPopCountI", "ahc_prim_popcount");
       end;
 
       --  div/mod/quot/rem take a (ignored) Num dictionary.
@@ -1203,6 +1216,119 @@ package body AHC.Prelude_Core is
                         Ms.Append (V (P_RetIO));
                         Ms.Append (Lam (S, Ap (V (P_Error),
                                                V (S))));
+                        Give_Dict (Real_Instance_Id (II), Ms);
+                     end;
+                  elsif Cl_Id = Env.Monad_Cl
+                    and then Inst.Head = Env.Maybe_TC
+                  then
+                     --  Nothing >>= _ = Nothing; Just x >>= k = k x.
+                     declare
+                        function Maybe_Case
+                          (Scrut : Real_Expr_Id;
+                           On_Nothing : Real_Expr_Id;
+                           X : Real_Var_Id;
+                           On_Just : Real_Expr_Id)
+                           return Real_Expr_Id
+                        is
+                           Alts : Alt_Id_Vectors.Vector;
+                           Bs : Var_Id_Vectors.Vector;
+                        begin
+                           Alts.Append (M.Add (Alt_Node'
+                             (Kind => Con_Alt, Span => Span,
+                              A_Con => Real_DataCon_Id
+                                         (Env.Nothing_DC),
+                              Binders =>
+                                Var_Id_Vectors.Empty_Vector,
+                              Alt_Body => On_Nothing)));
+                           Bs.Append (X);
+                           Alts.Append (M.Add (Alt_Node'
+                             (Kind => Con_Alt, Span => Span,
+                              A_Con => Real_DataCon_Id (Env.Just_DC),
+                              Binders => Bs,
+                              Alt_Body => On_Just)));
+                           return M.Add (Expr_Node'
+                             (Kind => Case_C, Span => Span,
+                              Scrutinee => Scrut, Alts => Alts));
+                        end Maybe_Case;
+
+                        Mv : constant Real_Var_Id := Fresh ("m");
+                        K  : constant Real_Var_Id := Fresh ("k");
+                        X  : constant Real_Var_Id := Fresh ("x");
+                        M2 : constant Real_Var_Id := Fresh ("m");
+                        K2 : constant Real_Var_Id := Fresh ("k");
+                        X2 : constant Real_Var_Id := Fresh ("x");
+                        S  : constant Real_Var_Id := Fresh ("s");
+                     begin
+                        Ms.Append (Lam (Mv, Lam (K,
+                          Maybe_Case (V (Var_Id (Mv)),
+                            ConE (Env.Nothing_DC), X,
+                            Ap (V (Var_Id (K)), V (Var_Id (X)))))));
+                        Ms.Append (Lam (M2, Lam (K2,
+                          Maybe_Case (V (Var_Id (M2)),
+                            ConE (Env.Nothing_DC), X2,
+                            V (Var_Id (K2))))));
+                        Ms.Append (ConE (Env.Just_DC));
+                        Ms.Append (Lam (S, ConE (Env.Nothing_DC)));
+                        Give_Dict (Real_Instance_Id (II), Ms);
+                     end;
+                  elsif Cl_Id = Env.Functor_Cl
+                    and then Inst.Head = Env.List_TC
+                  then
+                     declare
+                        D : constant Real_Var_Id := Fresh ("$d");
+                        Map_V : constant Var_Id := Lookup ("map");
+                     begin
+                        --  fmap = map (map's own dict-free scheme).
+                        Ms.Append (V (Map_V));
+                        pragma Unreferenced (D);
+                        Give_Dict (Real_Instance_Id (II), Ms);
+                     end;
+                  elsif Cl_Id = Env.Functor_Cl
+                    and then Inst.Head = Env.Maybe_TC
+                  then
+                     declare
+                        F : constant Real_Var_Id := Fresh ("f");
+                        Mv : constant Real_Var_Id := Fresh ("m");
+                        X : constant Real_Var_Id := Fresh ("x");
+                        Alts : Alt_Id_Vectors.Vector;
+                        Bs : Var_Id_Vectors.Vector;
+                     begin
+                        Alts.Append (M.Add (Alt_Node'
+                          (Kind => Con_Alt, Span => Span,
+                           A_Con => Real_DataCon_Id (Env.Nothing_DC),
+                           Binders => Var_Id_Vectors.Empty_Vector,
+                           Alt_Body => ConE (Env.Nothing_DC))));
+                        Bs.Append (X);
+                        Alts.Append (M.Add (Alt_Node'
+                          (Kind => Con_Alt, Span => Span,
+                           A_Con => Real_DataCon_Id (Env.Just_DC),
+                           Binders => Bs,
+                           Alt_Body =>
+                             Ap (ConE (Env.Just_DC),
+                                 Ap (V (Var_Id (F)),
+                                     V (Var_Id (X)))))));
+                        Ms.Append (Lam (F, Lam (Mv,
+                          M.Add (Expr_Node'
+                            (Kind => Case_C, Span => Span,
+                             Scrutinee => V (Var_Id (Mv)),
+                             Alts => Alts)))));
+                        Give_Dict (Real_Instance_Id (II), Ms);
+                     end;
+                  elsif Cl_Id = Env.Functor_Cl
+                    and then Inst.Head = Env.IO_TC
+                  then
+                     --  fmap f io = io >>= (return . f)
+                     declare
+                        F : constant Real_Var_Id := Fresh ("f");
+                        Io : constant Real_Var_Id := Fresh ("io");
+                        X : constant Real_Var_Id := Fresh ("x");
+                     begin
+                        Ms.Append (Lam (F, Lam (Io,
+                          Ap2 (V (P_BindIO), V (Var_Id (Io)),
+                               Lam (X,
+                                 Ap (V (P_RetIO),
+                                     Ap (V (Var_Id (F)),
+                                         V (Var_Id (X)))))))));
                         Give_Dict (Real_Instance_Id (II), Ms);
                      end;
                   elsif Cl_Id = Env.Monad_Cl

@@ -882,6 +882,8 @@ package body AHC.Builtins is
          --  tower).
          declare
             D_T : constant Real_Type_Id := TC (Env.Double_TC);
+            String_T2 : constant Real_Type_Id :=
+              LST (TC (Env.Char_TC));
             DD  : constant Real_Type_Id := FN (D_T, D_T);
             DDD : constant Real_Type_Id := FN (D_T, D_T, D_T);
             DI  : constant Real_Type_Id := FN (D_T, TC (Env.Int_TC));
@@ -911,6 +913,35 @@ package body AHC.Builtins is
               ("ord", Mono (FN (TC (Env.Char_TC), TC (Env.Int_TC))));
             Ignore := Def_Global
               ("chr", Mono (FN (TC (Env.Int_TC), TC (Env.Char_TC))));
+            Ignore := Def_Global
+              ("getLine", Mono (IO_T (String_T2)));
+            Ignore := Def_Global
+              ("getContents", Mono (IO_T (String_T2)));
+            Ignore := Def_Global
+              ("readFile",
+               Mono (FN (String_T2, IO_T (String_T2))));
+            Ignore := Def_Global
+              ("getArgs", Mono (IO_T (LST (String_T2))));
+            Ignore := Def_Global
+              ("getProgName", Mono (IO_T (String_T2)));
+            declare
+               A2 : constant Real_TyVar_Id := New_Tv ("a");
+               I_T : constant Real_Type_Id := TC (Env.Int_TC);
+               III : constant Real_Type_Id := FN (I_T, I_T, I_T);
+               II  : constant Real_Type_Id := FN (I_T, I_T);
+            begin
+               Ignore := Def_Global
+                 ("exitWithCode",
+                  Poly1 (A2, FN (TC (Env.Int_TC),
+                                 IO_T (TV (A2)))));
+               Ignore := Def_Global ("primAndI", Mono (III));
+               Ignore := Def_Global ("primOrI", Mono (III));
+               Ignore := Def_Global ("primXorI", Mono (III));
+               Ignore := Def_Global ("primShiftLI", Mono (III));
+               Ignore := Def_Global ("primShiftRI", Mono (III));
+               Ignore := Def_Global ("primComplementI", Mono (II));
+               Ignore := Def_Global ("primPopCountI", Mono (II));
+            end;
          end;
          pragma Unreferenced (Ignore);
       end;

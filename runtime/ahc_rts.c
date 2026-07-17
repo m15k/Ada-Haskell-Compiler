@@ -994,6 +994,183 @@ static AhcNode *p_show_d(AhcNode *a) {
   return ahc_mk_string(buf);
 }
 
+/* ----- Data.Bits at Int ------------------------------------------ */
+
+#define BITOP(name, op)                                               \
+  static AhcNode *name(AhcNode *a, AhcNode *b) {                      \
+    return ahc_mk_int(ahc_eval(a)->u.i op ahc_eval(b)->u.i);          \
+  }
+
+BITOP(p_band, &)
+BITOP(p_bor, |)
+BITOP(p_bxor, ^)
+BITOP(p_bshl, <<)
+BITOP(p_bshr, >>)
+
+static AhcNode *p_bcompl(AhcNode *a) {
+  return ahc_mk_int(~ahc_eval(a)->u.i);
+}
+static AhcNode *p_popcount(AhcNode *a) {
+  return ahc_mk_int(__builtin_popcountl(
+    (unsigned long)ahc_eval(a)->u.i));
+}
+
+/* ----- Input, arguments, exit ------------------------------------ */
+
+typedef struct { char *p; size_t len, cap; } StrBuf;
+
+static void sb_ch(StrBuf *b, char ch) {
+  if (b->len + 1 >= b->cap) {
+    b->cap = b->cap ? b->cap * 2 : 64;
+    b->p = realloc(b->p, b->cap);
+    if (!b->p) ahc_die("out of memory");
+  }
+  b->p[b->len++] = ch;
+}
+
+static void sb_cstr(StrBuf *b, const char *s) {
+  while (*s) sb_ch(b, *s++);
+}
+
+/* Flatten a Haskell string (evaluated cons spine of chars). */
+static void sb_hs(StrBuf *b, AhcNode *s) {
+  AhcNode *w = ahc_eval(s);
+  while (w->u.con.contag == CONS_TAG) {
+    sb_ch(b, (char)ahc_eval(w->u.con.fields[0])->u.c);
+    w = ahc_eval(w->u.con.fields[1]);
+  }
+}
+
+static AhcNode *sb_take(StrBuf *b) {
+  AhcNode *r;
+  sb_ch(b, 0);
+  r = ahc_mk_string(b->p);
+  free(b->p);
+  return r;
+}
+
+
+static int ahc_argc = 0;
+static char **ahc_argv = NULL;
+
+void ahc_set_args(int argc, char **argv) {
+  ahc_argc = argc;
+  ahc_argv = argv;
+}
+
+static AhcNode *io_getline(AhcNode **env, AhcNode *w) {
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  int ch;
+  AhcNode *r;
+  (void)env; (void)w;
+  while ((ch = fgetc(stdin)) != EOF && ch != '\n') {
+    if (len + 2 > cap) {
+      cap = cap ? cap * 2 : 64;
+      buf = realloc(buf, cap);
+      if (!buf) ahc_die("out of memory");
+    }
+    buf[len++] = (char)ch;
+  }
+  if (ch == EOF && len == 0)
+    ahc_die("Prelude.getLine: end of file");
+  if (buf) buf[len] = 0;
+  r = ahc_mk_string(buf ? buf : "");
+  free(buf);
+  return r;
+}
+
+static AhcNode *io_getcontents(AhcNode **env, AhcNode *w) {
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  int ch;
+  AhcNode *r;
+  (void)env; (void)w;
+  while ((ch = fgetc(stdin)) != EOF) {
+    if (len + 2 > cap) {
+      cap = cap ? cap * 2 : 256;
+      buf = realloc(buf, cap);
+      if (!buf) ahc_die("out of memory");
+    }
+    buf[len++] = (char)ch;
+  }
+  if (buf) buf[len] = 0;
+  r = ahc_mk_string(buf ? buf : "");
+  free(buf);
+  return r;
+}
+
+static AhcNode *io_readfile(AhcNode **env, AhcNode *w) {
+  StrBuf pb = {0, 0, 0};
+  FILE *f;
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  int ch;
+  AhcNode *r;
+  (void)w;
+  sb_hs(&pb, env[0]);
+  sb_ch(&pb, 0);
+  f = fopen(pb.p, "r");
+  if (!f) {
+    fflush(stdout);
+    fprintf(stderr, "ahc: %s: openFile: does not exist\n", pb.p);
+    exit(1);
+  }
+  free(pb.p);
+  while ((ch = fgetc(f)) != EOF) {
+    if (len + 2 > cap) {
+      cap = cap ? cap * 2 : 256;
+      buf = realloc(buf, cap);
+      if (!buf) ahc_die("out of memory");
+    }
+    buf[len++] = (char)ch;
+  }
+  fclose(f);
+  if (buf) buf[len] = 0;
+  r = ahc_mk_string(buf ? buf : "");
+  free(buf);
+  return r;
+}
+
+static AhcNode *p_readfile(AhcNode *path) {
+  AhcNode **e = ahc_env(1);
+  e[0] = path;
+  return ahc_mk_fun(io_readfile, e);
+}
+
+static AhcNode *io_getargs(AhcNode **env, AhcNode *w) {
+  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
+  (void)env; (void)w;
+  for (int i = ahc_argc - 1; i >= 1; i--) {
+    AhcNode *cell = ahc_mk_con(CONS_TAG, 2);
+    cell->u.con.fields[0] = ahc_mk_string(ahc_argv[i]);
+    cell->u.con.fields[1] = acc;
+    acc = cell;
+  }
+  return acc;
+}
+
+static AhcNode *io_getprogname(AhcNode **env, AhcNode *w) {
+  const char *p = ahc_argc > 0 ? ahc_argv[0] : "ahc";
+  const char *base = p;
+  (void)env; (void)w;
+  for (; *p; p++)
+    if (*p == '/') base = p + 1;
+  return ahc_mk_string(base);
+}
+
+static AhcNode *io_exit_with(AhcNode **env, AhcNode *w) {
+  (void)w;
+  fflush(stdout);
+  exit((int)ahc_eval(env[0])->u.i);
+}
+
+static AhcNode *p_exit_with(AhcNode *code) {
+  AhcNode **e = ahc_env(1);
+  e[0] = code;
+  return ahc_mk_fun(io_exit_with, e);
+}
+
 /* ----- Floating / RealFrac at Double ----------------------------- */
 
 #define DUOP(name, fn)                                                \
@@ -1039,38 +1216,6 @@ static AhcNode *p_int_to_d(AhcNode *a) {
 }
 
 /* ----- Report 11.4 Show machinery ------------------------------- */
-
-typedef struct { char *p; size_t len, cap; } StrBuf;
-
-static void sb_ch(StrBuf *b, char ch) {
-  if (b->len + 1 >= b->cap) {
-    b->cap = b->cap ? b->cap * 2 : 64;
-    b->p = realloc(b->p, b->cap);
-    if (!b->p) ahc_die("out of memory");
-  }
-  b->p[b->len++] = ch;
-}
-
-static void sb_cstr(StrBuf *b, const char *s) {
-  while (*s) sb_ch(b, *s++);
-}
-
-/* Flatten a Haskell string (evaluated cons spine of chars). */
-static void sb_hs(StrBuf *b, AhcNode *s) {
-  AhcNode *w = ahc_eval(s);
-  while (w->u.con.contag == CONS_TAG) {
-    sb_ch(b, (char)ahc_eval(w->u.con.fields[0])->u.c);
-    w = ahc_eval(w->u.con.fields[1]);
-  }
-}
-
-static AhcNode *sb_take(StrBuf *b) {
-  AhcNode *r;
-  sb_ch(b, 0);
-  r = ahc_mk_string(b->p);
-  free(b->p);
-  return r;
-}
 
 /* Show Char's showList: the whole char list as one quoted, escaped
    string literal - this is how show "abc" becomes "\"abc\"". */
@@ -1294,6 +1439,11 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
+  *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
+  *ahc_prim_popcount,
+  *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
+  *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
   *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
   *ahc_prim_pow_d, *ahc_prim_logbase_d,
   *ahc_prim_sin_d, *ahc_prim_cos_d, *ahc_prim_tan_d,
@@ -1357,6 +1507,19 @@ void ahc_rts_init(void) {
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
   ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
+  ahc_prim_band = mk_prim2(p_band);
+  ahc_prim_bor = mk_prim2(p_bor);
+  ahc_prim_bxor = mk_prim2(p_bxor);
+  ahc_prim_bshl = mk_prim2(p_bshl);
+  ahc_prim_bshr = mk_prim2(p_bshr);
+  ahc_prim_bcompl = mk_prim1(p_bcompl);
+  ahc_prim_popcount = mk_prim1(p_popcount);
+  ahc_prim_getline = ahc_mk_fun(io_getline, NULL);
+  ahc_prim_getcontents = ahc_mk_fun(io_getcontents, NULL);
+  ahc_prim_readfile = mk_prim1(p_readfile);
+  ahc_prim_getargs = ahc_mk_fun(io_getargs, NULL);
+  ahc_prim_getprogname = ahc_mk_fun(io_getprogname, NULL);
+  ahc_prim_exit_with = mk_prim1(p_exit_with);
   ahc_prim_exp_d = mk_prim1(p_exp_d);
   ahc_prim_log_d = mk_prim1(p_log_d);
   ahc_prim_sqrt_d = mk_prim1(p_sqrt_d);

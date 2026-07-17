@@ -1,0 +1,14 @@
+when fires
+(Just [1,2,4],Nothing)
+(Just [1,2],Nothing)
+(Just 2,Just 3)
+(Just 5,[1,2,3])
+Just [2,3]
+Just 6
+(Just 7,Just (-7))
+(Just 42,[2,4,6])
+Just "replaced"
+[7,7,7]
+[1,4,9]
+11
+22

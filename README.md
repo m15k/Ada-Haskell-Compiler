@@ -165,11 +165,16 @@ lookahead, and `(op) = e` bindings did not parse.
 
 ## Standard library
 
-`lib/` holds the beginnings of the Haskell 2010 library
-(docs/stdlib-plan.md): Data.List (sort and friends with base's exact
-production orders), Data.Char, Data.Maybe, Data.Ord (with Down),
-Data.Tuple and Data.Bool - ordinary Haskell modules compiled by AHC
-through its own module system. The driver resolves imports beside
+`lib/` holds the Haskell 2010 library subset (docs/stdlib-plan.md):
+Data.List (sort and friends with base's exact production orders),
+Data.Char, Data.Maybe, Data.Ord (with Down), Data.Tuple, Data.Bool,
+Control.Monad and Data.Functor (Monad-polymorphic over IO, [] and
+Maybe - the Maybe Monad and all three Functor dictionaries are
+real), System.IO / System.Environment / System.Exit (AHC programs
+can finally READ: getLine, getContents, readFile, interact, getArgs,
+exit codes), Numeric (showHex and friends), Data.Bits at Int, and
+Data.Ix as an ordinary source class - all ordinary Haskell modules
+compiled by AHC through its own module system. The driver resolves imports beside
 the root file, then `$AHC_LIB`, then `lib/`. Conformance oracles run
 the same programs under GHC's real base library, so AHC's
 implementations are tested against the canonical ones.

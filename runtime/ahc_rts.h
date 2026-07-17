@@ -47,6 +47,7 @@ AhcNode *ahc_mk_thunk(AhcCode code, AhcNode **env);
 AhcNode *ahc_mk_fun(AhcFn fn, AhcNode **env);
 AhcNode *ahc_mk_int(long v);
 AhcNode *ahc_mk_big_str(const char *lexeme);   /* literal > long */
+void ahc_set_args(int argc, char **argv);      /* called by main() */
 AhcNode *ahc_mk_double(double v);
 AhcNode *ahc_mk_char(long v);
 AhcNode *ahc_mk_con(int contag, int arity);    /* fields set after    */
@@ -74,6 +75,11 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
+  *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
+  *ahc_prim_popcount,
+  *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
+  *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
   *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
   *ahc_prim_pow_d, *ahc_prim_logbase_d,
   *ahc_prim_sin_d, *ahc_prim_cos_d, *ahc_prim_tan_d,

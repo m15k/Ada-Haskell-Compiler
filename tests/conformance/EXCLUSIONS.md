@@ -17,6 +17,10 @@ the reason a conformance program does not exist for it.
 
 | lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs stay in ASCII |
 | lib | `Data.List.foldl'` is `foldl` | AHC has no `seq`; observable results agree, strictness does not |
+| lib | `Data.Bits` is monomorphic at `Int` | GHC's is `Bits a`-polymorphic; AHC's is often MORE permissive at defaulting boundaries, GHC-oracle tests annotate |
+| lib | `Data.Ix` uses are not defaultable | AHC's Report-4.3.4 defaulting covers Prelude classes only; annotate `range (3, 7) :: [Int]` |
+| lib | `System.IO` handles | only stdin/stdout are real; no openFile/hClose, `readFile` reads whole files |
+| lib | `Control.Monad.guard` / MonadPlus | no MonadPlus class |
 
 Runtime warnings differ by design: GHC's `-W` diagnostics are not
 part of conformance (the oracle captures stdout only).

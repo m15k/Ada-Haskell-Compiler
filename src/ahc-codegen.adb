@@ -705,7 +705,8 @@ package body AHC.CodeGen is
               & ASCII.LF);
       Append (Result, Init);
       Append (Result, "}" & ASCII.LF & ASCII.LF);
-      Append (Result, "int main(void) {" & ASCII.LF
+      Append (Result, "int main(int argc, char **argv) {" & ASCII.LF
+              & "  ahc_set_args(argc, argv);" & ASCII.LF
               & "  ahc_rts_init();" & ASCII.LF
               & "  ahc_init_module();" & ASCII.LF);
       if Main_Var /= No_Var

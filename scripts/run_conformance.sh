@@ -27,7 +27,8 @@ for hs in tests/conformance/*.hs; do
   n=$((n+1))
   if [ "$mode" = "--oracle" ]; then
     [ -x "$GHC" ] || { echo "no GHC oracle at $GHC" >&2; exit 2; }
-    if "$GHC" "$hs" > "$tmp/oracle" 2>/dev/null; then
+    if "$GHC" "$hs" < "${hs%.hs}.stdin" > "$tmp/oracle" 2>/dev/null ||
+       { [ ! -f "${hs%.hs}.stdin" ] && "$GHC" "$hs" > "$tmp/oracle" 2>/dev/null; }; then
       mv "$tmp/oracle" "$exp"; echo "oracle $exp"
     else
       echo "ORACLE-FAIL $hs"; sed 's/^/  /' "$tmp/oracle" | head -5; fail=1
@@ -37,7 +38,11 @@ for hs in tests/conformance/*.hs; do
   if ! scripts/ahc-build.sh "$hs" "$tmp/$base" >/dev/null 2>"$tmp/err"; then
     echo "BUILD-FAIL $hs"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
   fi
-  got=$("$tmp/$base" 2>/dev/null)
+  if [ -f "tests/conformance/$base.stdin" ]; then
+    got=$("$tmp/$base" < "tests/conformance/$base.stdin" 2>/dev/null)
+  else
+    got=$("$tmp/$base" 2>/dev/null)
+  fi
   if [ ! -f "$exp" ]; then
     echo "MISSING $exp (run with --oracle)"; fail=1
   elif ! diff -u "$exp" <(printf '%s\n' "$got") > "$tmp/diff"; then
