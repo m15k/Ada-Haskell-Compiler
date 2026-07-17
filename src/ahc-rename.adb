@@ -83,10 +83,34 @@ package body AHC.Rename is
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Res   : in out Resolutions)
+      Res   : in out Resolutions;
+      Reg   : access Modules.Registry := null;
+      Fixities : Fixity.Fixity_Maps.Map :=
+        Fixity.Fixity_Maps.Empty_Map)
    is
       Prelude_Name : constant Names.Real_Name_Id :=
         Table.Intern ("Prelude");
+
+      --  This module's complete top-level tables (private names
+      --  included) - what pass B resolves against before imports.
+      Own : Modules.Iface;
+
+      --  One processed import: its exports filtered by the spec.
+      type Imp_View is record
+         Module    : Names.Name_Id := Names.No_Name;
+         Alias     : Names.Name_Id := Names.No_Name;
+         Qualified : Boolean := False;
+         Visible   : Modules.Iface;
+      end record;
+
+      function IV_Never_Eq (A, B : Imp_View) return Boolean is
+         pragma Unreferenced (A, B);
+      begin
+         return False;
+      end IV_Never_Eq;
+      package Imp_Vectors is new Ada.Containers.Vectors
+        (Positive, Imp_View, "=" => IV_Never_Eq);
+      Imp_Views : Imp_Vectors.Vector;
 
       package Scope_Maps renames Builtins.Var_Maps;
       package Scope_Vectors is new Ada.Containers.Vectors
@@ -115,14 +139,32 @@ package body AHC.Rename is
       function Text (N : Names.Name_Id) return String
       is (if N = Names.No_Name then "?" else Table.Text (N));
 
-      --  Strip a legal qualifier (Prelude or the module's own name).
-      --  Returns False (with a diagnostic) for anything else.
+      Modular : constant Boolean := Reg /= null;
+
+      --  The import view matching qualifier Q (alias first), 0 if
+      --  none.
+      function Find_View (Q : Names.Name_Id) return Natural is
+      begin
+         for I in 1 .. Imp_Views.Last_Index loop
+            if Imp_Views (I).Alias = Q
+              or else Imp_Views (I).Module = Q
+            then
+               return I;
+            end if;
+         end loop;
+         return 0;
+      end Find_View;
+
+      --  Strip a legal qualifier (Prelude, the module's own name, or
+      --  an import's name/alias). Returns False with a diagnostic
+      --  for anything else.
       function Check_Qualifier
         (Q : QName; Span : Diagnostics.Source_Span) return Boolean is
       begin
          if Q.Qualifier = Names.No_Name
            or else Q.Qualifier = Names.Name_Id (Prelude_Name)
            or else Q.Qualifier = Arena.Module_Name
+           or else (Modular and then Find_View (Q.Qualifier) /= 0)
          then
             return True;
          end if;
@@ -132,6 +174,146 @@ package body AHC.Rename is
                   & Text (Q.Qualifier) & "'");
          return False;
       end Check_Qualifier;
+
+
+      --  Import-aware resolution for type-level and constructor
+      --  names (own module, then unqualified imports first-hit, then
+      --  Base). Falls back to the flat environment when no registry
+      --  is in play.
+      function Mod_Find_TyCon
+        (Name : Names.Name_Id) return Core.TyCon_Id is
+      begin
+         if not Modular then
+            declare
+               C : constant Builtins.TyCon_Maps.Cursor :=
+                 Env.TyCons.Find (Name);
+            begin
+               return (if Builtins.TyCon_Maps.Has_Element (C)
+                       then Core.TyCon_Id
+                              (Builtins.TyCon_Maps.Element (C))
+                       else Core.No_TyCon);
+            end;
+         end if;
+         declare
+            C : Builtins.TyCon_Maps.Cursor := Own.TyCons.Find (Name);
+         begin
+            if Builtins.TyCon_Maps.Has_Element (C) then
+               return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
+            end if;
+            for V of Imp_Views loop
+               if not V.Qualified then
+                  C := V.Visible.TyCons.Find (Name);
+                  if Builtins.TyCon_Maps.Has_Element (C) then
+                     return Core.TyCon_Id
+                       (Builtins.TyCon_Maps.Element (C));
+                  end if;
+               end if;
+            end loop;
+            C := Reg.Base.TyCons.Find (Name);
+            if Builtins.TyCon_Maps.Has_Element (C) then
+               return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
+            end if;
+            return Core.No_TyCon;
+         end;
+      end Mod_Find_TyCon;
+
+      function Mod_Find_DataCon
+        (Name : Names.Name_Id) return Core.DataCon_Id is
+      begin
+         if not Modular then
+            declare
+               C : constant Builtins.DataCon_Maps.Cursor :=
+                 Env.DataCons.Find (Name);
+            begin
+               return (if Builtins.DataCon_Maps.Has_Element (C)
+                       then Core.DataCon_Id
+                              (Builtins.DataCon_Maps.Element (C))
+                       else 0);
+            end;
+         end if;
+         declare
+            C : Builtins.DataCon_Maps.Cursor :=
+              Own.DataCons.Find (Name);
+         begin
+            if Builtins.DataCon_Maps.Has_Element (C) then
+               return Core.DataCon_Id
+                 (Builtins.DataCon_Maps.Element (C));
+            end if;
+            for V of Imp_Views loop
+               if not V.Qualified then
+                  C := V.Visible.DataCons.Find (Name);
+                  if Builtins.DataCon_Maps.Has_Element (C) then
+                     return Core.DataCon_Id
+                       (Builtins.DataCon_Maps.Element (C));
+                  end if;
+               end if;
+            end loop;
+            C := Reg.Base.DataCons.Find (Name);
+            if Builtins.DataCon_Maps.Has_Element (C) then
+               return Core.DataCon_Id
+                 (Builtins.DataCon_Maps.Element (C));
+            end if;
+            return 0;
+         end;
+      end Mod_Find_DataCon;
+
+      function Mod_Find_Class
+        (Name : Names.Name_Id) return Core.Class_Id is
+      begin
+         if not Modular then
+            declare
+               C : constant Builtins.Class_Maps.Cursor :=
+                 Env.Classes.Find (Name);
+            begin
+               return (if Builtins.Class_Maps.Has_Element (C)
+                       then Core.Class_Id
+                              (Builtins.Class_Maps.Element (C))
+                       else Core.No_Class);
+            end;
+         end if;
+         declare
+            C : Builtins.Class_Maps.Cursor := Own.Classes.Find (Name);
+         begin
+            if Builtins.Class_Maps.Has_Element (C) then
+               return Core.Class_Id (Builtins.Class_Maps.Element (C));
+            end if;
+            for V of Imp_Views loop
+               if not V.Qualified then
+                  C := V.Visible.Classes.Find (Name);
+                  if Builtins.Class_Maps.Has_Element (C) then
+                     return Core.Class_Id
+                       (Builtins.Class_Maps.Element (C));
+                  end if;
+               end if;
+            end loop;
+            C := Reg.Base.Classes.Find (Name);
+            if Builtins.Class_Maps.Has_Element (C) then
+               return Core.Class_Id (Builtins.Class_Maps.Element (C));
+            end if;
+            return Core.No_Class;
+         end;
+      end Mod_Find_Class;
+
+      function Mod_Syn_Visible
+        (Name : Names.Name_Id) return Boolean is
+      begin
+         if not Modular then
+            return Env.Synonyms.Contains (Name);
+         end if;
+         if Own.Synonyms.Contains (Name)
+           or else Reg.Base.Synonyms.Contains (Name)
+         then
+            return True;
+         end if;
+         for V of Imp_Views loop
+            if not V.Qualified
+              and then V.Visible.Synonyms.Contains (Name)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Mod_Syn_Visible;
 
       function Mint_Local
         (Name : Names.Name_Id; Span : Diagnostics.Source_Span)
@@ -154,7 +336,8 @@ package body AHC.Rename is
       end Bind_In_Scope;
 
       function Lookup_Value
-        (Q : QName; Span : Diagnostics.Source_Span) return Resolution is
+        (Q : QName; Span : Diagnostics.Source_Span) return Resolution
+      is
       begin
          if not Check_Qualifier (Q, Span) then
             return (Kind => Unresolved);
@@ -171,6 +354,94 @@ package body AHC.Rename is
                   end if;
                end;
             end loop;
+         end if;
+         if Modular then
+            --  Qualified through an import name or alias.
+            if Q.Qualifier /= Names.No_Name
+              and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+              and then Q.Qualifier /= Arena.Module_Name
+            then
+               declare
+                  VI : constant Natural := Find_View (Q.Qualifier);
+                  C : Builtins.Var_Maps.Cursor;
+               begin
+                  C := Imp_Views (VI).Visible.Values.Find (Q.Name);
+                  if Builtins.Var_Maps.Has_Element (C) then
+                     return (Kind => Var_Res,
+                             Var => Builtins.Var_Maps.Element (C));
+                  end if;
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Out_Of_Scope, Span,
+                           "module '" & Text (Q.Qualifier)
+                           & "' does not export '"
+                           & Text (Q.Name) & "'");
+                  return (Kind => Unresolved);
+               end;
+            end if;
+            --  Own module first.
+            declare
+               C : constant Builtins.Var_Maps.Cursor :=
+                 Own.Values.Find (Q.Name);
+            begin
+               if Builtins.Var_Maps.Has_Element (C) then
+                  return (Kind => Var_Res,
+                          Var => Builtins.Var_Maps.Element (C));
+               end if;
+            end;
+            --  Unqualified imports; two distinct hits = ambiguous
+            --  (Report 5.5.2, at the use site).
+            if Q.Qualifier = Names.No_Name then
+               declare
+                  Found : Core.Var_Id := Core.No_Var;
+                  Amb : Boolean := False;
+               begin
+                  for V of Imp_Views loop
+                     if not V.Qualified then
+                        declare
+                           C : constant Builtins.Var_Maps.Cursor :=
+                             V.Visible.Values.Find (Q.Name);
+                        begin
+                           if Builtins.Var_Maps.Has_Element (C) then
+                              if Found /= Core.No_Var
+                                and then Found /= Core.Var_Id
+                                  (Builtins.Var_Maps.Element (C))
+                              then
+                                 Amb := True;
+                              end if;
+                              Found := Core.Var_Id
+                                (Builtins.Var_Maps.Element (C));
+                           end if;
+                        end;
+                     end if;
+                  end loop;
+                  if Amb then
+                     Bag.Add (Diagnostics.Error,
+                              Diagnostics.Rename_Out_Of_Scope, Span,
+                              "ambiguous name '" & Text (Q.Name)
+                              & "' (imported from several modules)");
+                     return (Kind => Unresolved);
+                  end if;
+                  if Found /= Core.No_Var then
+                     return (Kind => Var_Res,
+                             Var => Core.Real_Var_Id (Found));
+                  end if;
+               end;
+            end if;
+            --  Base: builtins + Prelude.
+            declare
+               C : constant Builtins.Var_Maps.Cursor :=
+                 Reg.Base.Values.Find (Q.Name);
+            begin
+               if Builtins.Var_Maps.Has_Element (C) then
+                  return (Kind => Var_Res,
+                          Var => Builtins.Var_Maps.Element (C));
+               end if;
+            end;
+            Bag.Add (Diagnostics.Error,
+                     Diagnostics.Rename_Out_Of_Scope,
+                     Span,
+                     "variable not in scope: " & Text (Q.Name));
+            return (Kind => Unresolved);
          end if;
          declare
             C : constant Builtins.Var_Maps.Cursor :=
@@ -193,12 +464,12 @@ package body AHC.Rename is
             return (Kind => Unresolved);
          end if;
          declare
-            C : constant Builtins.DataCon_Maps.Cursor :=
-              Env.DataCons.Find (Q.Name);
+            use type Core.DataCon_Id;
+            DC : constant Core.DataCon_Id := Mod_Find_DataCon (Q.Name);
          begin
-            if Builtins.DataCon_Maps.Has_Element (C) then
+            if DC /= 0 then
                return (Kind => Data_Res,
-                       Con => Builtins.DataCon_Maps.Element (C));
+                       Con => Core.Real_DataCon_Id (DC));
             end if;
          end;
          Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
@@ -224,12 +495,12 @@ package body AHC.Rename is
          case N.Kind is
             when Con_T =>
                declare
-                  C : constant Builtins.Class_Maps.Cursor :=
-                    Env.Classes.Find (N.Con.Name);
+                  Cl : constant Core.Class_Id :=
+                    Mod_Find_Class (N.Con.Name);
                begin
-                  if Builtins.Class_Maps.Has_Element (C) then
+                  if Cl /= Core.No_Class then
                      Res.Class_Res.Replace_Element
-                       (Positive (Id), Builtins.Class_Maps.Element (C));
+                       (Positive (Id), Cl);
                   else
                      Bag.Add (Diagnostics.Error,
                               Diagnostics.Rename_Out_Of_Scope, N.Span,
@@ -253,13 +524,13 @@ package body AHC.Rename is
                null;   --  implicitly bound; kinds handled in AHC.Kinds
             when Con_T =>
                declare
-                  C : constant Builtins.TyCon_Maps.Cursor :=
-                    Env.TyCons.Find (N.Con.Name);
+                  TC : constant Core.TyCon_Id :=
+                    Mod_Find_TyCon (N.Con.Name);
                begin
-                  if Builtins.TyCon_Maps.Has_Element (C) then
+                  if TC /= Core.No_TyCon then
                      Res.Ty_Res.Replace_Element
-                       (Positive (Id), Builtins.TyCon_Maps.Element (C));
-                  elsif Env.Synonyms.Contains (N.Con.Name) then
+                       (Positive (Id), TC);
+                  elsif Mod_Syn_Visible (N.Con.Name) then
                      null;   --  expanded during conversion, by name
                   else
                      Bag.Add (Diagnostics.Error,
@@ -320,6 +591,7 @@ package body AHC.Rename is
                   end if;
                   Top_Names.Include (Name, V);
                   Env.Values.Include (Name, V);
+                  Own.Values.Include (Name, V);
                   Set_Pat (Id, (Kind => Var_Res, Var => V));
                end;
             else
@@ -592,6 +864,7 @@ package body AHC.Rename is
                         end if;
                         Top_Names.Include (U.Name, V);
                         Env.Values.Include (U.Name, V);
+                        Own.Values.Include (U.Name, V);
                      else
                         V := Mint_Local (U.Name, Span);
                         Bind_In_Scope (U.Name, V, Span);
@@ -712,6 +985,7 @@ package body AHC.Rename is
            ((Name => N.D_Name, Arity => Natural (N.D_Vars.Length),
              Is_Newtype => Is_NT, others => <>));
          Env.TyCons.Include (N.D_Name, TC);
+         Own.TyCons.Include (N.D_Name, TC);
 
          for CI in 1 .. N.D_Cons.Last_Index loop
             declare
@@ -747,6 +1021,7 @@ package body AHC.Rename is
                     M.Mint_DataCon (Info);
                begin
                   Env.DataCons.Include (Info.Name, DC);
+                  Own.DataCons.Include (Info.Name, DC);
                   --  Field selector globals (schemes come from
                   --  AHC.Kinds; bodies from the desugarer).
                   for FN of Info.Field_Names loop
@@ -758,6 +1033,7 @@ package body AHC.Rename is
                                           others => <>));
                         begin
                            Env.Values.Include (FN, Sel);
+                           Own.Values.Include (FN, Sel);
                         end;
                      end if;
                   end loop;
@@ -850,6 +1126,7 @@ package body AHC.Rename is
                 TyCon => Core.TyCon_Id (Dict_TC), Tag => 1,
                 others => <>)));
          Env.Classes.Include (N.C_Name, Cl);
+         Own.Classes.Include (N.C_Name, Cl);
          Res.Decl_Class.Replace_Element
            (Positive (D), Core.Class_Id (Cl));
 
@@ -862,13 +1139,13 @@ package body AHC.Rename is
                  and then Arena.Node (AN.Fun).Kind = Con_T
                then
                   declare
-                     SC : constant Builtins.Class_Maps.Cursor :=
-                       Env.Classes.Find
+                     SC : constant Core.Class_Id :=
+                       Mod_Find_Class
                          (Arena.Node (AN.Fun).Con.Name);
                   begin
-                     if Builtins.Class_Maps.Has_Element (SC) then
+                     if SC /= Core.No_Class then
                         M.Classes (Cl).Supers.Append
-                          (Builtins.Class_Maps.Element (SC));
+                          (Core.Real_Class_Id (SC));
                      end if;
                   end;
                end if;
@@ -903,6 +1180,7 @@ package body AHC.Rename is
                           ((Name => Q.Name, Span => CN.Span,
                             Is_Global => True, others => <>));
                         Env.Values.Include (Q.Name, Sel);
+                        Own.Values.Include (Q.Name, Sel);
                         M.Classes (Cl).Methods.Append
                           (Core.Method_Info'
                              (Name => Q.Name,
@@ -945,12 +1223,11 @@ package body AHC.Rename is
          case N.Kind is
             when Con_T =>
                declare
-                  C : constant Builtins.TyCon_Maps.Cursor :=
-                    Env.TyCons.Find (N.Con.Name);
+                  TC2 : constant Core.TyCon_Id :=
+                    Mod_Find_TyCon (N.Con.Name);
                begin
-                  if Builtins.TyCon_Maps.Has_Element (C) then
-                     return Core.TyCon_Id
-                       (Builtins.TyCon_Maps.Element (C));
+                  if TC2 /= Core.No_TyCon then
+                     return TC2;
                   end if;
                end;
                Bag.Add (Diagnostics.Error,
@@ -1099,6 +1376,178 @@ package body AHC.Rename is
 
       Push_Scope;   --  a scratch scope so Scopes is never empty
 
+      --  Process imports: each becomes a view of the exporting
+      --  module's iface, filtered by the import spec.
+      if Modular then
+         for Imp of Arena.Imports loop
+            declare
+               MI : constant Natural :=
+                 (if Imp.Module = Names.Name_Id (Prelude_Name) then 0
+                  else Modules.Find (Reg.all, Imp.Module));
+               View : Imp_View;
+
+               procedure Filter (Source : Modules.Iface) is
+               begin
+                  if not Imp.Has_Spec then
+                     View.Visible := Source;
+                     return;
+                  end if;
+                  if Imp.Hiding then
+                     View.Visible := Source;
+                     for E of Imp.Spec loop
+                        View.Visible.Values.Exclude (E.Name.Name);
+                        View.Visible.TyCons.Exclude (E.Name.Name);
+                        View.Visible.DataCons.Exclude (E.Name.Name);
+                        View.Visible.Classes.Exclude (E.Name.Name);
+                        View.Visible.Synonyms.Exclude (E.Name.Name);
+                     end loop;
+                     return;
+                  end if;
+                  --  Only-list: copy the named entities across.
+                  for E of Imp.Spec loop
+                     declare
+                        Hit : Boolean := False;
+                        C : Builtins.Var_Maps.Cursor :=
+                          Source.Values.Find (E.Name.Name);
+                     begin
+                        if Builtins.Var_Maps.Has_Element (C) then
+                           View.Visible.Values.Include
+                             (E.Name.Name,
+                              Builtins.Var_Maps.Element (C));
+                           Hit := True;
+                        end if;
+                        declare
+                           TCC : constant Builtins.TyCon_Maps.Cursor
+                             := Source.TyCons.Find (E.Name.Name);
+                        begin
+                           if Builtins.TyCon_Maps.Has_Element (TCC)
+                           then
+                              View.Visible.TyCons.Include
+                                (E.Name.Name,
+                                 Builtins.TyCon_Maps.Element (TCC));
+                              Hit := True;
+                              if E.Sub_All or else E.Has_Subs then
+                                 --  T(..) / T(A, f): constructors
+                                 --  and selectors travel with T.
+                                 declare
+                                    TC : constant
+                                      Core.Real_TyCon_Id :=
+                                        Builtins.TyCon_Maps.Element
+                                          (TCC);
+                                 begin
+                                    for DCI of M.Info (TC).Cons loop
+                                       declare
+                                          DI : constant
+                                            Core.DataCon_Info :=
+                                              M.Info
+                                                (Core.Real_DataCon_Id
+                                                   (DCI));
+                                          DCC : constant Builtins
+                                            .DataCon_Maps.Cursor :=
+                                              Source.DataCons.Find
+                                                (DI.Name);
+                                       begin
+                                          if Builtins.DataCon_Maps
+                                            .Has_Element (DCC)
+                                          then
+                                             View.Visible.DataCons
+                                               .Include (DI.Name,
+                                                 Builtins.DataCon_Maps
+                                                   .Element (DCC));
+                                          end if;
+                                          for FN of DI.Field_Names
+                                          loop
+                                             declare
+                                                FC : constant Builtins
+                                                  .Var_Maps.Cursor :=
+                                                    Source.Values.Find
+                                                      (FN);
+                                             begin
+                                                if Builtins.Var_Maps
+                                                  .Has_Element (FC)
+                                                then
+                                                   View.Visible.Values
+                                                     .Include (FN,
+                                                       Builtins
+                                                         .Var_Maps
+                                                         .Element
+                                                           (FC));
+                                                end if;
+                                             end;
+                                          end loop;
+                                       end;
+                                    end loop;
+                                 end;
+                              end if;
+                           end if;
+                        end;
+                        declare
+                           CLC : constant Builtins.Class_Maps.Cursor
+                             := Source.Classes.Find (E.Name.Name);
+                        begin
+                           if Builtins.Class_Maps.Has_Element (CLC)
+                           then
+                              View.Visible.Classes.Include
+                                (E.Name.Name,
+                                 Builtins.Class_Maps.Element (CLC));
+                              Hit := True;
+                              if E.Sub_All then
+                                 --  C(..): method selectors.
+                                 for Mth of M.Info
+                                   (Builtins.Class_Maps.Element
+                                      (CLC)).Methods
+                                 loop
+                                    C := Source.Values.Find
+                                      (Mth.Name);
+                                    if Builtins.Var_Maps.Has_Element
+                                      (C)
+                                    then
+                                       View.Visible.Values.Include
+                                         (Mth.Name,
+                                          Builtins.Var_Maps.Element
+                                            (C));
+                                    end if;
+                                 end loop;
+                              end if;
+                           end if;
+                        end;
+                        if Source.Synonyms.Contains (E.Name.Name)
+                        then
+                           View.Visible.Synonyms.Include
+                             (E.Name.Name,
+                              Fixity.Fixity_Info'(others => <>));
+                           Hit := True;
+                        end if;
+                        if not Hit then
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Rename_Out_Of_Scope,
+                                    Imp.Span,
+                                    "module '" & Text (Imp.Module)
+                                    & "' does not export '"
+                                    & Text (E.Name.Name) & "'");
+                        end if;
+                     end;
+                  end loop;
+               end Filter;
+            begin
+               View.Module := Imp.Module;
+               View.Alias := Imp.Alias;
+               View.Qualified := Imp.Qualified;
+               if Imp.Module = Names.Name_Id (Prelude_Name) then
+                  Filter (Reg.Base);
+               elsif MI = 0 then
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Out_Of_Scope, Imp.Span,
+                           "module '" & Text (Imp.Module)
+                           & "' has not been compiled");
+               else
+                  Filter (Reg.Mods (MI).Exports);
+               end if;
+               Imp_Views.Append (View);
+            end;
+         end loop;
+      end if;
+
       --  Pass A: types, classes, instances, synonyms first...
       for D of Arena.Top_Decls loop
          declare
@@ -1116,6 +1565,8 @@ package body AHC.Rename is
                               "type '" & Text (N.S_Name)
                               & "' is defined more than once");
                   end if;
+                  Own.Synonyms.Include
+                    (N.S_Name, Fixity.Fixity_Info'(others => <>));
                   Env.Synonyms.Include
                     (N.S_Name,
                      (Arity => Natural (N.S_Vars.Length),
@@ -1196,6 +1647,147 @@ package body AHC.Rename is
       end loop;
 
       Pop_Scope;
+
+      --  Register this module's exports: everything top-level, or
+      --  the export list's subset (Report 5.2). Re-exports resolve
+      --  through imports and Base.
+      if Modular then
+         declare
+            Ent : Modules.Module_Entry;
+
+            procedure Export_All is
+            begin
+               Ent.Exports := Own;
+            end Export_All;
+
+            procedure Export_Listed is
+            begin
+               for E of Arena.Exports loop
+                  case E.Kind is
+                     when Module_Ent =>
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Unsupported,
+                                 (Start => 1, Stop => 1),
+                                 "'module M' re-exports are not"
+                                 & " supported");
+                     when Var_Ent =>
+                        declare
+                           R : constant Resolution :=
+                             Lookup_Value (E.Name, (1, 1));
+                        begin
+                           if R.Kind = Var_Res then
+                              Ent.Exports.Values.Include
+                                (E.Name.Name, R.Var);
+                           end if;
+                        end;
+                     when Type_Ent =>
+                        declare
+                           TC : constant Core.TyCon_Id :=
+                             Mod_Find_TyCon (E.Name.Name);
+                           Cl : constant Core.Class_Id :=
+                             Mod_Find_Class (E.Name.Name);
+                        begin
+                           if TC /= Core.No_TyCon then
+                              Ent.Exports.TyCons.Include
+                                (E.Name.Name,
+                                 Core.Real_TyCon_Id (TC));
+                              if E.Sub_All or else E.Has_Subs then
+                                 for DCI of M.Info
+                                   (Core.Real_TyCon_Id (TC)).Cons
+                                 loop
+                                    declare
+                                       DI : constant
+                                         Core.DataCon_Info :=
+                                           M.Info
+                                             (Core.Real_DataCon_Id
+                                                (DCI));
+                                    begin
+                                       Ent.Exports.DataCons.Include
+                                         (DI.Name,
+                                          Core.Real_DataCon_Id
+                                            (DCI));
+                                       for FN of DI.Field_Names loop
+                                          declare
+                                             C : constant Builtins
+                                               .Var_Maps.Cursor :=
+                                                 Own.Values.Find
+                                                   (FN);
+                                          begin
+                                             if Builtins.Var_Maps
+                                               .Has_Element (C)
+                                             then
+                                                Ent.Exports.Values
+                                                  .Include (FN,
+                                                    Builtins.Var_Maps
+                                                      .Element (C));
+                                             end if;
+                                          end;
+                                       end loop;
+                                    end;
+                                 end loop;
+                              end if;
+                           elsif Cl /= Core.No_Class then
+                              Ent.Exports.Classes.Include
+                                (E.Name.Name,
+                                 Core.Real_Class_Id (Cl));
+                              if E.Sub_All then
+                                 for Mth of M.Info
+                                   (Core.Real_Class_Id (Cl)).Methods
+                                 loop
+                                    declare
+                                       C : constant Builtins
+                                         .Var_Maps.Cursor :=
+                                           Own.Values.Find
+                                             (Mth.Name);
+                                    begin
+                                       if Builtins.Var_Maps
+                                         .Has_Element (C)
+                                       then
+                                          Ent.Exports.Values.Include
+                                            (Mth.Name,
+                                             Builtins.Var_Maps
+                                               .Element (C));
+                                       end if;
+                                    end;
+                                 end loop;
+                              end if;
+                           elsif Own.Synonyms.Contains (E.Name.Name)
+                           then
+                              Ent.Exports.Synonyms.Include
+                                (E.Name.Name,
+                                 Fixity.Fixity_Info'(others => <>));
+                           else
+                              Bag.Add
+                                (Diagnostics.Error,
+                                 Diagnostics.Rename_Out_Of_Scope,
+                                 (Start => 1, Stop => 1),
+                                 "exported type '"
+                                 & Text (E.Name.Name)
+                                 & "' is not defined");
+                           end if;
+                        end;
+                  end case;
+               end loop;
+            end Export_Listed;
+         begin
+            Ent.Name :=
+              (if Arena.Module_Name = Names.No_Name
+               then Names.Name_Id (Table.Intern ("Main"))
+               else Arena.Module_Name);
+            if Arena.Has_Export_List then
+               Export_Listed;
+            else
+               Export_All;
+            end if;
+            --  Synonyms always ride along unless an export list is
+            --  present (they are name-only visibility).
+            if not Arena.Has_Export_List then
+               Ent.Exports.Synonyms := Own.Synonyms;
+            end if;
+            Ent.Exports.Fixities := Fixities;
+            Reg.Mods.Append (Ent);
+         end;
+      end if;
    end Resolve_Module;
 
 end AHC.Rename;

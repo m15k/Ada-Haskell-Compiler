@@ -26,6 +26,8 @@ with Ada.Containers.Vectors;
 with AHC.Builtins;
 with AHC.Core;
 with AHC.Diagnostics;
+with AHC.Fixity;
+with AHC.Modules;
 with AHC.Names;
 with AHC.Syntax;
 
@@ -96,12 +98,19 @@ package AHC.Rename is
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type
    end record;
 
+   --  Reg carries the module registry: Base (builtins + Prelude
+   --  snapshot) plus each already-compiled module's exports; on
+   --  return this module's own exports are appended. Fixities is the
+   --  module's top-level fixity table, stored with its entry.
    procedure Resolve_Module
      (Arena : Syntax.Module_Arena;
       Table : in out Names.Name_Table;
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Res   : in out Resolutions);
+      Res   : in out Resolutions;
+      Reg   : access Modules.Registry := null;
+      Fixities : Fixity.Fixity_Maps.Map :=
+        Fixity.Fixity_Maps.Empty_Map);
 
 end AHC.Rename;

@@ -1,28 +1,12 @@
-with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Vectors;
 
 package body AHC.Fixity is
 
    use AHC.Syntax;
-   use type Names.Name_Id;
 
    function Chain_Free (Arena : Syntax.Module_Arena) return Boolean
    is ((for all N of Arena.Exprs => N.Kind /= Op_Chain_E)
        and then (for all N of Arena.Pats => N.Kind /= Con_Chain_P));
-
-   type Fixity_Info is record
-      Assoc : Assoc_Kind := Assoc_Left;
-      Prec  : Natural := 9;
-   end record;
-
-   function Name_Hash (N : Names.Name_Id) return Ada.Containers.Hash_Type
-   is (Ada.Containers.Hash_Type (N));
-
-   package Fixity_Maps is new Ada.Containers.Hashed_Maps
-     (Key_Type        => Names.Name_Id,
-      Element_Type    => Fixity_Info,
-      Hash            => Name_Hash,
-      Equivalent_Keys => "=");
 
    package Scope_Vectors is new Ada.Containers.Vectors
      (Positive, Fixity_Maps.Map, Fixity_Maps."=");
@@ -30,7 +14,9 @@ package body AHC.Fixity is
    procedure Resolve_Module
      (Arena : in out Syntax.Module_Arena;
       Table : in out Names.Name_Table;
-      Bag   : in out Diagnostics.Diagnostic_Bag)
+      Bag   : in out Diagnostics.Diagnostic_Bag;
+      Base  : Fixity_Maps.Map := Fixity_Maps.Empty_Map;
+      Tops  : access Fixity_Maps.Map := null)
    is
       Scopes : Scope_Vectors.Vector;
 
@@ -499,7 +485,13 @@ package body AHC.Fixity is
 
    begin
       Push_Prelude_Scope;
+      if not Base.Is_Empty then
+         Scopes.Append (Base);
+      end if;
       Push_Scope (Arena.Top_Decls);
+      if Tops /= null then
+         Tops.all := Scopes.Last_Element;
+      end if;
       Resolve_Group (Arena.Top_Decls);
 
       --  Predicate refinements embed expressions inside types, which
@@ -516,6 +508,9 @@ package body AHC.Fixity is
       end loop;
 
       Pop_Scope;
+      if not Base.Is_Empty then
+         Pop_Scope;
+      end if;
       Pop_Scope;
    end Resolve_Module;
 

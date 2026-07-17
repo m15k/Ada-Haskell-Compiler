@@ -12,6 +12,10 @@ with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
+with Ada.Containers.Hashed_Maps;
+with Ada.Containers.Vectors;
+with Ada.Directories;
+
 with AHC.Builtins;
 with AHC.CodeGen;
 with AHC.Core.Printer;
@@ -21,6 +25,7 @@ with AHC.Elaborate;
 with AHC.Fixity;
 with AHC.Kinds;
 with AHC.Layout;
+with AHC.Modules;
 with AHC.Lexer;
 with AHC.Names;
 with AHC.Parser;
@@ -35,6 +40,7 @@ with AHC.Typechecker;
 procedure AHC_Main is
    use Ada.Command_Line;
    use Ada.Text_IO;
+   use type AHC.Names.Name_Id;
 
    procedure Print_Usage (Target : File_Type) is
    begin
@@ -115,16 +121,136 @@ procedure AHC_Main is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
-      Stream : AHC.Tokens.Token_Vectors.Vector;
-      Arena  : AHC.Syntax.Module_Arena;
       M      : AHC.Core.Core_Module;
       Env    : AHC.Builtins.Global_Env;
-      Res    : AHC.Rename.Resolutions;
       Sigs   : AHC.Kinds.Sig_Maps.Map;
       Annos  : AHC.Kinds.Anno_Maps.Map;
-      Preds  : AHC.Kinds.Pred_Vectors.Vector;
       Prelude_Groups : Natural := 0;
+
+      Reg : aliased AHC.Modules.Registry;
+
+      --  The module graph, discovered from the root file's imports
+      --  (Report ch. 5): A.B.C lives in A/B/C.hs beside the root.
+      type Arena_Ref is access AHC.Syntax.Module_Arena;
+      type Loaded is record
+         Name  : AHC.Names.Name_Id := AHC.Names.No_Name;
+         Path  : Ada.Strings.Unbounded.Unbounded_String;
+         Text  : AHC.Source_Text.Source;
+         Ref   : Arena_Ref;
+      end record;
+      package Loaded_Vectors is new Ada.Containers.Vectors
+        (Positive, Loaded);
+      Order : Loaded_Vectors.Vector;   --  dependencies first
+      Failed : Boolean := False;
+
+      Root_Dir : constant String :=
+        Ada.Directories.Containing_Directory (Path);
+
+      function Module_Path (Name : String) return String is
+         P : String := Name;
+      begin
+         for I in P'Range loop
+            if P (I) = '.' then
+               P (I) := '/';
+            end if;
+         end loop;
+         return Root_Dir & "/" & P & ".hs";
+      end Module_Path;
+
+      Prelude_N : AHC.Names.Real_Name_Id;
+
+      --  DFS with an on-stack set: postorder is dependency order,
+      --  a back edge is an import cycle.
+      type St is (Unseen, Loading, Done);
+      package State_Maps is new Ada.Containers.Hashed_Maps
+        (AHC.Names.Name_Id, St, AHC.Fixity.Name_Hash, AHC.Names."=");
+      States : State_Maps.Map;
+
+      procedure Load (File : String; Mod_Name : AHC.Names.Name_Id);
+
+      procedure Load (File : String; Mod_Name : AHC.Names.Name_Id) is
+         L : Loaded;
+         L_Stream : AHC.Tokens.Token_Vectors.Vector;
+      begin
+         if Failed then
+            return;
+         end if;
+         States.Include (Mod_Name, Loading);
+         begin
+            L.Text := AHC.Source_Text.Load_File (File);
+         exception
+            when Ada.IO_Exceptions.Name_Error =>
+               Put_Line (Standard_Error,
+                         "ahc: cannot find module '"
+                         & Table.Text
+                             (AHC.Names.Real_Name_Id (Mod_Name))
+                         & "' (looked for " & File & ")");
+               Failed := True;
+               return;
+         end;
+         L.Name := Mod_Name;
+         L.Path := Ada.Strings.Unbounded.To_Unbounded_String (File);
+         L.Ref := new AHC.Syntax.Module_Arena;
+         AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream);
+         AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
+         if Bag.Has_Errors then
+            Bag.Print_All (L.Text);
+            Failed := True;
+            return;
+         end if;
+         for Imp of L.Ref.Imports loop
+            if Imp.Module /= AHC.Names.Name_Id (Prelude_N) then
+               declare
+                  C : constant State_Maps.Cursor :=
+                    States.Find (Imp.Module);
+               begin
+                  if State_Maps.Has_Element (C) then
+                     if State_Maps.Element (C) = Loading then
+                        Put_Line (Standard_Error,
+                                  "ahc: import cycle through '"
+                                  & Table.Text
+                                      (AHC.Names.Real_Name_Id
+                                         (Imp.Module)) & "'");
+                        Failed := True;
+                        return;
+                     end if;
+                  else
+                     Load (Module_Path
+                             (Table.Text (AHC.Names.Real_Name_Id
+                                            (Imp.Module))),
+                           Imp.Module);
+                     if Failed then
+                        return;
+                     end if;
+                  end if;
+               end;
+            end if;
+         end loop;
+         States.Include (Mod_Name, Done);
+         Order.Append (L);
+      end Load;
+
+      --  Snapshot the flat environment as the registry Base.
+      procedure Snapshot_Base is
+      begin
+         Reg.Base.Values := Env.Values;
+         Reg.Base.TyCons := Env.TyCons;
+         Reg.Base.DataCons := Env.DataCons;
+         Reg.Base.Classes := Env.Classes;
+         Reg.Base.Synonyms.Clear;
+         declare
+            C : AHC.Builtins.Syn_Maps.Cursor := Env.Synonyms.First;
+         begin
+            while AHC.Builtins.Syn_Maps.Has_Element (C) loop
+               Reg.Base.Synonyms.Include
+                 (AHC.Builtins.Syn_Maps.Key (C),
+                  AHC.Fixity.Fixity_Info'(others => <>));
+               AHC.Builtins.Syn_Maps.Next (C);
+            end loop;
+         end;
+      end Snapshot_Base;
    begin
+      Prelude_N := Table.Intern ("Prelude");
       begin
          Text := AHC.Source_Text.Load_File (Path);
       exception
@@ -133,9 +259,41 @@ procedure AHC_Main is
             return;
       end;
 
-      AHC.Lexer.Scan (Text, Table, Bag, Stream);
-      AHC.Parser.Parse_Module (Stream, Table, Bag, Arena);
-      AHC.Fixity.Resolve_Module (Arena, Table, Bag);
+      --  Discover and parse the module graph rooted at Path.
+      declare
+         Root_Stream : AHC.Tokens.Token_Vectors.Vector;
+         Root : Loaded;
+      begin
+         Root.Text := Text;
+         Root.Path := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+         Root.Ref := new AHC.Syntax.Module_Arena;
+         AHC.Lexer.Scan (Text, Table, Bag, Root_Stream);
+         AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
+                                  Root.Ref.all);
+         Root.Name :=
+           (if Root.Ref.Module_Name = AHC.Names.No_Name
+            then AHC.Names.Name_Id (Table.Intern ("Main"))
+            else Root.Ref.Module_Name);
+         if not Bag.Has_Errors then
+            States.Include (Root.Name, Loading);
+            for Imp of Root.Ref.Imports loop
+               if Imp.Module /= AHC.Names.Name_Id (Prelude_N)
+                 and then not States.Contains (Imp.Module)
+               then
+                  Load (Module_Path
+                          (Table.Text (AHC.Names.Real_Name_Id
+                                         (Imp.Module))),
+                        Imp.Module);
+               end if;
+            end loop;
+            Order.Append (Root);
+         end if;
+         if Failed then
+            Set_Exit_Status (1);
+            return;
+         end if;
+      end;
+
       if not Bag.Has_Errors then
          AHC.Builtins.Install (M, Table, Env);
 
@@ -183,14 +341,70 @@ procedure AHC_Main is
             end if;
          end;
          Prelude_Groups := Natural (M.Top_Binds.Length);
+         Snapshot_Base;
 
-         AHC.Rename.Resolve_Module (Arena, Table, Bag, M, Env, Res);
-         AHC.Kinds.Check_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
+         --  Frontend for every module, dependencies first, into the
+         --  shared Core module. Each gets fresh resolutions,
+         --  annotation and predicate tables (their keys are
+         --  per-arena); signatures are Core-var keyed and shared.
+         for L of Order loop
+            exit when Bag.Has_Errors;
+            declare
+               L_Res   : AHC.Rename.Resolutions;
+               L_Annos : AHC.Kinds.Anno_Maps.Map;
+               L_Preds : AHC.Kinds.Pred_Vectors.Vector;
+               Tops     : aliased AHC.Fixity.Fixity_Maps.Map;
+               Base_Fix : AHC.Fixity.Fixity_Maps.Map;
+            begin
+               for Imp of L.Ref.Imports loop
+                  declare
+                     MI : constant Natural :=
+                       AHC.Modules.Find (Reg, Imp.Module);
+                  begin
+                     if MI /= 0 then
+                        declare
+                           C : AHC.Fixity.Fixity_Maps.Cursor :=
+                             Reg.Mods (MI).Exports.Fixities.First;
+                        begin
+                           while AHC.Fixity.Fixity_Maps.Has_Element
+                             (C)
+                           loop
+                              Base_Fix.Include
+                                (AHC.Fixity.Fixity_Maps.Key (C),
+                                 AHC.Fixity.Fixity_Maps.Element (C));
+                              AHC.Fixity.Fixity_Maps.Next (C);
+                           end loop;
+                        end;
+                     end if;
+                  end;
+               end loop;
+               AHC.Fixity.Resolve_Module
+                 (L.Ref.all, Table, Bag, Base_Fix,
+                  Tops'Unchecked_Access);
+               if not Bag.Has_Errors then
+                  AHC.Rename.Resolve_Module
+                    (L.Ref.all, Table, Bag, M, Env, L_Res,
+                     Reg'Unchecked_Access, Tops);
+               end if;
+               if not Bag.Has_Errors then
+                  AHC.Kinds.Check_Module
+                    (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
+                     L_Annos, L_Preds);
+               end if;
+               if not Bag.Has_Errors then
+                  AHC.Desugar.Desugar_Module
+                    (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
+                     L_Annos, L_Preds);
+               end if;
+               if Bag.Has_Errors then
+                  Bag.Print_All (L.Text);
+                  Set_Exit_Status (1);
+                  return;
+               end if;
+            end;
+         end loop;
       end if;
       if not Bag.Has_Errors then
-         AHC.Desugar.Desugar_Module
-           (Arena, Res, Table, Bag, M, Env, Sigs, Annos, Preds);
          if Mode = 't' then
             AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
             if not Bag.Has_Errors then

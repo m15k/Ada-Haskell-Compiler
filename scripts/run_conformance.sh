@@ -46,5 +46,34 @@ for hs in tests/conformance/*.hs; do
     echo "ok   $hs"
   fi
 done
+
+# Multi-module cases: tests/conformance/multi/<case>/Main.hs plus its
+# modules; the golden lives beside Main.hs.
+for main in tests/conformance/multi/*/Main.hs; do
+  dir=$(dirname "$main")
+  base=$(basename "$dir")
+  exp="$dir/expected.out"
+  n=$((n+1))
+  if [ "$mode" = "--oracle" ]; then
+    if (cd "$dir" && "$GHC" Main.hs) > "$tmp/oracle" 2>/dev/null; then
+      mv "$tmp/oracle" "$exp"; echo "oracle $exp"
+    else
+      echo "ORACLE-FAIL $main"; fail=1
+    fi
+    continue
+  fi
+  if ! scripts/ahc-build.sh "$main" "$tmp/mm_$base" >/dev/null 2>"$tmp/err"; then
+    echo "BUILD-FAIL $main"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
+  fi
+  got=$("$tmp/mm_$base" 2>/dev/null)
+  if [ ! -f "$exp" ]; then
+    echo "MISSING $exp (run with --oracle)"; fail=1
+  elif ! diff -u "$exp" <(printf '%s
+' "$got") > "$tmp/diff"; then
+    echo "FAIL $main"; head -12 "$tmp/diff"; fail=1
+  else
+    echo "ok   $main"
+  fi
+done
 echo "$n conformance programs"
 exit $fail

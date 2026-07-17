@@ -106,11 +106,19 @@ comparisons, Show and the structural Eq/Ord see mixed
 representations transparently. Int overflow promotes rather than
 wrapping - behavior the Report leaves undefined.
 
+Multi-module programs work: the driver discovers imports from the
+root file (module A.B.C in A/B/C.hs beside it), topologically orders
+the graph (cycles rejected), and compiles each module through the
+frontend into the shared Core - imports support qualified / as /
+hiding / import lists, export lists support f, T(..) and C(..), and
+abstract types (a type exported without its constructors) hold.
+Instances flow program-wide as the Report requires. Compilation is
+whole-program: no interface files.
+
 Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
 classes (the vocabulary is monomorphic at Double), the Integral
-class proper, multi-module imports, exhaustiveness warnings, and
-class defaults for builtin classes (a hand-written show-only Show
-instance lacks showsPrec/showList).
+class proper, exhaustiveness warnings, class defaults for builtin
+classes, `module M` re-exports, and separate compilation.
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,
