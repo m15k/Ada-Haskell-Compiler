@@ -917,6 +917,8 @@ package body AHC.Prelude_Core is
          BP ("round", "ahc_prim_round_d");
          BP ("truncate", "ahc_prim_truncate_d");
          BP ("fromIntegral", "ahc_prim_int_to_d");
+         BP ("ord", "ahc_prim_ord");
+         BP ("chr", "ahc_prim_chr");
       end;
 
       --  div/mod/quot/rem take a (ignored) Num dictionary.

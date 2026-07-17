@@ -907,6 +907,10 @@ package body AHC.Builtins is
             Ignore := Def_Global ("truncate", Mono (DI));
             Ignore := Def_Global ("fromIntegral",
                                   Mono (FN (TC (Env.Int_TC), D_T)));
+            Ignore := Def_Global
+              ("ord", Mono (FN (TC (Env.Char_TC), TC (Env.Int_TC))));
+            Ignore := Def_Global
+              ("chr", Mono (FN (TC (Env.Int_TC), TC (Env.Char_TC))));
          end;
          pragma Unreferenced (Ignore);
       end;

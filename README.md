@@ -163,6 +163,17 @@ the evidence rewriter apply dictionaries twice on nested-constructor
 matches, single-line nested `let .. in` failed under parser
 lookahead, and `(op) = e` bindings did not parse.
 
+## Standard library
+
+`lib/` holds the beginnings of the Haskell 2010 library
+(docs/stdlib-plan.md): Data.List (sort and friends with base's exact
+production orders), Data.Char, Data.Maybe, Data.Ord (with Down),
+Data.Tuple and Data.Bool - ordinary Haskell modules compiled by AHC
+through its own module system. The driver resolves imports beside
+the root file, then `$AHC_LIB`, then `lib/`. Conformance oracles run
+the same programs under GHC's real base library, so AHC's
+implementations are tested against the canonical ones.
+
 ## Layout
 
 ```

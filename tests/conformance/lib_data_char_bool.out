@@ -1,0 +1,8 @@
+("MIXED CASE 12!","mixed case 12!")
+("aBc","a1B2c")
+([True,True,False],[False,True,False],[True,False,True])
+([True,True,True,True,True,True,False,False],[True,True,False,False])
+([0,7,10,15],"07af")
+(65,'a')
+[1,0,1]
+(True,False)

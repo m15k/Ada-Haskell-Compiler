@@ -15,6 +15,7 @@ with Ada.Text_IO;
 with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
+with Ada.Environment_Variables;
 
 with AHC.Builtins;
 with AHC.CodeGen;
@@ -147,6 +148,10 @@ procedure AHC_Main is
       Root_Dir : constant String :=
         Ada.Directories.Containing_Directory (Path);
 
+      --  Resolve a module name to a file: beside the root file
+      --  first, then $AHC_LIB, then the compiler's lib/ tree (CWD-
+      --  relative, like prelude/). Returns the first existing
+      --  candidate, or the root-relative path for the error message.
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
@@ -155,7 +160,30 @@ procedure AHC_Main is
                P (I) := '/';
             end if;
          end loop;
-         return Root_Dir & "/" & P & ".hs";
+         declare
+            Local : constant String := Root_Dir & "/" & P & ".hs";
+         begin
+            if Ada.Directories.Exists (Local) then
+               return Local;
+            end if;
+            declare
+               Env_Lib : constant String :=
+                 (if Ada.Environment_Variables.Exists ("AHC_LIB")
+                  then Ada.Environment_Variables.Value ("AHC_LIB")
+                  else "");
+            begin
+               if Env_Lib /= ""
+                 and then Ada.Directories.Exists
+                   (Env_Lib & "/" & P & ".hs")
+               then
+                  return Env_Lib & "/" & P & ".hs";
+               end if;
+            end;
+            if Ada.Directories.Exists ("lib/" & P & ".hs") then
+               return "lib/" & P & ".hs";
+            end if;
+            return Local;
+         end;
       end Module_Path;
 
       Prelude_N : AHC.Names.Real_Name_Id;

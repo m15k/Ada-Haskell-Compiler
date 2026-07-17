@@ -15,5 +15,8 @@ the reason a conformance program does not exist for it.
 | 3.14 | `fail`-desugared refutable do-binds at `Maybe`/`[]` | Monad runtimes cover `IO` and `[]` bind/return only |
 | ch. 4 | Class-hierarchy completeness (`Functor`/`Applicative` law programs, `Read`) | signatures wired, no runtime |
 
+| lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs stay in ASCII |
+| lib | `Data.List.foldl'` is `foldl` | AHC has no `seq`; observable results agree, strictness does not |
+
 Runtime warnings differ by design: GHC's `-W` diagnostics are not
 part of conformance (the oracle captures stdout only).
