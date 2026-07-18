@@ -4,7 +4,9 @@ A ground-up compiler for [Haskell 2010](https://www.haskell.org/onlinereport/has
 written in Ada 2022, built around Design-by-Contract: preconditions,
 postconditions, and type invariants verify the compiler's own internal
 consistency in every development build. See `docs/adahc PRD.rtf` for the
-full product requirements.
+full product requirements, and **`docs/MANUAL.md`** for the complete
+manual - every design decision and the theory behind it, written for a
+reader who is not a compiler engineer.
 
 ## Building
 
