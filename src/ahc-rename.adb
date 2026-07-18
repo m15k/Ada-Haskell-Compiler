@@ -1665,11 +1665,98 @@ package body AHC.Rename is
                for E of Arena.Exports loop
                   case E.Kind is
                      when Module_Ent =>
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Rename_Unsupported,
+                        --  Report 5.2: `module M` exports what is in
+                        --  scope both unqualified and qualified as M:
+                        --  the whole module for M = self, an
+                        --  unqualified import's visible view, or the
+                        --  Base snapshot for `module Prelude`.
+                        --  Qualified-only imports contribute nothing.
+                        declare
+                           procedure Merge (Src : Modules.Iface) is
+                              procedure MV
+                                (C : Builtins.Var_Maps.Cursor) is
+                              begin
+                                 Ent.Exports.Values.Include
+                                   (Builtins.Var_Maps.Key (C),
+                                    Builtins.Var_Maps.Element (C));
+                              end MV;
+                              procedure MT
+                                (C : Builtins.TyCon_Maps.Cursor) is
+                              begin
+                                 Ent.Exports.TyCons.Include
+                                   (Builtins.TyCon_Maps.Key (C),
+                                    Builtins.TyCon_Maps.Element
+                                      (C));
+                              end MT;
+                              procedure MD
+                                (C : Builtins.DataCon_Maps.Cursor)
+                              is
+                              begin
+                                 Ent.Exports.DataCons.Include
+                                   (Builtins.DataCon_Maps.Key (C),
+                                    Builtins.DataCon_Maps.Element
+                                      (C));
+                              end MD;
+                              procedure MC
+                                (C : Builtins.Class_Maps.Cursor) is
+                              begin
+                                 Ent.Exports.Classes.Include
+                                   (Builtins.Class_Maps.Key (C),
+                                    Builtins.Class_Maps.Element
+                                      (C));
+                              end MC;
+                              procedure MS
+                                (C : Fixity.Fixity_Maps.Cursor) is
+                              begin
+                                 Ent.Exports.Synonyms.Include
+                                   (Fixity.Fixity_Maps.Key (C),
+                                    Fixity.Fixity_Maps.Element (C));
+                              end MS;
+                           begin
+                              Src.Values.Iterate (MV'Access);
+                              Src.TyCons.Iterate (MT'Access);
+                              Src.DataCons.Iterate (MD'Access);
+                              Src.Classes.Iterate (MC'Access);
+                              Src.Synonyms.Iterate (MS'Access);
+                           end Merge;
+                           Found : Boolean := False;
+                        begin
+                           if E.Name.Name = Arena.Module_Name
+                             or else (Arena.Module_Name =
+                                        Names.No_Name
+                                      and then E.Name.Name =
+                                        Names.Name_Id
+                                          (Table.Intern ("Main")))
+                           then
+                              Merge (Own);
+                              Found := True;
+                           elsif E.Name.Name =
+                             Names.Name_Id (Prelude_Name)
+                           then
+                              Merge (Reg.Base);
+                              Found := True;
+                           else
+                              for V of Imp_Views loop
+                                 if (V.Alias = E.Name.Name
+                                     or else V.Module = E.Name.Name)
+                                   and then not V.Qualified
+                                 then
+                                    Merge (V.Visible);
+                                    Found := True;
+                                 end if;
+                              end loop;
+                           end if;
+                           if not Found then
+                              Bag.Add
+                                (Diagnostics.Error,
+                                 Diagnostics.Rename_Out_Of_Scope,
                                  (Start => 1, Stop => 1),
-                                 "'module M' re-exports are not"
-                                 & " supported");
+                                 "'module "
+                                 & Text (E.Name.Name)
+                                 & "' export: no such unqualified"
+                                 & " import");
+                           end if;
+                        end;
                      when Var_Ent =>
                         declare
                            R : constant Resolution :=

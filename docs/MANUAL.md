@@ -1103,7 +1103,10 @@ bignums. Every "close enough" would have hidden a divergence.
 The discipline has a second half: what AHC *cannot* match goes into
 `tests/conformance/EXCLUSIONS.md` **with a reason** — never a
 weakened test. The exclusions file is therefore an honest,
-always-current statement of the compiler's boundaries.
+always-current statement of the compiler's boundaries. (It has also
+served as the project's to-do list: entries for pattern guards,
+bignum, multi-module compilation, class defaults and `module M`
+re-exports were all eventually implemented and struck off.)
 
 When the suite was first built it immediately found five real bugs
 in a compiler that already passed hundreds of its own tests —
@@ -1159,9 +1162,12 @@ Notable corners: `Data.Ix` is a full type class defined in a
 library module — proof the class machinery works from userland;
 `System.IO` gave AHC its first-ever input (`getLine`, `readFile`,
 with the generated C `main` now capturing `argc`/`argv`); and
-`Data.Ord`'s `Down` writes all seven `Ord` methods by hand because
-builtin-class default methods remain unimplemented (the known
-ergonomic gap, "E4" in `docs/stdlib-plan.md`).
+`Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
+methods come from the builtin-class default machinery (enabler E4),
+which builds Report default methods against the instance's own
+dictionary knot whenever a user instance omits them; an Ord
+instance can even define only `<=`, with `compare` itself defaulting
+through the superclass Eq dictionary.
 
 ---
 

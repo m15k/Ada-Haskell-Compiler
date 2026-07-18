@@ -128,8 +128,12 @@ thunk chains evaluate instead of overflowing.
 
 Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
 classes (the vocabulary is monomorphic at Double), the Integral
-class proper, exhaustiveness warnings, class defaults for builtin
-classes, `module M` re-exports, and separate compilation.
+class proper, exhaustiveness warnings, and separate compilation.
+Builtin-class default methods work (a Show instance defining only
+`show` gets Report-correct `showsPrec`/`showList`; an Ord instance
+can define just `compare` - or just `<=`, with `compare` defaulting
+through the superclass Eq), and export lists support `module M`
+re-exports (facade modules, `module Prelude`).
 
 Frontend: lexer with the full literal grammar, Report 10.3 layout
 engine, recursive-descent parser for the whole Haskell 2010 surface,

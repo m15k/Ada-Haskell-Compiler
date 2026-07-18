@@ -1,7 +1,7 @@
 # Plan: An AHC Standard Library
 
-**Status:** M47-M51 SHIPPED - the roadmap below is implemented
-except the deferred section.
+**Status:** M47-M53 SHIPPED, including enablers E4 and E5 - the
+roadmap below is implemented except the deferred section.
 **Target:** the useful subset of the Haskell 2010 *Library Report*
 (Part II), delivered as ordinary Haskell modules compiled by AHC.
 
