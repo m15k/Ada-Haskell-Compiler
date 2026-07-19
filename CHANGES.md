@@ -1,5 +1,31 @@
 # AHC Changelog
 
+## Unreleased
+
+The standard library (docs/stdlib-plan.md), complete - every
+milestone including everything the plan originally deferred:
+
+- **Library modules** compiled by AHC through its own module system
+  (`lib/`, resolved root-dir -> `$AHC_LIB` -> `lib/`): Data.List
+  (base's exact production orders), Data.Char, Data.Maybe, Data.Ord,
+  Data.Tuple, Data.Bool, Control.Monad + Data.Functor
+  (Monad-polymorphic over IO/[]/Maybe), System.IO /
+  System.Environment / System.Exit (input at last: getLine,
+  getContents, readFile, interact, getArgs), Numeric, Data.Bits at
+  Int, Data.Ix as an ordinary source class.
+- **The formerly-deferred quartet** (M54-M57): Data.Ratio (exact
+  fractions over bignum, GHC's `1 % 2` Show), Data.Complex at Double
+  (new atan2 prim), Data.Array (Int-indexed, list-backed), Text.Read
+  (a source Read class; GHC's exact `Prelude.read: no parse`).
+- **Compiler enablers**: builtin-class default methods (E4 - a Show
+  instance defining only `show` gets Report-correct
+  showsPrec/showList; Ord defaults reach Eq through the superclass),
+  `module M` re-exports (E5), derived Show for infix constructors,
+  and a rename rule letting a library type take a builtin TyCon's
+  name (how `Rational` claimed its own).
+- Conformance suite grown 39 -> 47 programs, all byte-identical to
+  GHC 9.4.8.
+
 ## v1.0 (2026-07-17)
 
 First release. A Haskell 2010 compiler written in Ada 2022, built

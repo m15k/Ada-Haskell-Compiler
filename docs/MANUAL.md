@@ -876,9 +876,13 @@ test methodology (chapter 14) depends on it.
 Two more Double decisions: `round` is round-half-to-EVEN (`round 2.5`
 is `2`, `round 3.5` is `4`) — the Report says so, and C's `rint`
 under default rounding mode provides it; and the Floating vocabulary
-(`sqrt`, `pi`, trig...) is *monomorphic at Double* — real classes
-with a numeric tower (`Rational`, `Complex`) remain the largest
-deliberately-unbuilt item.
+(`sqrt`, `pi`, trig...) is *monomorphic at Double*. `Rational` and
+`Complex` themselves exist now — as ordinary library modules
+(chapter 15), monomorphic like the rest of the numeric vocabulary —
+so what remains deliberately unbuilt is only the *class* shape of
+the tower: `Floating`/`RealFrac`/`Integral` as real classes an
+instance could be written for, rather than as monomorphic
+functions.
 
 ---
 
@@ -1089,7 +1093,7 @@ compiler author writes have a blind spot: the author's
 misunderstanding of Haskell goes into the test's expected output
 too. AHC's answer, and the single most valuable methodology decision
 of the project: **GHC is the oracle**. The conformance suite
-(`tests/conformance/`, 44 programs pinned to Report sections)
+(`tests/conformance/`, 47 programs pinned to Report sections)
 stores as its expected output *whatever GHC 9.4.8 prints* for the
 same source, and AHC must reproduce it **byte for byte** —
 `scripts/run_conformance.sh --oracle` regenerates the expectations

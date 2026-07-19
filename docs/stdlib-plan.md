@@ -88,13 +88,27 @@ supported monads: IO, [], Maybe). Also `Data.Functor` basics
   testBit, popCount (a handful of trivial C prims).
 - **`Data.Ix`** - range, index, inRange for Int/Char/tuples.
 
-### Deferred (blocked, documented)
-- **`Data.Ratio`** - blocked on a Rational runtime (pair-of-Integer
-  arithmetic; a natural follow-on to bignum but its own project).
-- **`Data.Complex`** - blocked on Floating as a class.
-- **`Data.Array`** - possible list-backed, but honest O(n) indexing;
-  defer until someone needs it.
-- **Read instances** - a parser library in disguise; out of scope.
+### M54-M57 - the formerly-deferred quartet (SHIPPED)
+Each was deferred above with a blocking reason; every reason
+dissolved as the project advanced, and all four shipped as ordinary
+`.hs` files:
+- **`Data.Ratio`** (M54) - was "blocked on a Rational runtime"; bignum
+  Integer *is* that runtime. `data Rational = Integer :% Integer`,
+  reduced form, GHC-style `1 % 2` Show. Unblocked by a new rename
+  rule: a library type may shadow a *builtin* TyCon (how `Rational`
+  took its name over the wired-in placeholder).
+- **`Data.Complex`** (M55) - was "blocked on Floating as a class";
+  shipped monomorphic at Double like the rest of the Floating
+  vocabulary. One new prim (`atan2`) for `phase`.
+- **`Data.Array`** (M56) - list-backed, Int-indexed, honest
+  documented O(n) indexing; GHC's exact `array (l,h) [...]` Show.
+- **`Text.Read`** (M57) - was "a parser library in disguise"; a
+  Report-faithful `Read` class defined in source (proved viable by
+  Data.Ix), instances for Int/Integer/Bool/lists/pairs, GHC's exact
+  `Prelude.read: no parse`.
+Also fixed en route: derived Show for infix constructors (`:%`,
+`:+`) now uses infix layout matching GHC. Nothing on this plan
+remains deferred.
 
 ## 4. Testing and conformance discipline
 

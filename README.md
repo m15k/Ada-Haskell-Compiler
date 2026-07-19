@@ -69,8 +69,10 @@ crossing a declared boundary normalize into `[0, N)`, so
 `(25 :: Clock)` is 1 and incrementing a `Byte` past 255 wraps to 0.
 Ranges also work on Double (`type Latitude = Double in -90.0 ..
 90.0`), backed by a now-working Double runtime: Num/Fractional/Show
-at Double are real (`print (7 / 2 :: Double)` prints 3.5), with
-Rational and the Floating class still open. Refined types are legal
+at Double are real (`print (7 / 2 :: Double)` prints 3.5); exact
+Rational arithmetic lives in Data.Ratio, with the Floating *class*
+(as opposed to its Double vocabulary) still open. Refined types are
+legal
 in data/newtype fields (`data Port = Port (Int in 1 .. 65535)`) -
 every construction site checks (or, for `mod` fields, normalizes)
 the stored value; reads trust the constructor-established invariant.
@@ -126,9 +128,10 @@ and wall time ~25%; `ahc emit --no-opt` / AHC_NOOPT=1 disables it.
 Generated executables link with a 512MB stack so million-element
 thunk chains evaluate instead of overflowing.
 
-Remaining gaps: Rational arithmetic and Floating/RealFrac as proper
-classes (the vocabulary is monomorphic at Double), the Integral
-class proper, exhaustiveness warnings, and separate compilation.
+Remaining gaps: Floating/RealFrac as proper classes (the vocabulary
+is monomorphic at Double, and Rational/Complex are likewise
+monomorphic library types), the Integral class proper,
+exhaustiveness warnings, and separate compilation.
 Builtin-class default methods work (a Show instance defining only
 `show` gets Report-correct `showsPrec`/`showList`; an Ord instance
 can define just `compare` - or just `<=`, with `compare` defaulting
@@ -155,8 +158,9 @@ scripts/run_exec.sh                # compile-and-run output goldens
 scripts/run_conformance.sh         # Haskell 2010 conformance subset
 ```
 
-Conformance (the PRD success metric): `tests/conformance/` holds 30
-programs pinned to Haskell 2010 Report sections - lexical structure
+Conformance (the PRD success metric): `tests/conformance/` holds 47
+programs (including multi-module cases) pinned to Haskell 2010
+Report sections - lexical structure
 and layout, every expression form, declarations and classes, the
 predefined types, the Prelude subset, and non-strict semantics. Their
 goldens are GHC'S OUTPUT (regenerate with `--oracle`); AHC must
