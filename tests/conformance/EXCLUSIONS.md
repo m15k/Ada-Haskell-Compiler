@@ -7,7 +7,8 @@ the reason a conformance program does not exist for it.
 | Report | Feature | Status |
 |---|---|---|
 | 5 | Module system corners | multi-module programs WORK (imports with qualified/as/hiding/lists, export lists incl. `T(..)`/`C(..)`, abstract types, cycle/ambiguity/not-exported errors); not covered: `module M` re-exports, restricting the implicit Prelude import, same-named type synonyms in two modules, and separate compilation (AHC compiles the program whole) |
-| 6.4 | `Rational`, `toRational`/`fromRational` beyond Double literals | no runtime (`Integer` IS arbitrary-precision now; `Int` overflow promotes rather than wrapping, which Report 6.4 leaves undefined) |
+| 6.4 | `Rational` literals | `Data.Ratio.Rational` works (exact bignum fractions, `%`, arithmetic, GHC-format Show) but a FLOAT literal at Rational (`2.5 :: Rational`) has no `fromRational`; `Int` overflow promotes rather than wrapping, which Report 6.4 leaves undefined |
+| lib | `Data.Complex`/`Data.Array`/`Text.Read` are monomorphic subsets | Complex is at Double, Array at Int indices (list-backed, O(n) reads), Read covers Int/Integer/Bool/lists/pairs; GHC-oracle programs annotate accordingly |
 | 6.4.3 | `Floating`/`RealFrac` as CLASSES | the full vocabulary (pi, exp/log/sqrt, `**`, logBase, trig, hyperbolics, floor/ceiling/round/truncate, fromIntegral) works, monomorphic at Double/Int |
 | 6.3.4 | `Enum` at Char/Double (`['a'..'z']`) | `Enum` is complete at `Int` (incl. stepped ranges, succ/pred, to/fromEnum); other types have no runtime |
 | 11.1 | `deriving (Enum, Bounded, Ix, Read)` | `Eq`/`Ord`/`Show` derive |

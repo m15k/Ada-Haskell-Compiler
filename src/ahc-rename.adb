@@ -973,14 +973,30 @@ package body AHC.Rename is
          Is_NT : constant Boolean := N.Kind = Newtype_D;
          TC : Core.Real_TyCon_Id;
       begin
-         if Env.TyCons.Contains (N.D_Name)
-           or else Env.Synonyms.Contains (N.D_Name)
-         then
-            Bag.Add (Diagnostics.Error, Diagnostics.Rename_Duplicate,
-                     N.Span,
-                     "type '" & Text (N.D_Name)
-                     & "' is defined more than once");
-         end if;
+         --  A duplicate type name is an error - unless the existing
+         --  one is a BUILTIN, which a library or user module may
+         --  shadow (the type-level mirror of shadowing Prelude
+         --  values; Data.Ratio's Rational shadows the wired-in
+         --  abstract one).
+         declare
+            C : constant Builtins.TyCon_Maps.Cursor :=
+              Env.TyCons.Find (N.D_Name);
+            Clash : Boolean := Env.Synonyms.Contains (N.D_Name);
+         begin
+            if Builtins.TyCon_Maps.Has_Element (C)
+              and then not M.Info
+                (Builtins.TyCon_Maps.Element (C)).Is_Builtin
+            then
+               Clash := True;
+            end if;
+            if Clash then
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Rename_Duplicate,
+                        N.Span,
+                        "type '" & Text (N.D_Name)
+                        & "' is defined more than once");
+            end if;
+         end;
          TC := M.Mint_TyCon
            ((Name => N.D_Name, Arity => Natural (N.D_Vars.Length),
              Is_Newtype => Is_NT, others => <>));

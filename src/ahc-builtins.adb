@@ -900,6 +900,7 @@ package body AHC.Builtins is
             Ignore := Def_Global ("asin", Mono (DD));
             Ignore := Def_Global ("acos", Mono (DD));
             Ignore := Def_Global ("atan", Mono (DD));
+            Ignore := Def_Global ("atan2", Mono (DDD));
             Ignore := Def_Global ("sinh", Mono (DD));
             Ignore := Def_Global ("cosh", Mono (DD));
             Ignore := Def_Global ("tanh", Mono (DD));

@@ -156,6 +156,15 @@ sequence_ :: Monad m => [m a] -> m ()
 sequence_ [] = return ()
 sequence_ (m : ms) = m >> sequence_ ms
 
+gcd :: Integer -> Integer -> Integer
+gcd a 0 = abs a
+gcd a b = gcd b (mod a b)
+
+lcm :: Integer -> Integer -> Integer
+lcm _ 0 = 0
+lcm 0 _ = 0
+lcm a b = abs (div (a * b) (gcd a b))
+
 even :: Int -> Bool
 even n = n `mod` 2 == 0
 

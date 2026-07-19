@@ -503,6 +503,21 @@ package body AHC.Prelude_Core is
                   function Inner return Real_Expr_Id is
                      Acc : Real_Expr_Id;
                   begin
+                     if CName'Length > 0
+                       and then CName (CName'First) = ':'
+                       and then FTypes.Last_Index = 2
+                     then
+                        --  Infix constructor: l :* r, fields at
+                        --  precedence 10 (GHC's derived layout for
+                        --  an undeclared-fixity operator con).
+                        Acc := Ap2 (V (Env.Append_V),
+                          Field_S (FTypes (1), Bs (1), 10, Sch.Tvs),
+                          Ap2 (V (Env.Append_V),
+                            Str (" " & CName & " "),
+                            Field_S (FTypes (2), Bs (2), 10,
+                                     Sch.Tvs)));
+                        return Acc;
+                     end if;
                      if DInfo.Field_Names.Is_Empty then
                         Acc := Str (CName & " ");
                         for I in 1 .. FTypes.Last_Index loop
@@ -564,7 +579,15 @@ package body AHC.Prelude_Core is
                                (Kind => Lit_C, Span => Span,
                                 Lit => (Kind => L_Int,
                                         Text => Names.Name_Id
-                                          (Table.Intern ("10")))))),
+                                          (Table.Intern
+                                             ((if CName'Length > 0
+                                               and then CName
+                                                 (CName'First) = ':'
+                                               and then
+                                                 FTypes.Last_Index
+                                                   = 2
+                                               then "9"
+                                               else "10"))))))),
                         Ap2 (V (Env.Append_V), Str ("("),
                           Ap2 (V (Env.Append_V), Inner,
                             Ap2 (V (Env.Append_V), Str (")"),
@@ -909,6 +932,7 @@ package body AHC.Prelude_Core is
          BP ("asin", "ahc_prim_asin_d");
          BP ("acos", "ahc_prim_acos_d");
          BP ("atan", "ahc_prim_atan_d");
+         BP ("atan2", "ahc_prim_atan2_d");
          BP ("sinh", "ahc_prim_sinh_d");
          BP ("cosh", "ahc_prim_cosh_d");
          BP ("tanh", "ahc_prim_tanh_d");

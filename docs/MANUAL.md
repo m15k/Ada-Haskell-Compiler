@@ -1158,8 +1158,15 @@ base's exact `permutations` production order and sort stability
 (AHC's simple stable mergesort provably matches base's clever one
 *because* stability makes the answer unique).
 
-Notable corners: `Data.Ix` is a full type class defined in a
-library module — proof the class machinery works from userland;
+Notable corners: `Data.Ix` and `Text.Read` are full type classes
+defined in library modules — proof the class machinery works from
+userland; `Data.Ratio` builds exact fractions on the bignum layer
+(and needed one new compiler rule: a library type may *shadow a
+builtin* type constructor, the type-level mirror of shadowing
+Prelude values, which is how `Rational` took its proper name over
+the wired-in placeholder); infix constructors (`:%`, `:+`) exercised
+a parser path dormant since phase one and taught `deriving Show`
+infix layout;
 `System.IO` gave AHC its first-ever input (`getLine`, `readFile`,
 with the generated C `main` now capturing `argc`/`argv`); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`

@@ -1,7 +1,11 @@
 # Plan: An AHC Standard Library
 
-**Status:** M47-M53 SHIPPED, including enablers E4 and E5 - the
-roadmap below is implemented except the deferred section.
+**Status:** COMPLETE - M47-M57, including enablers E4-E5 and the
+formerly-deferred quartet (Data.Ratio, Data.Complex, Data.Array,
+Text.Read), all shipped. The deferral reasons dissolved: bignum
+gave Ratio its Integer arithmetic, source classes (proved by
+Data.Ix) gave Read its class, and builtin-type shadowing let
+Rational take its proper name.
 **Target:** the useful subset of the Haskell 2010 *Library Report*
 (Part II), delivered as ordinary Haskell modules compiled by AHC.
 

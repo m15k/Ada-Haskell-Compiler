@@ -179,8 +179,11 @@ Maybe - the Maybe Monad and all three Functor dictionaries are
 real), System.IO / System.Environment / System.Exit (AHC programs
 can finally READ: getLine, getContents, readFile, interact, getArgs,
 exit codes), Numeric (showHex and friends), Data.Bits at Int, and
-Data.Ix as an ordinary source class - all ordinary Haskell modules
-compiled by AHC through its own module system. The driver resolves imports beside
+Data.Ix as an ordinary source class, Data.Ratio (exact fractions
+over bignum Integer, printed GHC-style as `1 % 2`), Data.Complex at
+Double, Data.Array (Int-indexed), and Text.Read (a source Read
+class covering Int/Integer/Bool/lists/pairs) - all ordinary Haskell
+modules compiled by AHC through its own module system. The driver resolves imports beside
 the root file, then `$AHC_LIB`, then `lib/`. Conformance oracles run
 the same programs under GHC's real base library, so AHC's
 implementations are tested against the canonical ones.
