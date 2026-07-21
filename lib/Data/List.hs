@@ -11,6 +11,7 @@ module Data.List
   , tails, inits
   , maximumBy, minimumBy
   , foldl', genericLength
+  , lookup
   ) where
 
 import Data.Ord (comparing)

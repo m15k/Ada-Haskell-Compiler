@@ -31,3 +31,4 @@ main = do
   print (mapMaybe (\x -> if even x then Just (x * 10) else Nothing) [1 .. 6])
   print (fromJust (Just 7), swap (1, 'x'))
   print (foldl' (+) 0 [1 .. 100], genericLength "abcd")
+  print (Data.List.lookup 'b' (zip "abc" [1 .. 3 :: Integer]))
