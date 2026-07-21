@@ -1,5 +1,6 @@
 module Lisp.Eval (evalTop, primEnv) where
 
+import qualified Data.Map as Map
 import Data.Ratio (Rational, (%), numerator, denominator)
 import Lisp.Val (Value (..), Env, showVal, displayVal, isTrue)
 
@@ -15,19 +16,20 @@ evalTop :: Env -> Value -> Either String (Env, Value)
 evalTop g (VList (VSym "define" : rest)) =
   case rest of
     [VSym name, e] ->
-      case eval g [] e of
+      case eval g Map.empty e of
         Left err -> Left err
-        Right v -> Right ((name, v) : g, VUnit)
+        Right v -> Right (Map.insert name v g, VUnit)
     (VList (VSym name : params) : body) ->
       case paramNames params of
         Left err -> Left err
         Right ps ->
           if null body
             then Left "define: empty body"
-            else Right ((name, VClosure ps body []) : g, VUnit)
+            else Right (Map.insert name (VClosure ps body Map.empty) g,
+                        VUnit)
     _ -> Left "define: bad form"
 evalTop g e =
-  case eval g [] e of
+  case eval g Map.empty e of
     Left err -> Left err
     Right v -> Right (g, v)
 
@@ -46,10 +48,10 @@ eval _ _ v@(VDbl _) = Right v
 eval _ _ v@(VBool _) = Right v
 eval _ _ v@(VStr _) = Right v
 eval g l (VSym s) =
-  case lookup s l of
+  case Map.lookup s l of
     Just v -> Right v
     Nothing ->
-      case lookup s g of
+      case Map.lookup s g of
         Just v -> Right v
         Nothing -> Left ("unbound variable: " ++ s)
 eval g l (VList (VSym "quote" : rest)) =
@@ -107,13 +109,18 @@ evalIf g l c t e =
     Right cv -> if isTrue cv then eval g l t else eval g l e
 
 --  let: all right-hand sides evaluate in the outer scope.
-evalLet :: Env -> Env -> [Value] -> Env -> [Value] -> Either String Value
-evalLet g l [] acc body = evalBody g (reverse acc ++ l) body
+evalLet :: Env -> Env -> [Value] -> [(String, Value)] -> [Value]
+        -> Either String Value
+evalLet g l [] acc body = evalBody g (insertAll (reverse acc) l) body
 evalLet g l (VList [VSym n, e] : rest) acc body =
   case eval g l e of
     Left err -> Left err
     Right v -> evalLet g l rest ((n, v) : acc) body
 evalLet _ _ _ _ _ = Left "let: bad binding"
+
+insertAll :: [(String, Value)] -> Env -> Env
+insertAll [] m = m
+insertAll ((k, v) : rest) m = insertAll rest (Map.insert k v m)
 
 --  let*: each binding sees the previous ones.
 evalLetStar :: Env -> Env -> [Value] -> [Value] -> Either String Value
@@ -121,7 +128,7 @@ evalLetStar g l [] body = evalBody g l body
 evalLetStar g l (VList [VSym n, e] : rest) body =
   case eval g l e of
     Left err -> Left err
-    Right v -> evalLetStar g ((n, v) : l) rest body
+    Right v -> evalLetStar g (Map.insert n v l) rest body
 evalLetStar _ _ _ _ = Left "let*: bad binding"
 
 --  letrec: right-hand sides must be lambdas; the closures capture
@@ -133,7 +140,9 @@ evalLetrec g l binds body =
   case letrecBinds binds of
     Left err -> Left err
     Right pairs ->
-      let l' = map (\p -> (fst p, close (snd p))) pairs ++ l
+      --  Map.insert is lazy in the value, so inserting the closures
+      --  (which capture l' itself) still ties the knot.
+      let l' = insertAll (map (\p -> (fst p, close (snd p))) pairs) l
           close lam =
             case lam of
               VList (VSym "lambda" : VList params : lamBody) ->
@@ -211,7 +220,7 @@ apply g (VClosure ps body cl) args =
     then
       Left ("arity mismatch: expected " ++ show (length ps)
               ++ " arguments, got " ++ show (length args))
-    else evalBody g (zip ps args ++ cl) body
+    else evalBody g (insertAll (zip ps args) cl) body
 apply g (VPrim name) args = applyPrim g name args
 apply _ v _ = Left ("not a procedure: " ++ showVal v)
 
@@ -219,7 +228,7 @@ apply _ v _ = Left ("not a procedure: " ++ showVal v)
 --  Primitives. VPrim carries only the name; dispatch happens here.
 
 primEnv :: Env
-primEnv = map (\n -> (n, VPrim n)) primNames
+primEnv = Map.fromList (map (\n -> (n, VPrim n)) primNames)
 
 primNames :: [String]
 primNames =

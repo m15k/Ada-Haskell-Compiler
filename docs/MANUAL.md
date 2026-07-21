@@ -1093,7 +1093,7 @@ compiler author writes have a blind spot: the author's
 misunderstanding of Haskell goes into the test's expected output
 too. AHC's answer, and the single most valuable methodology decision
 of the project: **GHC is the oracle**. The conformance suite
-(`tests/conformance/`, 48 programs pinned to Report sections)
+(`tests/conformance/`, 50 programs pinned to Report sections)
 stores as its expected output *whatever GHC 9.4.8 prints* for the
 same source, and AHC must reproduce it **byte for byte** —
 `scripts/run_conformance.sh --oracle` regenerates the expectations
@@ -1176,7 +1176,12 @@ infix layout;
 with the generated C `main` now capturing `argc`/`argv`; `isEOF`
 arrived later, the day the mini-Lisp REPL needed to see end-of-file
 coming - the first library addition driven by a real program rather
-than by the Report); and
+than by the Report); `Data.Map` is a weight-balanced search tree
+(Adams' algorithm, the same family as GHC's containers) whose
+observable behavior - toList order, Show format, union bias - is
+oracled against the real containers library, written because the
+interpreter's environments asked for it (and whose first compile
+found two more compiler bugs - chapter 16); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
 methods come from the builtin-class default machinery (enabler E4),
 which builds Report default methods against the instance's own
@@ -1247,6 +1252,30 @@ double-quoted `git commit -m` string was command-substituted by
 zsh, mangling a pushed commit message (left as-is; history is not
 rewritten for cosmetics). Rule: commit messages go through
 `git commit -F file`.
+
+**The constraint that nobody would claim.** Building `Data.Map`
+(the interpreter's second gift: its environments wanted a real map)
+produced "ambiguous type variable" on code as ordinary as a
+multi-equation `where`-helper calling `insert`. The chain took
+three reproductions to isolate: a *single*-equation helper worked;
+a *multi*-equation one failed. Why? Multi-equation functions go
+through the match compiler, which builds join points - inner `let`
+bindings - and a class constraint born inside one is tagged as
+*owned* by that join binder. When the constraint floated out to
+become part of the helper's inferred type, the generalizer's
+bookkeeping only attached constraints to their owner - and the
+join point wasn't it. The constraint joined the helper's printed
+type correctly but its *evidence* was never wired, and the residual
+was reported as ambiguous. Invisible for twenty-odd milestones
+because top-level functions all carry signatures, whose given-based
+discharge ignores ownership entirely - only signatureless local
+helpers (which Haskell 2010 can't even annotate, lacking scoped
+type variables) walk the broken path, and the Prelude had quietly
+avoided it by lifting its helpers to top level. Fix: when a binding
+group closes, its unsolved constraints re-home to the enclosing
+binding. Rule: evidence bookkeeping must follow *lexical*
+containment, not binder identity - and a library port is a better
+typechecker test than a typechecker test.
 
 **The imported synonym that read the wrong street's house numbers.**
 The first *program* written against the finished compiler - a

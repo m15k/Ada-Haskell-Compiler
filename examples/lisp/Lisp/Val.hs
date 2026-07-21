@@ -3,6 +3,7 @@ module Lisp.Val
   , showVal, displayVal, isTrue
   ) where
 
+import Data.Map (Map)
 import Data.Ratio (Rational, numerator, denominator)
 
 --  One Value type serves as both the parsed S-expression and the
@@ -22,7 +23,7 @@ data Value
   | VPrim String
   | VUnit
 
-type Env = [(String, Value)]
+type Env = Map String Value
 
 --  write-style printing: strings come out quoted.
 showVal :: Value -> String

@@ -158,7 +158,7 @@ scripts/run_exec.sh                # compile-and-run output goldens
 scripts/run_conformance.sh         # Haskell 2010 conformance subset
 ```
 
-Conformance (the PRD success metric): `tests/conformance/` holds 48
+Conformance (the PRD success metric): `tests/conformance/` holds 50
 programs (including multi-module cases) pinned to Haskell 2010
 Report sections - lexical structure
 and layout, every expression form, declarations and classes, the
@@ -183,7 +183,10 @@ Maybe - the Maybe Monad and all three Functor dictionaries are
 real), System.IO / System.Environment / System.Exit (AHC programs
 can finally READ: getLine, getContents, readFile, interact, getArgs,
 exit codes), Numeric (showHex and friends), Data.Bits at Int, and
-Data.Ix as an ordinary source class, Data.Ratio (exact fractions
+Data.Ix as an ordinary source class, Data.Map (a weight-balanced
+search tree matching the containers library's observable behavior
+exactly - toList order, Show format, union bias - and oracled
+against the real thing), Data.Ratio (exact fractions
 over bignum Integer, printed GHC-style as `1 % 2`), Data.Complex at
 Double, Data.Array (Int-indexed), and Text.Read (a source Read
 class covering Int/Integer/Bool/lists/pairs) - all ordinary Haskell

@@ -181,12 +181,12 @@ package body AHC.Rename is
       --  Base). Falls back to the flat environment when no registry
       --  is in play.
       function Mod_Find_TyCon
-        (Name : Names.Name_Id) return Core.TyCon_Id is
+        (Q : Syntax.QName) return Core.TyCon_Id is
       begin
          if not Modular then
             declare
                C : constant Builtins.TyCon_Maps.Cursor :=
-                 Env.TyCons.Find (Name);
+                 Env.TyCons.Find (Q.Name);
             begin
                return (if Builtins.TyCon_Maps.Has_Element (C)
                        then Core.TyCon_Id
@@ -194,22 +194,45 @@ package body AHC.Rename is
                        else Core.No_TyCon);
             end;
          end if;
+         --  Qualified through an import name or alias: only that
+         --  module's exports (Report 5.3) - mirrors the value path.
+         if Q.Qualifier /= Names.No_Name
+           and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+           and then Q.Qualifier /= Arena.Module_Name
+         then
+            declare
+               VI : constant Natural := Find_View (Q.Qualifier);
+            begin
+               if VI = 0 then
+                  return Core.No_TyCon;
+               end if;
+               declare
+                  C : constant Builtins.TyCon_Maps.Cursor :=
+                    Imp_Views (VI).Visible.TyCons.Find (Q.Name);
+               begin
+                  return (if Builtins.TyCon_Maps.Has_Element (C)
+                          then Core.TyCon_Id
+                                 (Builtins.TyCon_Maps.Element (C))
+                          else Core.No_TyCon);
+               end;
+            end;
+         end if;
          declare
-            C : Builtins.TyCon_Maps.Cursor := Own.TyCons.Find (Name);
+            C : Builtins.TyCon_Maps.Cursor := Own.TyCons.Find (Q.Name);
          begin
             if Builtins.TyCon_Maps.Has_Element (C) then
                return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
             end if;
             for V of Imp_Views loop
                if not V.Qualified then
-                  C := V.Visible.TyCons.Find (Name);
+                  C := V.Visible.TyCons.Find (Q.Name);
                   if Builtins.TyCon_Maps.Has_Element (C) then
                      return Core.TyCon_Id
                        (Builtins.TyCon_Maps.Element (C));
                   end if;
                end if;
             end loop;
-            C := Reg.Base.TyCons.Find (Name);
+            C := Reg.Base.TyCons.Find (Q.Name);
             if Builtins.TyCon_Maps.Has_Element (C) then
                return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
             end if;
@@ -295,19 +318,31 @@ package body AHC.Rename is
       end Mod_Find_Class;
 
       function Mod_Syn_Visible
-        (Name : Names.Name_Id) return Boolean is
+        (Q : Syntax.QName) return Boolean is
       begin
          if not Modular then
-            return Env.Synonyms.Contains (Name);
+            return Env.Synonyms.Contains (Q.Name);
          end if;
-         if Own.Synonyms.Contains (Name)
-           or else Reg.Base.Synonyms.Contains (Name)
+         if Q.Qualifier /= Names.No_Name
+           and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+           and then Q.Qualifier /= Arena.Module_Name
+         then
+            declare
+               VI : constant Natural := Find_View (Q.Qualifier);
+            begin
+               return VI /= 0
+                 and then Imp_Views (VI).Visible.Synonyms.Contains
+                            (Q.Name);
+            end;
+         end if;
+         if Own.Synonyms.Contains (Q.Name)
+           or else Reg.Base.Synonyms.Contains (Q.Name)
          then
             return True;
          end if;
          for V of Imp_Views loop
             if not V.Qualified
-              and then V.Visible.Synonyms.Contains (Name)
+              and then V.Visible.Synonyms.Contains (Q.Name)
             then
                return True;
             end if;
@@ -525,12 +560,12 @@ package body AHC.Rename is
             when Con_T =>
                declare
                   TC : constant Core.TyCon_Id :=
-                    Mod_Find_TyCon (N.Con.Name);
+                    Mod_Find_TyCon (N.Con);
                begin
                   if TC /= Core.No_TyCon then
                      Res.Ty_Res.Replace_Element
                        (Positive (Id), TC);
-                  elsif Mod_Syn_Visible (N.Con.Name) then
+                  elsif Mod_Syn_Visible (N.Con) then
                      null;   --  expanded during conversion, by name
                   else
                      Bag.Add (Diagnostics.Error,
@@ -1240,7 +1275,7 @@ package body AHC.Rename is
             when Con_T =>
                declare
                   TC2 : constant Core.TyCon_Id :=
-                    Mod_Find_TyCon (N.Con.Name);
+                    Mod_Find_TyCon (N.Con);
                begin
                   if TC2 /= Core.No_TyCon then
                      return TC2;
@@ -1787,7 +1822,7 @@ package body AHC.Rename is
                      when Type_Ent =>
                         declare
                            TC : constant Core.TyCon_Id :=
-                             Mod_Find_TyCon (E.Name.Name);
+                             Mod_Find_TyCon (E.Name);
                            Cl : constant Core.Class_Id :=
                              Mod_Find_Class (E.Name.Name);
                         begin

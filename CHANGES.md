@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+Data.Map (M59):
+
+- **lib/Data/Map.hs** - a weight-balanced binary search tree
+  (Adams' algorithm, the same family as GHC's containers):
+  insert/delete/lookup/union/unionWith/fromList/adjust and friends,
+  Show/Eq instances - observable behavior matches containers
+  exactly and the conformance test oracles against the real thing.
+  The mini-Lisp interpreter's environments now use it (Map under
+  AHC, containers under GHC, still byte-identical).
+- **Fixed: qualified type names.** `Map.Map` in a signature never
+  consulted the qualifier - the renamer's type lookup now mirrors
+  the value path (qualified-through-import resolves only in that
+  module's exports, Report 5.3); same for qualified synonyms.
+- **Fixed: constraints from where-helpers.** A wanted constraint
+  arising inside an inner let - notably the match compiler's join
+  points, i.e. ANY multi-equation where-helper - kept the inner
+  binder as its owner, so the enclosing group's context never
+  claimed it ("ambiguous type variable" on perfectly ordinary
+  code). Unsolved wanteds now float to the enclosing binding when
+  a group closes. Pinned by conformance where_context.hs (also
+  covers superclass discharge: an Eq wanted met by an Ord given).
+  The suite is now 50 programs.
+
 Dogfooding (M58):
 
 - **examples/lisp** - a mini-Lisp interpreter (REPL + batch) written

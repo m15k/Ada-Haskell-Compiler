@@ -54,6 +54,12 @@ definitions.
 
 ## Structure
 
+Environments are `Data.Map` (AHC's own weight-balanced tree from
+`lib/`; GHC's containers when run under GHC) - the port that
+motivated building the library, and whose first compile found two
+compiler bugs (qualified type names; constraints from
+multi-equation where-helpers).
+
 | Module | Role |
 |---|---|
 | `Lisp/Val.hs` | `Value` (code *is* data), environments, printers |

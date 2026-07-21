@@ -1156,6 +1156,24 @@ package body AHC.Typechecker is
                end if;
             end loop;
          end;
+
+         --  Wanteds still unsolved after this group float to the
+         --  enclosing binding: they are ITS responsibility, to be
+         --  discharged by its signature givens or joined to its
+         --  inferred context. Without this, a wanted arising inside
+         --  an inner let (e.g. a match-compiler join point) keeps
+         --  the inner binder as Owner and the enclosing group's
+         --  By_Param marking never claims it.
+         for I in W_Mark + 1 .. W_List.Last_Index loop
+            if W_List (I).Sol = Unsolved then
+               declare
+                  W : Wanted_Rec := W_List (I);
+               begin
+                  W.Owner := Saved_Owner;
+                  W_List.Replace_Element (I, W);
+               end;
+            end if;
+         end loop;
       end Check_Group;
 
       ------------------------------------------------------------------
