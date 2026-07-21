@@ -76,7 +76,9 @@ package AHC.Builtins is
       Tuple_DCs : Tuple_DC_Array := [others => 0];
 
       Eq_Cl, Ord_Cl, Show_Cl, Functor_Cl, Monad_Cl, Num_Cl, Real_Cl,
-      Fractional_Cl, Enum_Cl, Bounded_Cl : Core.Class_Id := Core.No_Class;
+      Fractional_Cl, Enum_Cl, Bounded_Cl,
+      Integral_Cl, Floating_Cl, RealFrac_Cl
+        : Core.Class_Id := Core.No_Class;
 
       --  Selector/global vars the desugarer references directly.
       Bind_V, Then_V, Return_V, Fail_V,

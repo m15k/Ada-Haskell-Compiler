@@ -156,20 +156,41 @@ sequence_ :: Monad m => [m a] -> m ()
 sequence_ [] = return ()
 sequence_ (m : ms) = m >> sequence_ ms
 
-gcd :: Integer -> Integer -> Integer
+gcd :: Integral a => a -> a -> a
 gcd a 0 = abs a
 gcd a b = gcd b (mod a b)
 
-lcm :: Integer -> Integer -> Integer
+lcm :: Integral a => a -> a -> a
 lcm _ 0 = 0
 lcm 0 _ = 0
 lcm a b = abs (div (a * b) (gcd a b))
 
-even :: Int -> Bool
+even :: Integral a => a -> Bool
 even n = n `mod` 2 == 0
 
-odd :: Int -> Bool
+odd :: Integral a => a -> Bool
 odd n = not (even n)
+
+fromIntegral :: (Integral a, Num b) => a -> b
+fromIntegral n = fromInteger (toInteger n)
+
+infixr 8 ^, ^^
+
+(^) :: (Num a, Integral b) => a -> b -> a
+x ^ n
+  | n < 0 = error "Negative exponent"
+  | otherwise = go n
+  where
+    go k =
+      if k == 0
+        then 1
+        else
+          let h = go (div k 2)
+              s = h * h
+          in if mod k 2 == 0 then s else s * x
+
+(^^) :: (Fractional a, Integral b) => a -> b -> a
+x ^^ n = if n >= 0 then x ^ n else recip (x ^ negate n)
 
 span :: (a -> Bool) -> [a] -> ([a], [a])
 span p xs = (takeWhile p xs, dropWhile p xs)

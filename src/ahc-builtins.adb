@@ -601,6 +601,93 @@ package body AHC.Builtins is
             Finish_Class (Cl);
          end;
 
+         --  Integral (Num, Ord) - the Report routes Ord through the
+         --  Real superclass; AHC skips Real in the chain but keeps
+         --  Ord so (^)'s exponent test and friends typecheck.
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Integral", Star_K,
+                         Sup2 (Env.Num_Cl, Env.Ord_Cl));
+            A   : constant Real_TyVar_Id := New_Tv ("a");
+            Bin : constant Real_Type_Id := FN (TV (A), TV (A), TV (A));
+         begin
+            Env.Integral_Cl := Class_Id (Cl);
+            for Op in 1 .. 4 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "quot", when 2 => "rem",
+                     when 3 => "div", when others => "mod"),
+                  Poly1 (A, Bin, Ctx1 (Cl, TV (A))), False);
+            end loop;
+            Ignore := Def_Method
+              (Cl, "toInteger",
+               Poly1 (A, FN (TV (A), Integer_T), Ctx1 (Cl, TV (A))),
+               False);
+            Finish_Class (Cl);
+         end;
+
+         --  Floating (Fractional)
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Floating", Star_K,
+                         Sup1 (Env.Fractional_Cl));
+            A   : constant Real_TyVar_Id := New_Tv ("a");
+            Un  : constant Real_Type_Id := FN (TV (A), TV (A));
+            Bin : constant Real_Type_Id := FN (TV (A), TV (A), TV (A));
+         begin
+            Env.Floating_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "pi", Poly1 (A, TV (A), Ctx1 (Cl, TV (A))), False);
+            for Op in 1 .. 3 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "exp", when 2 => "log",
+                     when others => "sqrt"),
+                  Poly1 (A, Un, Ctx1 (Cl, TV (A))), False);
+            end loop;
+            Ignore := Def_Method
+              (Cl, "**", Poly1 (A, Bin, Ctx1 (Cl, TV (A))), False);
+            Ignore := Def_Method
+              (Cl, "logBase",
+               Poly1 (A, Bin, Ctx1 (Cl, TV (A))), False);
+            for Op in 1 .. 9 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "sin",  when 2 => "cos",
+                     when 3 => "tan",  when 4 => "asin",
+                     when 5 => "acos", when 6 => "atan",
+                     when 7 => "sinh", when 8 => "cosh",
+                     when others => "tanh"),
+                  Poly1 (A, Un, Ctx1 (Cl, TV (A))), False);
+            end loop;
+            Finish_Class (Cl);
+         end;
+
+         --  RealFrac (Fractional) - results land at Integer (the
+         --  Report's Integral-b polymorphic results default there
+         --  anyway, so oracle outputs agree).
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("RealFrac", Star_K,
+                         Sup1 (Env.Fractional_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            AI : constant Real_Type_Id := FN (TV (A), Integer_T);
+         begin
+            Env.RealFrac_Cl := Class_Id (Cl);
+            for Op in 1 .. 4 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "truncate", when 2 => "round",
+                     when 3 => "ceiling", when others => "floor"),
+                  Poly1 (A, AI, Ctx1 (Cl, TV (A))), False);
+            end loop;
+            Finish_Class (Cl);
+         end;
+
          --  Enum
          declare
             Cl : constant Real_Class_Id := Def_Class ("Enum", Star_K);
@@ -707,6 +794,12 @@ package body AHC.Builtins is
          end loop;
          Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Int_TC));
+         Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Integer_TC));
+         Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Double_TC));
 
          --  Eq a => Eq [a], etc.
          Def_Ctx1_Instance (Env.Eq_Cl, Env.List_TC);
@@ -810,16 +903,7 @@ package body AHC.Builtins is
               ("subtract",
                Poly1 (A, FN (TV (A), TV (A), TV (A)),
                       Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
-            --  Integral methods approximated as Num-constrained
-            --  globals until Phase 4 wires the real class.
-            for Op in 1 .. 4 loop
-               Ignore := Def_Global
-                 ((case Op is
-                     when 1 => "div", when 2 => "mod",
-                     when 3 => "quot", when others => "rem"),
-                  Poly1 (A, FN (TV (A), TV (A), TV (A)),
-                         Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
-            end loop;
+            --  quot/rem/div/mod are real Integral methods now.
             Ignore := Def_Global
               ("length", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
          end;
@@ -877,39 +961,17 @@ package body AHC.Builtins is
          Ignore := Def_Global
            ("putStrLn", Mono (FN (String_T, IO_T (Unit_T))));
 
-         --  Floating / RealFrac vocabulary, monomorphic at Double
-         --  (Report 6.4.3; the classes proper await a wider numeric
-         --  tower).
+         --  Floating/RealFrac live as real classes now; only atan2
+         --  (RealFloat territory) stays monomorphic at Double, and
+         --  fromIntegral moved to prelude/Prelude.hs as
+         --  fromInteger . toInteger.
          declare
             D_T : constant Real_Type_Id := TC (Env.Double_TC);
             String_T2 : constant Real_Type_Id :=
               LST (TC (Env.Char_TC));
-            DD  : constant Real_Type_Id := FN (D_T, D_T);
             DDD : constant Real_Type_Id := FN (D_T, D_T, D_T);
-            DI  : constant Real_Type_Id := FN (D_T, TC (Env.Int_TC));
          begin
-            Ignore := Def_Global ("pi", Mono (D_T));
-            Ignore := Def_Global ("exp", Mono (DD));
-            Ignore := Def_Global ("log", Mono (DD));
-            Ignore := Def_Global ("sqrt", Mono (DD));
-            Ignore := Def_Global ("**", Mono (DDD));
-            Ignore := Def_Global ("logBase", Mono (DDD));
-            Ignore := Def_Global ("sin", Mono (DD));
-            Ignore := Def_Global ("cos", Mono (DD));
-            Ignore := Def_Global ("tan", Mono (DD));
-            Ignore := Def_Global ("asin", Mono (DD));
-            Ignore := Def_Global ("acos", Mono (DD));
-            Ignore := Def_Global ("atan", Mono (DD));
             Ignore := Def_Global ("atan2", Mono (DDD));
-            Ignore := Def_Global ("sinh", Mono (DD));
-            Ignore := Def_Global ("cosh", Mono (DD));
-            Ignore := Def_Global ("tanh", Mono (DD));
-            Ignore := Def_Global ("floor", Mono (DI));
-            Ignore := Def_Global ("ceiling", Mono (DI));
-            Ignore := Def_Global ("round", Mono (DI));
-            Ignore := Def_Global ("truncate", Mono (DI));
-            Ignore := Def_Global ("fromIntegral",
-                                  Mono (FN (TC (Env.Int_TC), D_T)));
             Ignore := Def_Global
               ("ord", Mono (FN (TC (Env.Char_TC), TC (Env.Int_TC))));
             Ignore := Def_Global

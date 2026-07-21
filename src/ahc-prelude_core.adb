@@ -185,6 +185,44 @@ package body AHC.Prelude_Core is
         Prim ("primshowsPrecD", "ahc_prim_showsprec_d");
       P_GtI : constant Real_Var_Id :=
         Prim ("primgtI", "ahc_prim_gt_int");
+      --  Floating/RealFrac method implementations at Double.
+      P_ExpD : constant Real_Var_Id :=
+        Prim ("primexpD", "ahc_prim_exp_d");
+      P_LogD : constant Real_Var_Id :=
+        Prim ("primlogD", "ahc_prim_log_d");
+      P_SqrtD : constant Real_Var_Id :=
+        Prim ("primsqrtD", "ahc_prim_sqrt_d");
+      P_PowD : constant Real_Var_Id :=
+        Prim ("primpowD", "ahc_prim_pow_d");
+      P_LogBaseD : constant Real_Var_Id :=
+        Prim ("primlogBaseD", "ahc_prim_logbase_d");
+      P_SinD : constant Real_Var_Id :=
+        Prim ("primsinD", "ahc_prim_sin_d");
+      P_CosD : constant Real_Var_Id :=
+        Prim ("primcosD", "ahc_prim_cos_d");
+      P_TanD : constant Real_Var_Id :=
+        Prim ("primtanD", "ahc_prim_tan_d");
+      P_AsinD : constant Real_Var_Id :=
+        Prim ("primasinD", "ahc_prim_asin_d");
+      P_AcosD : constant Real_Var_Id :=
+        Prim ("primacosD", "ahc_prim_acos_d");
+      P_AtanD : constant Real_Var_Id :=
+        Prim ("primatanD", "ahc_prim_atan_d");
+      P_SinhD : constant Real_Var_Id :=
+        Prim ("primsinhD", "ahc_prim_sinh_d");
+      P_CoshD : constant Real_Var_Id :=
+        Prim ("primcoshD", "ahc_prim_cosh_d");
+      P_TanhD : constant Real_Var_Id :=
+        Prim ("primtanhD", "ahc_prim_tanh_d");
+      P_FloorD : constant Real_Var_Id :=
+        Prim ("primfloorD", "ahc_prim_floor_d");
+      P_CeilD : constant Real_Var_Id :=
+        Prim ("primceilingD", "ahc_prim_ceiling_d");
+      P_RoundD : constant Real_Var_Id :=
+        Prim ("primroundD", "ahc_prim_round_d");
+      P_TruncD : constant Real_Var_Id :=
+        Prim ("primtruncateD", "ahc_prim_truncate_d");
+
       P_EnumFTh : constant Real_Var_Id :=
         Prim ("primenumFromThen", "ahc_prim_enum_from_then");
       P_EnumFTT : constant Real_Var_Id :=
@@ -908,39 +946,15 @@ package body AHC.Prelude_Core is
       Bind_Name ("putStr", V (P_PutStr));
       Bind_Name ("putStrLn", V (P_PutStrLn));
 
-      --  Floating / RealFrac at Double.
+      --  Floating/RealFrac moved into instance dictionaries; only
+      --  atan2 stays a bound global.
       declare
          procedure BP (Name, Symbol : String) is
          begin
             Bind_Name (Name, V (Prim ("prim" & Name, Symbol)));
          end BP;
       begin
-         Bind_Name ("pi",
-           M.Add (Expr_Node'
-             (Kind => Lit_C, Span => Span,
-              Lit => (Kind => L_Float,
-                      Text => Names.Name_Id
-                        (Table.Intern ("3.141592653589793"))))));
-         BP ("exp", "ahc_prim_exp_d");
-         BP ("log", "ahc_prim_log_d");
-         BP ("sqrt", "ahc_prim_sqrt_d");
-         BP ("**", "ahc_prim_pow_d");
-         BP ("logBase", "ahc_prim_logbase_d");
-         BP ("sin", "ahc_prim_sin_d");
-         BP ("cos", "ahc_prim_cos_d");
-         BP ("tan", "ahc_prim_tan_d");
-         BP ("asin", "ahc_prim_asin_d");
-         BP ("acos", "ahc_prim_acos_d");
-         BP ("atan", "ahc_prim_atan_d");
          BP ("atan2", "ahc_prim_atan2_d");
-         BP ("sinh", "ahc_prim_sinh_d");
-         BP ("cosh", "ahc_prim_cosh_d");
-         BP ("tanh", "ahc_prim_tanh_d");
-         BP ("floor", "ahc_prim_floor_d");
-         BP ("ceiling", "ahc_prim_ceiling_d");
-         BP ("round", "ahc_prim_round_d");
-         BP ("truncate", "ahc_prim_truncate_d");
-         BP ("fromIntegral", "ahc_prim_int_to_d");
          BP ("ord", "ahc_prim_ord");
          BP ("chr", "ahc_prim_chr");
          BP ("getLine", "ahc_prim_getline");
@@ -959,19 +973,8 @@ package body AHC.Prelude_Core is
          BP ("primPopCountI", "ahc_prim_popcount");
       end;
 
-      --  div/mod/quot/rem take a (ignored) Num dictionary.
-      declare
-         procedure Wrap2 (Name : String; P : Real_Var_Id) is
-            D : constant Real_Var_Id := Fresh ("$d");
-         begin
-            Bind_Name (Name, Lam (D, V (P)));
-         end Wrap2;
-      begin
-         Wrap2 ("div", P_Div);
-         Wrap2 ("mod", P_Mod);
-         Wrap2 ("quot", P_Quot);
-         Wrap2 ("rem", P_Rem);
-      end;
+      --  quot/rem/div/mod are Integral methods now; their prims are
+      --  installed through the instance dictionaries below.
 
       --  print d x = putStrLn (show-selector d x)
       declare
@@ -1052,6 +1055,58 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_AbsD));
                      Ms.Append (V (P_SigD));
                      Ms.Append (V (P_FromID));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Integral_Cl
+                    and then (Inst.Head = Env.Int_TC
+                              or else Inst.Head = Env.Integer_TC)
+                  then
+                     --  Canonical bignum representation: Int and
+                     --  Integer share nodes, so both instances bind
+                     --  the same promoting prims, and toInteger is
+                     --  the identity.
+                     declare
+                        X : constant Real_Var_Id := Fresh ("x");
+                     begin
+                        Ms.Append (V (P_Quot));
+                        Ms.Append (V (P_Rem));
+                        Ms.Append (V (P_Div));
+                        Ms.Append (V (P_Mod));
+                        Ms.Append (Lam (X, V (X)));
+                     end;
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Floating_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     Ms.Append (M.Add (Expr_Node'
+                       (Kind => Lit_C, Span => Span,
+                        Lit => (Kind => L_Float,
+                                Text => Names.Name_Id
+                                  (Table.Intern
+                                     ("3.141592653589793"))))));
+                     Ms.Append (V (P_ExpD));
+                     Ms.Append (V (P_LogD));
+                     Ms.Append (V (P_SqrtD));
+                     Ms.Append (V (P_PowD));
+                     Ms.Append (V (P_LogBaseD));
+                     Ms.Append (V (P_SinD));
+                     Ms.Append (V (P_CosD));
+                     Ms.Append (V (P_TanD));
+                     Ms.Append (V (P_AsinD));
+                     Ms.Append (V (P_AcosD));
+                     Ms.Append (V (P_AtanD));
+                     Ms.Append (V (P_SinhD));
+                     Ms.Append (V (P_CoshD));
+                     Ms.Append (V (P_TanhD));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.RealFrac_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     Ms.Append (V (P_TruncD));
+                     Ms.Append (V (P_RoundD));
+                     Ms.Append (V (P_CeilD));
+                     Ms.Append (V (P_FloorD));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Fractional_Cl
                     and then (Inst.Head = Env.Double_TC

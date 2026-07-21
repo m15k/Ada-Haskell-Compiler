@@ -70,9 +70,7 @@ crossing a declared boundary normalize into `[0, N)`, so
 Ranges also work on Double (`type Latitude = Double in -90.0 ..
 90.0`), backed by a now-working Double runtime: Num/Fractional/Show
 at Double are real (`print (7 / 2 :: Double)` prints 3.5); exact
-Rational arithmetic lives in Data.Ratio, with the Floating *class*
-(as opposed to its Double vocabulary) still open. Refined types are
-legal
+Rational arithmetic lives in Data.Ratio. Refined types are legal
 in data/newtype fields (`data Port = Port (Int in 1 .. 65535)`) -
 every construction site checks (or, for `mod` fields, normalizes)
 the stored value; reads trust the constructor-established invariant.
@@ -91,9 +89,16 @@ record syntax, and parametric types included. Enum at Int is
 complete (stepped ranges [1,3..9], succ/pred, to/fromEnum), and the
 Prelude gained span/break/splitAt/unzip/foldr1/foldl1/words/lines.
 
-The Floating/RealFrac vocabulary works at Double (sqrt, pi, exp/log,
-**, logBase, trig, hyperbolics, floor/ceiling/round/truncate with
-round-to-even, fromIntegral), and Double's show now produces GHC's
+The numeric tower is real classes: Integral (instances at Int and
+Integer - the canonical bignum representation lets both bind the
+same promoting prims, with toInteger the identity), Floating and
+RealFrac (instances at Double: sqrt, pi, exp/log, **, logBase,
+trig, hyperbolics, floor/ceiling/round/truncate with round-to-even,
+results at Integer). fromIntegral is ordinary Prelude source
+(fromInteger . toInteger, fully polymorphic), (^)/(^^) exist
+(exact 2^100 via bignum), even/odd/gcd/lcm are
+Integral-constrained, and defaulting covers the new classes
+(print (floor 2.5) just works). Double's show produces GHC's
 exact output: shortest round-trip digits with the fixed-vs-scientific
 switch (0.1 + 0.2 prints 0.30000000000000004; 1.0e7 stays
 scientific). Guards are full Report 3.13 qualifier sequences: boolean
@@ -128,10 +133,9 @@ and wall time ~25%; `ahc emit --no-opt` / AHC_NOOPT=1 disables it.
 Generated executables link with a 512MB stack so million-element
 thunk chains evaluate instead of overflowing.
 
-Remaining gaps: Floating/RealFrac as proper classes (the vocabulary
-is monomorphic at Double, and Rational/Complex are likewise
-monomorphic library types), the Integral class proper, and separate
-compilation. Exhaustiveness and redundancy warnings are real
+Remaining gaps: separate compilation (and the polymorphic
+`Ratio a`/`Complex a` shapes - the library types are monomorphic).
+Exhaustiveness and redundancy warnings are real
 (Maranget-style usefulness analysis over function equations and
 case alternatives, for the root module; agrees line-for-line with
 GHC's -Wincomplete-patterns / -Woverlapping-patterns on the pinned
@@ -162,7 +166,7 @@ scripts/run_exec.sh                # compile-and-run output goldens
 scripts/run_conformance.sh         # Haskell 2010 conformance subset
 ```
 
-Conformance (the PRD success metric): `tests/conformance/` holds 50
+Conformance (the PRD success metric): `tests/conformance/` holds 51
 programs (including multi-module cases) pinned to Haskell 2010
 Report sections - lexical structure
 and layout, every expression form, declarations and classes, the

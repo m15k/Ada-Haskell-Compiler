@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+The numeric tower as real classes (M62):
+
+- **Integral** (superclasses Num, Ord) with instances at Int and
+  Integer: quot/rem/div/mod stop being fake Num-constrained
+  globals and become methods; the canonical bignum representation
+  means both instances bind the same promoting prims and
+  `toInteger` is the identity.
+- **Floating** and **RealFrac** (superclass Fractional) with
+  instances at Double: the whole vocabulary (pi, exp/log/sqrt,
+  `**`, logBase, trig, hyperbolics; truncate/round/ceiling/floor
+  at Integer results, where GHC's defaulting lands anyway) moves
+  from monomorphic globals into real dictionaries. Same runtime
+  prims - sqrt changed type, not behavior. atan2 stays monomorphic
+  (RealFloat territory).
+- **fromIntegral is ordinary Prelude source** (`fromInteger .
+  toInteger`), fully polymorphic at last; **(^)/(^^)** added
+  (exact `2 ^ 100` via bignum; the fast-exponentiation helper is a
+  constraint-carrying where-binding - the M59 typechecker fix in
+  action); even/odd/gcd/lcm generalized to Integral.
+- Report 4.3.4 defaulting extended to the new classes
+  (`print (floor 2.5)`, `print (sqrt 2)` default as GHC does).
+- New conformance program ch06_04_tower.hs (52 lines of
+  polymorphic tower use) byte-identical to GHC; suite now 51.
+
 Exhaustiveness warnings (M61) and Data.List lookup (M60):
 
 - **AHC.Exhaustive** - Maranget-style usefulness analysis over

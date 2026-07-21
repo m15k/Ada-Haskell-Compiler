@@ -587,7 +587,16 @@ package body AHC.Typechecker is
                                         Env.Fractional_Cl
                                       or else
                                       Class_Id (W_List (J).C.Class) =
-                                        Env.Real_Cl)
+                                        Env.Real_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.Integral_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.Floating_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.RealFrac_Cl)
                                  then
                                     Numeric := True;
                                  end if;

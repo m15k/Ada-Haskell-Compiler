@@ -2,7 +2,7 @@ compose :: (a -> b) -> (c -> a) -> c -> b
 twice :: (a -> a) -> a -> a
 len :: Num b => [a] -> b
 sumTo :: (Eq a, Num a) => a -> a
-isEven :: (Eq a, Num a) => a -> Bool
+isEven :: (Eq a, Integral a, Num a) => a -> Bool
 pairUp :: a -> b -> (a, b)
 names :: [Integer]
 total :: Integer
