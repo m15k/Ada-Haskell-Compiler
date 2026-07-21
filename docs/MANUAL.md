@@ -1093,7 +1093,7 @@ compiler author writes have a blind spot: the author's
 misunderstanding of Haskell goes into the test's expected output
 too. AHC's answer, and the single most valuable methodology decision
 of the project: **GHC is the oracle**. The conformance suite
-(`tests/conformance/`, 47 programs pinned to Report sections)
+(`tests/conformance/`, 48 programs pinned to Report sections)
 stores as its expected output *whatever GHC 9.4.8 prints* for the
 same source, and AHC must reproduce it **byte for byte** —
 `scripts/run_conformance.sh --oracle` regenerates the expectations
@@ -1129,6 +1129,7 @@ and failed the truth.*
 | `scripts/run_differential.sh` / `_types.sh` | do AHC and GHC agree on what *parses* and what *typechecks*? |
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
+| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the
@@ -1172,7 +1173,10 @@ the wired-in placeholder); infix constructors (`:%`, `:+`) exercised
 a parser path dormant since phase one and taught `deriving Show`
 infix layout;
 `System.IO` gave AHC its first-ever input (`getLine`, `readFile`,
-with the generated C `main` now capturing `argc`/`argv`); and
+with the generated C `main` now capturing `argc`/`argv`; `isEOF`
+arrived later, the day the mini-Lisp REPL needed to see end-of-file
+coming - the first library addition driven by a real program rather
+than by the Report); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
 methods come from the builtin-class default machinery (enabler E4),
 which builds Report default methods against the instance's own
@@ -1243,6 +1247,28 @@ double-quoted `git commit -m` string was command-substituted by
 zsh, mangling a pushed commit message (left as-is; history is not
 rewritten for cosmetics). Rule: commit messages go through
 `git commit -F file`.
+
+**The imported synonym that read the wrong street's house numbers.**
+The first *program* written against the finished compiler - a
+mini-Lisp interpreter in `examples/lisp`, built precisely to shake
+out what the test suite couldn't - fell over on its very first
+compile: `type Env = [(String, Value)]`, imported across a module
+boundary, produced "cyclic type synonym". The cause: a synonym was
+recorded as a pointer into the *defining module's* syntax arena
+(chapter 4), and an importing module happily dereferenced that
+pointer into its *own* arena - like following house numbers from a
+different street. Whatever type expression happened to live at that
+id was expanded instead, sometimes forever (hence "cyclic"). No
+conformance test had ever imported a user synonym from another
+module; the wired-in `String` dodged the path because it caches a
+converted Core rhs. The fix follows `String`'s precedent: at the
+declaration, the kind checker now converts every synonym's rhs to
+Core once (its parameters becoming real Core type variables) and
+expansion substitutes into that cached form - imported synonyms
+never touch the foreign arena again. Rule, and the reason the
+example exists: **arena ids are meaningless outside their arena**,
+and only a real program exercises the seams between features that
+the per-feature tests each cover alone.
 
 ---
 

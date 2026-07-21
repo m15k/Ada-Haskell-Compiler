@@ -1,6 +1,6 @@
 module System.IO
   ( putStr, putStrLn, print
-  , getLine, getContents, readFile, interact
+  , getLine, getContents, readFile, interact, isEOF
   ) where
 
 interact :: (String -> String) -> IO ()

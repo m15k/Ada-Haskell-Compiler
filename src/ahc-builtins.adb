@@ -917,6 +917,8 @@ package body AHC.Builtins is
             Ignore := Def_Global
               ("getLine", Mono (IO_T (String_T2)));
             Ignore := Def_Global
+              ("isEOF", Mono (IO_T (TC (Env.Bool_TC))));
+            Ignore := Def_Global
               ("getContents", Mono (IO_T (String_T2)));
             Ignore := Def_Global
               ("readFile",

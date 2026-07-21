@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Dogfooding (M58):
+
+- **examples/lisp** - a mini-Lisp interpreter (REPL + batch) written
+  in Haskell 2010 and compiled by AHC itself: exact numeric tower
+  (bignum Integer / Rational / Double), closures, letrec via lazy
+  knot-tying, boot prelude written in mini-Lisp. Verified
+  byte-identical to the same source compiled by GHC
+  (`scripts/run_examples.sh`, GHC-oracle goldens).
+- **Fixed: cross-module type synonyms.** A synonym imported from
+  another module expanded a syntax-arena id against the importing
+  module's arena (garbage; typically "cyclic type synonym"). Kind
+  checking now caches each synonym's converted Core rhs at its
+  declaration and expansion substitutes into the cached form;
+  failed (cyclic) synonyms are poisoned to report exactly once.
+  Found by the interpreter's first compile.
+- **System.IO.isEOF** - new primitive, needed by the REPL to see
+  end-of-file coming (AHC's `getLine` errors at EOF, as does GHC's).
+- New multi-module conformance case pinning cross-module synonyms
+  (nullary and parametric); the suite is now 48 programs.
+
 The standard library (docs/stdlib-plan.md), complete - every
 milestone including everything the plan originally deferred:
 
@@ -23,7 +43,7 @@ milestone including everything the plan originally deferred:
   `module M` re-exports (E5), derived Show for infix constructors,
   and a rename rule letting a library type take a builtin TyCon's
   name (how `Rational` claimed its own).
-- Conformance suite grown 39 -> 47 programs, all byte-identical to
+- Conformance suite grown 39 -> 48 programs, all byte-identical to
   GHC 9.4.8.
 
 ## v1.0 (2026-07-17)

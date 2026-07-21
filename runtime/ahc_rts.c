@@ -1080,6 +1080,16 @@ static AhcNode *io_getline(AhcNode **env, AhcNode *w) {
   return r;
 }
 
+static AhcNode *io_iseof(AhcNode **env, AhcNode *w) {
+  int ch;
+  (void)env; (void)w;
+  ch = fgetc(stdin);
+  if (ch == EOF)
+    return mk_bool(1);
+  ungetc(ch, stdin);
+  return mk_bool(0);
+}
+
 static AhcNode *io_getcontents(AhcNode **env, AhcNode *w) {
   char *buf = NULL;
   size_t cap = 0, len = 0;
@@ -1447,6 +1457,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_popcount,
   *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
   *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
+  *ahc_prim_iseof,
   *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
   *ahc_prim_pow_d, *ahc_prim_logbase_d,
   *ahc_prim_atan2_d,
@@ -1519,6 +1530,7 @@ void ahc_rts_init(void) {
   ahc_prim_bcompl = mk_prim1(p_bcompl);
   ahc_prim_popcount = mk_prim1(p_popcount);
   ahc_prim_getline = ahc_mk_fun(io_getline, NULL);
+  ahc_prim_iseof = ahc_mk_fun(io_iseof, NULL);
   ahc_prim_getcontents = ahc_mk_fun(io_getcontents, NULL);
   ahc_prim_readfile = mk_prim1(p_readfile);
   ahc_prim_getargs = ahc_mk_fun(io_getargs, NULL);

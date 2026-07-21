@@ -6,4 +6,7 @@ tests/obj/
 tests/bin/
 tests/alire/
 tests/config/
+examples/lisp/minilisp
+examples/lisp/minilisp.c
 .DS_Store
+examples/lisp/lisp.c

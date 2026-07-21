@@ -158,7 +158,7 @@ scripts/run_exec.sh                # compile-and-run output goldens
 scripts/run_conformance.sh         # Haskell 2010 conformance subset
 ```
 
-Conformance (the PRD success metric): `tests/conformance/` holds 47
+Conformance (the PRD success metric): `tests/conformance/` holds 48
 programs (including multi-module cases) pinned to Haskell 2010
 Report sections - lexical structure
 and layout, every expression form, declarations and classes, the
@@ -191,6 +191,20 @@ modules compiled by AHC through its own module system. The driver resolves impor
 the root file, then `$AHC_LIB`, then `lib/`. Conformance oracles run
 the same programs under GHC's real base library, so AHC's
 implementations are tested against the canonical ones.
+
+## Examples — the dogfood program
+
+`examples/lisp/` is a Scheme-flavored mini-Lisp interpreter written
+in Haskell 2010 and compiled by AHC itself: a REPL and batch
+evaluator with an exact numeric tower (bignum Integer, Rational via
+Data.Ratio, Double), closures, `letrec` knot-tied through laziness,
+and a boot prelude written in mini-Lisp. The same source runs under
+GHC, and `scripts/run_examples.sh` requires the two builds to
+behave byte-identically (goldens are GHC's output, `--oracle`
+regenerates). Its first compile immediately found and fixed a real
+compiler bug (cross-module type synonyms read the defining module's
+syntax arena through an importing module's ids) and drove the first
+need-based stdlib addition (`isEOF`).
 
 ## Layout
 

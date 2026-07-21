@@ -37,6 +37,15 @@ package AHC.Builtins is
       Vars       : Syntax.QName_Vectors.Vector;   --  user synonyms
       Syntax_Rhs : Syntax.Type_Id := 0;
       Core_Rhs   : Core.Type_Id := Core.No_Type;  --  filled by AHC.Kinds
+      --  Parameter tyvars of the cached Core_Rhs, in declaration
+      --  order. Syntax_Rhs is only meaningful inside the defining
+      --  module's arena, so cross-module expansion MUST go through
+      --  Core_Rhs/Core_Vars (AHC.Kinds caches them at the
+      --  declaration).
+      Core_Vars  : Core.TyVar_Id_Vectors.Vector;
+      --  Caching failed (e.g. a cyclic synonym): the error is
+      --  already reported; expansion yields No_Type silently.
+      Bad        : Boolean := False;
    end record;
 
    package Syn_Maps is new Ada.Containers.Hashed_Maps

@@ -1,0 +1,10 @@
+mini-lisp (an AHC example); Ctrl-D exits
+3
+144
+error: car: not a pair: ()
+25
+error: unbound variable: undefined-thing
+3628800
+error: division by zero
+"a string"
+error: let: bad form

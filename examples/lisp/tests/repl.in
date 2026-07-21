@@ -1,0 +1,14 @@
+(+ 1 2)
+(define (square x) (* x x))
+(square 12)
+(car '())
+(square 5)
+(undefined-thing 1)
+(define (f n)
+  (if (= n 0)
+      1
+      (* n (f (- n 1)))))
+(f 10)
+(/ 1 0)
+"a string"
+(let loop () 1)

@@ -195,6 +195,55 @@ package body AHC.Kinds is
          Result     : out Core.Type_Id;
          Kind       : out Core.Kind_Id);
 
+      --  Substitute Args for Vars in a cached synonym rhs, copying
+      --  the spine; untouched subtrees are shared (Core types are
+      --  immutable, unlike Core expressions, so sharing is safe).
+      function Subst_Syn
+        (T    : Core.Type_Id;
+         Vars : Core.TyVar_Id_Vectors.Vector;
+         Args : Core.Type_Id_Vectors.Vector) return Core.Type_Id
+      is
+      begin
+         if Core."=" (T, Core.No_Type) then
+            return T;
+         end if;
+         declare
+            N : constant Core.Type_Node := M.Node (T);
+         begin
+            case N.Kind is
+               when Core.TVar_T =>
+                  for I in 1 .. Vars.Last_Index loop
+                     if Core."=" (Vars (I), N.Tv) then
+                        return Args (I);
+                     end if;
+                  end loop;
+                  return T;
+               when Core.TMeta_T | Core.TCon_T =>
+                  return T;
+               when Core.TApp_T =>
+                  return Core.Type_Id
+                    (M.Add (Core.Type_Node'
+                       (Kind => Core.TApp_T,
+                        T_Fun => Core.Real_Type_Id
+                          (Subst_Syn (Core.Type_Id (N.T_Fun),
+                                      Vars, Args)),
+                        T_Arg => Core.Real_Type_Id
+                          (Subst_Syn (Core.Type_Id (N.T_Arg),
+                                      Vars, Args)))));
+               when Core.TFun_T =>
+                  return Core.Type_Id
+                    (M.Add (Core.Type_Node'
+                       (Kind => Core.TFun_T,
+                        From => Core.Real_Type_Id
+                          (Subst_Syn (Core.Type_Id (N.From),
+                                      Vars, Args)),
+                        To => Core.Real_Type_Id
+                          (Subst_Syn (Core.Type_Id (N.To),
+                                      Vars, Args)))));
+            end case;
+         end;
+      end Subst_Syn;
+
       --  Expand synonym Name applied to Args (already converted).
       procedure Expand_Synonym
         (Name  : Names.Name_Id;
@@ -210,6 +259,10 @@ package body AHC.Kinds is
       begin
          Result := Core.No_Type;
          Out_Kind := Core.Kind_Id (Star_K);
+         if Syn.Bad then
+            --  Reported when the declaration was cached; stay silent.
+            return;
+         end if;
          if Depth > Max_Synonym_Depth then
             Bag.Add (Diagnostics.Error, Diagnostics.Kind_Error, Span,
                      "cyclic type synonym");
@@ -222,7 +275,16 @@ package body AHC.Kinds is
             return;
          end if;
          if Syn.Core_Rhs /= Core.No_Type then
-            Result := Syn.Core_Rhs;   --  wired-in (String)
+            --  Cached Core form: the wired-in String, or any user
+            --  synonym after its defining module's kind pass ran.
+            --  Imported synonyms always take this path - their
+            --  Syntax_Rhs points into another module's arena and
+            --  must never be re-read here.
+            if Syn.Core_Vars.Is_Empty then
+               Result := Syn.Core_Rhs;
+            else
+               Result := Subst_Syn (Syn.Core_Rhs, Syn.Core_Vars, Args);
+            end if;
             return;
          end if;
          declare
@@ -1020,6 +1082,45 @@ package body AHC.Kinds is
          end;
       end Do_Instance;
 
+      --  Cache a declared synonym's rhs as a Core type, with fresh
+      --  Core tyvars standing for the parameters. After this pass,
+      --  expansion never needs the syntax arena - which is the
+      --  point: importing modules cannot read it (Syntax_Rhs ids
+      --  are private to the defining module's arena).
+      procedure Do_Synonym (N : Decl_Node) is
+         Syn   : Builtins.Syn_Rec := Env.Synonyms (N.S_Name);
+         TvEnv : Tv_Maps.Map;
+         Order : TyVar_Vectors.Vector;
+         R     : Core.Type_Id;
+         K     : Core.Kind_Id;
+      begin
+         if Core."/=" (Syn.Core_Rhs, Core.No_Type) then
+            return;   --  wired-in (String)
+         end if;
+         for V of N.S_Vars loop
+            declare
+               KM : constant Core.Real_Kind_Id := Fresh_KMeta;
+               Tv : constant Core.Real_TyVar_Id :=
+                 M.Mint_TyVar ((Name => V.Name,
+                                Tv_Kind => Core.Kind_Id (KM)));
+               Ty : constant Core.Type_Id := Core.Type_Id
+                 (M.Add (Core.Type_Node'
+                    (Kind => Core.TVar_T, Tv => Tv)));
+            begin
+               TvEnv.Include
+                 (V.Name, Tv_Entry'(Ty => Ty,
+                                    Tv_Kind => Core.Kind_Id (KM)));
+               Syn.Core_Vars.Append (Tv);
+            end;
+         end loop;
+         Convert (N.S_Rhs, TvEnv, Order,
+                  Implicit => False, Depth => 0,
+                  Result => R, Kind => K);
+         Syn.Core_Rhs := R;
+         Syn.Bad := Core."=" (R, Core.No_Type);
+         Env.Synonyms.Include (N.S_Name, Syn);
+      end Do_Synonym;
+
       Method_Selectors : Sig_Maps.Map;   --  selector set (value unused)
 
    begin
@@ -1032,6 +1133,20 @@ package body AHC.Kinds is
          begin
             if N.Kind in Data_D | Newtype_D then
                Do_Data (N);
+            end if;
+         end;
+      end loop;
+
+      --  Synonyms next (data kinds now exist): cache each declared
+      --  synonym's Core rhs so every later conversion - and every
+      --  importing module - expands from the cached form instead of
+      --  this arena.
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind = Type_Syn_D then
+               Do_Synonym (N);
             end if;
          end;
       end loop;

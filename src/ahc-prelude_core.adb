@@ -944,6 +944,7 @@ package body AHC.Prelude_Core is
          BP ("ord", "ahc_prim_ord");
          BP ("chr", "ahc_prim_chr");
          BP ("getLine", "ahc_prim_getline");
+         BP ("isEOF", "ahc_prim_iseof");
          BP ("getContents", "ahc_prim_getcontents");
          BP ("readFile", "ahc_prim_readfile");
          BP ("getArgs", "ahc_prim_getargs");

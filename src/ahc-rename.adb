@@ -1588,7 +1588,8 @@ package body AHC.Rename is
                      (Arity => Natural (N.S_Vars.Length),
                       Vars => N.S_Vars,
                       Syntax_Rhs => Syntax.Type_Id (N.S_Rhs),
-                      Core_Rhs => Core.No_Type));
+                      Core_Rhs => Core.No_Type,
+                      others => <>));
                when Class_D =>
                   Declare_Class (D, N);
                when others =>
