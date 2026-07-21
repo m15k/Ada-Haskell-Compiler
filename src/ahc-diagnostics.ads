@@ -57,7 +57,8 @@ package AHC.Diagnostics is
       Class_Missing_Method,
       Class_Duplicate_Instance,
       Class_Context_Depth,
-      Arity_Mismatch);
+      Arity_Mismatch,
+      Match_Warning);
 
    --  Errors beyond this many are counted but not stored.
    Max_Stored_Errors : constant := 50;

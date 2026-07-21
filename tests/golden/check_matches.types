@@ -1,0 +1,16 @@
+name :: Color -> [Char]
+both :: Color -> Color -> Int
+full :: Color -> Int
+dup :: Color -> Int
+guarded :: Int -> Int
+partialG :: Int -> Int
+classify :: Maybe Int -> [Char]
+pairs :: (Bool, Bool) -> Int
+lists :: [Int] -> Int
+main :: IO ()
+tests/golden/check_matches.hs:4:1: warning: non-exhaustive patterns in function 'name'
+tests/golden/check_matches.hs:8:1: warning: non-exhaustive patterns in function 'both'
+tests/golden/check_matches.hs:20:1: warning: redundant pattern in function 'dup'
+tests/golden/check_matches.hs:28:1: warning: non-exhaustive patterns in function 'partialG'
+tests/golden/check_matches.hs:33:3: warning: non-exhaustive patterns in case expression
+tests/golden/check_matches.hs:38:1: warning: non-exhaustive patterns in function 'pairs'

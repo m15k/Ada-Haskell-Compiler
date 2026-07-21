@@ -27,6 +27,10 @@ with AHC.Syntax;
 
 package AHC.Desugar is
 
+   --  Warn_Matches enables exhaustiveness/redundancy warnings
+   --  (AHC.Exhaustive); the driver turns it on for the root module
+   --  only - library and Prelude matches are vetted, and their
+   --  spans belong to other files.
    procedure Desugar_Module
      (Arena : Syntax.Module_Arena;
       Res   : Rename.Resolutions;
@@ -37,6 +41,7 @@ package AHC.Desugar is
       Sigs  : in out Kinds.Sig_Maps.Map;
       Annos : Kinds.Anno_Maps.Map;
       Preds : Kinds.Pred_Vectors.Vector :=
-        Kinds.Pred_Vectors.Empty_Vector);
+        Kinds.Pred_Vectors.Empty_Vector;
+      Warn_Matches : Boolean := False);
 
 end AHC.Desugar;

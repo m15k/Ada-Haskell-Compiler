@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Exhaustiveness warnings (M61) and Data.List lookup (M60):
+
+- **AHC.Exhaustive** - Maranget-style usefulness analysis over
+  function equations and case alternatives: "non-exhaustive
+  patterns in function 'f'" / "in case expression", and "redundant
+  pattern" for clauses that can never fire. Handles constructors
+  (incl. tuples, lists, records), literals (never a complete set),
+  and guards (a clause counts as covering only when unguarded or
+  carrying an otherwise/True alternative; guarded predecessors
+  never shadow). Root module only - library and Prelude matches
+  are vetted. Agrees line-for-line with GHC's
+  -Wincomplete-patterns / -Woverlapping-patterns on the pinned
+  corpus (tests/golden/check_matches).
+- **Data.List now re-exports lookup**, matching base.
+
 Data.Map (M59):
 
 - **lib/Data/Map.hs** - a weight-balanced binary search tree

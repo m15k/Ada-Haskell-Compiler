@@ -376,9 +376,14 @@ procedure AHC_Main is
          --  shared Core module. Each gets fresh resolutions,
          --  annotation and predicate tables (their keys are
          --  per-arena); signatures are Core-var keyed and shared.
-         for L of Order loop
+         --  The root module (appended last) additionally gets
+         --  exhaustiveness/redundancy warnings.
+         for LI in 1 .. Order.Last_Index loop
             exit when Bag.Has_Errors;
             declare
+               L : Loaded renames Order (LI);
+               Is_Root : constant Boolean :=
+                 LI = Order.Last_Index;
                L_Res   : AHC.Rename.Resolutions;
                L_Annos : AHC.Kinds.Anno_Maps.Map;
                L_Preds : AHC.Kinds.Pred_Vectors.Vector;
@@ -423,7 +428,8 @@ procedure AHC_Main is
                if not Bag.Has_Errors then
                   AHC.Desugar.Desugar_Module
                     (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
-                     L_Annos, L_Preds);
+                     L_Annos, L_Preds,
+                     Warn_Matches => Is_Root);
                end if;
                if Bag.Has_Errors then
                   Bag.Print_All (L.Text);

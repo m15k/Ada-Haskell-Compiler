@@ -2,6 +2,8 @@ with Ada.Containers.Vectors;
 
 with Ada.Containers.Hashed_Sets;
 
+with AHC.Exhaustive;
+
 package body AHC.Desugar is
 
    use AHC.Syntax;
@@ -25,8 +27,48 @@ package body AHC.Desugar is
       Sigs  : in out Kinds.Sig_Maps.Map;
       Annos : Kinds.Anno_Maps.Map;
       Preds : Kinds.Pred_Vectors.Vector :=
-        Kinds.Pred_Vectors.Empty_Vector)
+        Kinds.Pred_Vectors.Empty_Vector;
+      Warn_Matches : Boolean := False)
    is
+      --  A guarded right-hand side is "total" when some alternative
+      --  is an unconditional otherwise/True guard - those clauses
+      --  count for exhaustiveness like unguarded ones.
+      function Rhs_Total (R : Syntax.Rhs) return Boolean is
+      begin
+         if not R.Guarded then
+            return True;
+         end if;
+         for G of R.Guards loop
+            if Natural (G.Quals.Length) = 1 then
+               declare
+                  SN : constant Stmt_Node :=
+                    Arena.Node (G.Quals (1));
+               begin
+                  if SN.Kind = Expr_S then
+                     declare
+                        EN : constant Expr_Node :=
+                          Arena.Node (SN.Expr);
+                     begin
+                        if (EN.Kind = Var_E
+                            and then Table.Text
+                              (Names.Real_Name_Id (EN.Name.Name))
+                              = "otherwise")
+                          or else
+                            (EN.Kind = Con_E
+                             and then Table.Text
+                               (Names.Real_Name_Id (EN.Name.Name))
+                               = "True")
+                        then
+                           return True;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end loop;
+         return False;
+      end Rhs_Total;
+
       ------------------------------------------------------------------
       --  Core building helpers
       ------------------------------------------------------------------
@@ -976,6 +1018,30 @@ package body AHC.Desugar is
                   Result : Core.Real_Expr_Id :=
                     VarE (Fail_V, Span);
                begin
+                  if Warn_Matches then
+                     declare
+                        Rows : Exhaustive.Row_Vectors.Vector;
+                     begin
+                        for I in 1 .. N.Alts.Last_Index loop
+                           declare
+                              A : constant Alt_Node :=
+                                Arena.Node (N.Alts (I));
+                              Ps : Syntax.Pat_Id_Vectors.Vector;
+                           begin
+                              Ps.Append (A.Pat);
+                              Rows.Append
+                                (Exhaustive.Row_Rec'
+                                   (Pats => Ps,
+                                    Total =>
+                                      Rhs_Total (A.Alt_Rhs),
+                                    Span => A.Span));
+                           end;
+                        end loop;
+                        Exhaustive.Check_Match
+                          (Arena, Res, Table, Bag, M, Env, Rows,
+                           "case expression", Span);
+                     end;
+                  end if;
                   for I in reverse 1 .. N.Alts.Last_Index loop
                      declare
                         A : constant Alt_Node :=
@@ -1206,6 +1272,30 @@ package body AHC.Desugar is
          Fail_V : constant Core.Real_Var_Id := Fresh ("$fail", Span);
          Result : Core.Real_Expr_Id;
       begin
+         if Warn_Matches and then U.Arity > 0 then
+            declare
+               Rows : Exhaustive.Row_Vectors.Vector;
+            begin
+               for EI in 1 .. U.Equations.Last_Index loop
+                  declare
+                     N : constant Decl_Node :=
+                       Arena.Node (U.Equations (EI));
+                  begin
+                     Rows.Append
+                       (Exhaustive.Row_Rec'
+                          (Pats => N.Fun_Pats,
+                           Total => Rhs_Total (N.Fun_Rhs),
+                           Span => N.Span));
+                  end;
+               end loop;
+               Exhaustive.Check_Match
+                 (Arena, Res, Table, Bag, M, Env, Rows,
+                  "function '"
+                  & Table.Text (Names.Real_Name_Id (U.Name)) & "'",
+                  Span);
+            end;
+         end if;
+
          --  If the single equation has all-variable patterns, use them
          --  directly as lambda binders (the common case reads well).
          if Natural (U.Equations.Length) = 1 then

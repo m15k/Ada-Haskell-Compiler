@@ -130,8 +130,12 @@ thunk chains evaluate instead of overflowing.
 
 Remaining gaps: Floating/RealFrac as proper classes (the vocabulary
 is monomorphic at Double, and Rational/Complex are likewise
-monomorphic library types), the Integral class proper,
-exhaustiveness warnings, and separate compilation.
+monomorphic library types), the Integral class proper, and separate
+compilation. Exhaustiveness and redundancy warnings are real
+(Maranget-style usefulness analysis over function equations and
+case alternatives, for the root module; agrees line-for-line with
+GHC's -Wincomplete-patterns / -Woverlapping-patterns on the pinned
+corpus).
 Builtin-class default methods work (a Show instance defining only
 `show` gets Report-correct `showsPrec`/`showList`; an Ord instance
 can define just `compare` - or just `<=`, with `compare` defaulting

@@ -635,8 +635,25 @@ lived.)
 **A matrix-shaped design.** The compiler is structured around an
 explicit matrix of patterns-by-equations (the classic
 Wadler/Peyton-Jones scheme) so that a future exhaustiveness checker
-("warning: you forgot the `Nothing` case") can be added without
-restructuring. That checker remains future work.
+("warning: you forgot the `Nothing` case") could be added without
+restructuring. That promise was eventually collected on:
+`AHC.Exhaustive` runs Maranget's *usefulness* algorithm over every
+function's equations and every case expression. The idea is one
+question asked two ways: "is there a value this row matches that no
+earlier row does?" Ask it of an imaginary all-wildcard row after
+your clauses - if the answer is yes, some value falls through
+(non-exhaustive). Ask it of each real clause against its
+predecessors - if the answer is no, that clause can never fire
+(redundant). The algorithm walks columns: a wildcard against a
+*complete* set of constructors (every constructor of the type
+appears) splits into one sub-problem per constructor; anything
+else drops to the rows that keep matching. Guards are handled
+conservatively - a guarded clause only counts as covering things
+when one of its guards is a literal `otherwise`/`True` - and
+literals never form a complete set (there is always another
+integer). Warnings fire for the module you are compiling, not for
+the Prelude or libraries, and the pinned test corpus agrees
+line-for-line with GHC's own checker.
 
 ### Laziness discipline in the translations
 
