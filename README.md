@@ -204,7 +204,7 @@ Maybe - the Maybe Monad and all three Functor dictionaries are
 real), System.IO / System.Environment / System.Exit (AHC programs
 can finally READ: getLine, getContents, readFile, interact, getArgs,
 exit codes), Numeric (showHex and friends), Data.Bits at Int, and
-Data.Ix as an ordinary source class, Data.Map (a weight-balanced
+Data.Ix as an ordinary source class, Data.Map and Data.Set (a weight-balanced
 search tree matching the containers library's observable behavior
 exactly - toList order, Show format, union bias - and oracled
 against the real thing), Data.Ratio (exact fractions

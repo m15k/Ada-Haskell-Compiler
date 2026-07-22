@@ -1,0 +1,16 @@
+fromList [1,3,4,5]
+([1,3,4,5],4,False)
+(True,True)
+fromList [1,2,3,4,5]
+fromList [1,4,5]
+fromList [0,1,3,4,5,6]
+fromList [3,5]
+fromList [3,4]
+fromList [4]
+fromList [10,30,40,50]
+fromList "abn"
+(True,False)
+fromList [(1,"a"),(3,"c")]
+"1a2bb3c4dddd"
+fromList [1,2,3,4]
+fromList [(1,'x'),(2,'y')]

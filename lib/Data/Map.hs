@@ -1,9 +1,12 @@
 module Data.Map
   ( Map, empty, singleton, null, size, member, notMember
   , lookup, findWithDefault, insert, insertWith, delete, adjust
-  , union, unionWith, fromList, toList, toAscList, keys, elems
-  , map, foldrWithKey
+  , union, unionWith, fromList, fromDistinctAscList
+  , toList, toAscList, keys, elems
+  , map, filter, foldrWithKey, foldlWithKey, keysSet
   ) where
+
+import qualified Data.Set as Set
 
 --  A weight-balanced binary search tree (Adams' algorithm, the same
 --  family as GHC's containers library). Keys are kept in strict
@@ -215,6 +218,34 @@ foldrWithKey :: (k -> a -> b -> b) -> b -> Map k a -> b
 foldrWithKey _ z Tip = z
 foldrWithKey f z (Bin _ k x l r) =
   foldrWithKey f (f k x (foldrWithKey f z r)) l
+
+--  Left fold in ascending key order.
+foldlWithKey :: (b -> k -> a -> b) -> b -> Map k a -> b
+foldlWithKey _ z Tip = z
+foldlWithKey f z (Bin _ k x l r) =
+  foldlWithKey f (f (foldlWithKey f z l) k x) r
+
+--  Build balanced from strictly ascending pairs (no comparisons).
+fromDistinctAscList :: [(k, a)] -> Map k a
+fromDistinctAscList ps = goB (length ps) ps
+  where
+    goB 0 _ = Tip
+    goB n ys =
+      case splitAt (div n 2) ys of
+        (ls, (mk, mx) : rs) ->
+          Bin n mk mx (goB (div n 2) ls)
+                      (goB (n - div n 2 - 1) rs)
+        (_, []) -> Tip
+
+filter :: (a -> Bool) -> Map k a -> Map k a
+filter p m = fromDistinctAscList (goFil (toAscList m))
+  where
+    goFil [] = []
+    goFil ((k, x) : rest) =
+      if p x then (k, x) : goFil rest else goFil rest
+
+keysSet :: Map k a -> Set.Set k
+keysSet m = Set.fromDistinctAscList (keys m)
 
 instance (Show k, Show a) => Show (Map k a) where
   showsPrec d m s =
