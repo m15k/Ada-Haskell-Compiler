@@ -56,7 +56,7 @@ Small-medium.
 
 ## Track C - architectural payoffs
 
-### M70 - polymorphic Ratio a and Complex a
+### M70 - polymorphic Ratio a and Complex a (DONE)
 The last monomorphic subsets. Now EXPRESSIBLE because M62 made the
 tower real: `data Ratio a = a :% a` with
 `Integral a => Num (Ratio a)`, `type Rational = Ratio Integer`;
@@ -65,7 +65,7 @@ Pure library work against machinery that already exists; removes
 the GHC-side annotation gotchas from the conformance tests.
 Medium-large, high satisfaction.
 
-### M71 - Data.Set + Map rounding
+### M71 - Data.Set + Map rounding (DONE - Track C complete)
 Data.Set reuses the weight-balanced tree almost verbatim (member/
 insert/delete/union/toList); Map gains foldlWithKey, filter,
 keysSet. Small, immediate library value.

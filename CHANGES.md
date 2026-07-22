@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Track C - the architectural payoffs (M70-M71):
+
+- **Polymorphic Ratio a and Complex a** (M70): data Ratio a with
+  Integral-context instances and type Rational = Ratio Integer;
+  data Complex a with RealFloat-context Num and polar family. The
+  last monomorphic library shapes die, expressible only because
+  the tower is real classes (M62/M69). Two rename rules extended:
+  a type SYNONYM may shadow a builtin TyCon (symmetric with the
+  data rule), and a visible synonym outranks the shadowed builtin
+  at use sites. Suite entry lib_poly_ratio_complex.hs; existing
+  ratio/complex tests unchanged and identical.
+- **Data.Set + Map roundout** (M71): the weight-balanced tree
+  without values (member/insert/delete/union/difference/
+  intersection/filter/map, fromDistinctAscList's comparison-free
+  balanced build), byte-identical to real containers (lib_set.hs);
+  Map gains filter, foldlWithKey, keysSet, fromDistinctAscList.
+  Set's constructors are SBin/STip: the renamer's constructor
+  namespace is flat across modules (the M75 item), and Data.Map
+  owns Bin/Tip. Suite now 58 programs.
+
 properFraction + RealFloat (M69):
 
 - **properFraction** joins RealFrac (result at Integer, where

@@ -145,8 +145,9 @@ mini-Lisp interpreter drop from ~6s to ~1s. The frontend
 (parse-through-Core, ~0.3s for the whole interpreter) deliberately
 stays whole-program: that is what makes the Report's program-wide
 instance coherence hold by construction, with no orphan-instance or
-interface-consistency machinery. Remaining gaps: the polymorphic
-`Ratio a`/`Complex a` shapes (the library types are monomorphic).
+interface-consistency machinery. Ratio a and Complex a are
+polymorphic as of the polish milestones; the remaining monomorphic
+subsets are Data.Array (Int indices) and Text.Read's instance set.
 Exhaustiveness and redundancy warnings are real
 (Maranget-style usefulness analysis over function equations and
 case alternatives, for the root module; agrees line-for-line with
