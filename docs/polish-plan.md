@@ -48,7 +48,7 @@ Enum/Bounded/Ix derive for nullary-constructor types is mechanical
 deriving Show against the Text.Read machinery; monomorphic subset
 consistent with the existing Read class. Medium.
 
-### M69 - properFraction + RealFloat
+### M69 - properFraction + RealFloat (DONE - Track B complete)
 properFraction :: RealFrac a => a -> (Integer, a) (tuple-returning
 method - a new dict-field shape worth having); RealFloat as a
 small real class at Double (isNaN, isInfinite, atan2 moves home).

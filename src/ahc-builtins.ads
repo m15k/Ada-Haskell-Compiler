@@ -77,7 +77,7 @@ package AHC.Builtins is
 
       Eq_Cl, Ord_Cl, Show_Cl, Functor_Cl, Monad_Cl, Num_Cl, Real_Cl,
       Fractional_Cl, Enum_Cl, Bounded_Cl,
-      Integral_Cl, Floating_Cl, RealFrac_Cl
+      Integral_Cl, Floating_Cl, RealFrac_Cl, RealFloat_Cl
         : Core.Class_Id := Core.No_Class;
 
       --  Selector/global vars the desugarer references directly.

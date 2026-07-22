@@ -685,6 +685,37 @@ package body AHC.Builtins is
                      when 3 => "ceiling", when others => "floor"),
                   Poly1 (A, AI, Ctx1 (Cl, TV (A))), False);
             end loop;
+            Ignore := Def_Method
+              (Cl, "properFraction",
+               Poly1 (A, FN (TV (A),
+                             AP (AP (TC (Env.Tuple_TCs (2)),
+                                     Integer_T), TV (A))),
+                      Ctx1 (Cl, TV (A))), False);
+            Finish_Class (Cl);
+         end;
+
+         --  RealFloat (RealFrac, Floating): the useful IEEE subset.
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("RealFloat", Star_K,
+                         Sup2 (Env.RealFrac_Cl, Env.Floating_Cl));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            AB : constant Real_Type_Id :=
+              FN (TV (A), TC (Env.Bool_TC));
+         begin
+            Env.RealFloat_Cl := Class_Id (Cl);
+            for Op in 1 .. 3 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "isNaN", when 2 => "isInfinite",
+                     when others => "isNegativeZero"),
+                  Poly1 (A, AB, Ctx1 (Cl, TV (A))), False);
+            end loop;
+            Ignore := Def_Method
+              (Cl, "atan2",
+               Poly1 (A, FN (TV (A), TV (A), TV (A)),
+                      Ctx1 (Cl, TV (A))), False);
             Finish_Class (Cl);
          end;
 
@@ -802,6 +833,8 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.RealFloat_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.RealFloat_Cl), TCn (Env.Double_TC));
 
          --  Eq a => Eq [a], etc.
          Def_Ctx1_Instance (Env.Eq_Cl, Env.List_TC);
@@ -963,17 +996,13 @@ package body AHC.Builtins is
          Ignore := Def_Global
            ("putStrLn", Mono (FN (String_T, IO_T (Unit_T))));
 
-         --  Floating/RealFrac live as real classes now; only atan2
-         --  (RealFloat territory) stays monomorphic at Double, and
-         --  fromIntegral moved to prelude/Prelude.hs as
-         --  fromInteger . toInteger.
+         --  The whole numeric vocabulary is class methods now
+         --  (atan2 lives in RealFloat); fromIntegral is Prelude
+         --  source (fromInteger . toInteger).
          declare
-            D_T : constant Real_Type_Id := TC (Env.Double_TC);
             String_T2 : constant Real_Type_Id :=
               LST (TC (Env.Char_TC));
-            DDD : constant Real_Type_Id := FN (D_T, D_T, D_T);
          begin
-            Ignore := Def_Global ("atan2", Mono (DDD));
             Ignore := Def_Global
               ("ord", Mono (FN (TC (Env.Char_TC), TC (Env.Int_TC))));
             Ignore := Def_Global

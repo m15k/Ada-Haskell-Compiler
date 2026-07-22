@@ -222,6 +222,14 @@ package body AHC.Prelude_Core is
         Prim ("primroundD", "ahc_prim_round_d");
       P_TruncD : constant Real_Var_Id :=
         Prim ("primtruncateD", "ahc_prim_truncate_d");
+      P_IsNanD : constant Real_Var_Id :=
+        Prim ("primisNaND", "ahc_prim_isnan_d");
+      P_IsInfD : constant Real_Var_Id :=
+        Prim ("primisInfiniteD", "ahc_prim_isinf_d");
+      P_IsNegZD : constant Real_Var_Id :=
+        Prim ("primisNegativeZeroD", "ahc_prim_isnegzero_d");
+      P_Atan2D : constant Real_Var_Id :=
+        Prim ("primatan2D", "ahc_prim_atan2_d");
 
       P_EnumFTh : constant Real_Var_Id :=
         Prim ("primenumFromThen", "ahc_prim_enum_from_then");
@@ -1206,7 +1214,6 @@ package body AHC.Prelude_Core is
             Bind_Name (Name, V (Prim ("prim" & Name, Symbol)));
          end BP;
       begin
-         BP ("atan2", "ahc_prim_atan2_d");
          BP ("ord", "ahc_prim_ord");
          BP ("chr", "ahc_prim_chr");
          BP ("getLine", "ahc_prim_getline");
@@ -1359,6 +1366,16 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_RoundD));
                      Ms.Append (V (P_CeilD));
                      Ms.Append (V (P_FloorD));
+                     Ms.Append (V (Lookup ("dblPF_")));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.RealFloat_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     Ms.Append (V (P_IsNanD));
+                     Ms.Append (V (P_IsInfD));
+                     Ms.Append (V (P_IsNegZD));
+                     Ms.Append (V (P_Atan2D));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Fractional_Cl
                     and then (Inst.Head = Env.Double_TC

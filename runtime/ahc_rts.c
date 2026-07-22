@@ -1204,6 +1204,16 @@ DUOP(p_tanh_d, tanh)
 static AhcNode *p_atan2_d(AhcNode *a, AhcNode *b) {
   return ahc_mk_double(atan2(ahc_eval(a)->u.d, ahc_eval(b)->u.d));
 }
+static AhcNode *p_isnan_d(AhcNode *a) {
+  return mk_bool(isnan(ahc_eval(a)->u.d));
+}
+static AhcNode *p_isinf_d(AhcNode *a) {
+  return mk_bool(isinf(ahc_eval(a)->u.d));
+}
+static AhcNode *p_isnegzero_d(AhcNode *a) {
+  double d = ahc_eval(a)->u.d;
+  return mk_bool(d == 0.0 && signbit(d));
+}
 static AhcNode *p_pow_d(AhcNode *a, AhcNode *b) {
   return ahc_mk_double(pow(ahc_eval(a)->u.d, ahc_eval(b)->u.d));
 }
@@ -1461,6 +1471,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
   *ahc_prim_pow_d, *ahc_prim_logbase_d,
   *ahc_prim_atan2_d,
+  *ahc_prim_isnan_d, *ahc_prim_isinf_d, *ahc_prim_isnegzero_d,
   *ahc_prim_sin_d, *ahc_prim_cos_d, *ahc_prim_tan_d,
   *ahc_prim_asin_d, *ahc_prim_acos_d, *ahc_prim_atan_d,
   *ahc_prim_sinh_d, *ahc_prim_cosh_d, *ahc_prim_tanh_d,
@@ -1548,6 +1559,9 @@ void ahc_rts_init(void) {
   ahc_prim_acos_d = mk_prim1(p_acos_d);
   ahc_prim_atan_d = mk_prim1(p_atan_d);
   ahc_prim_atan2_d = mk_prim2(p_atan2_d);
+  ahc_prim_isnan_d = mk_prim1(p_isnan_d);
+  ahc_prim_isinf_d = mk_prim1(p_isinf_d);
+  ahc_prim_isnegzero_d = mk_prim1(p_isnegzero_d);
   ahc_prim_sinh_d = mk_prim1(p_sinh_d);
   ahc_prim_cosh_d = mk_prim1(p_cosh_d);
   ahc_prim_tanh_d = mk_prim1(p_tanh_d);

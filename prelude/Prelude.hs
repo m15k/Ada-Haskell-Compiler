@@ -229,6 +229,9 @@ dblToE_ i = fromIntegral i
 dblFromE_ :: Double -> Int
 dblFromE_ x = fromInteger (truncate x)
 
+dblPF_ :: Double -> (Integer, Double)
+dblPF_ x = let n = truncate x in (n, x - fromInteger n)
+
 dblEF_ :: Double -> [Double]
 dblEF_ n = n : dblEF_ (n + 1)
 

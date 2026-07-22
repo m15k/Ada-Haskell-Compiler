@@ -600,7 +600,10 @@ package body AHC.Typechecker is
                                         Env.Floating_Cl
                                       or else
                                       Class_Id (W_List (J).C.Class) =
-                                        Env.RealFrac_Cl)
+                                        Env.RealFrac_Cl
+                                      or else
+                                      Class_Id (W_List (J).C.Class) =
+                                        Env.RealFloat_Cl)
                                  then
                                     Numeric := True;
                                  end if;

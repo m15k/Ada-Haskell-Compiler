@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+properFraction + RealFloat (M69):
+
+- **properFraction** joins RealFrac (result at Integer, where
+  GHC's defaulting lands): truncation toward zero with the exact
+  fractional remainder, body as Prelude source (dblPF_). The
+  method's type is the tower's first pair-returning dict field.
+- **RealFloat** is a real class (superclasses RealFrac, Floating)
+  at Double/Float: isNaN, isInfinite, isNegativeZero (three new
+  IEEE prims), and atan2 moves home from its monomorphic exile.
+  Defaulting extended (print (isNaN (0/0)) just works).
+- ch06_04_realfloat.hs byte-identical to GHC (computed NaN/
+  Infinity/negative zero, both atan2 quadrant cases, destructured
+  properFraction); suite now 56 programs. Track B of the polish
+  plan is complete.
+
 Enum at Char/Double + the deriving family (M67-M68):
 
 - **Enum at Char and Double** (M67): real dictionaries with every
