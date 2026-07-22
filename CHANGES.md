@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Separate compilation (M63):
+
+- **Per-module code generation with stable symbols**: `ahc emit`
+  writes OUT.build/ with one C file per module plus a shared
+  header. Globals are mangled from (module, source name) - never
+  an arena id - and locals/lifted functions are numbered per unit,
+  so a module's generated text depends only on its own code.
+  Elaborated instance dictionaries are attributed to the module
+  that declared the instance; the wired prelude and prim bodies
+  form the Prelude unit. Per-unit init functions run in dependency
+  order from main().
+- **Content-addressed object cache**: ahc-build.sh compiles each
+  unit (and the runtime) to an object keyed by the hash of its
+  generated text and reuses it across builds. No-change and
+  comment-only rebuilds compile ZERO objects; a semantic edit to
+  one module recompiles exactly one. Interpreter rebuilds: ~6s ->
+  ~1s (the frontend is ~0.3s; clang on the old monolith was 94% of
+  every build).
+- **The frontend stays whole-program by design** (no interface
+  files): Report program-wide instance coherence holds by
+  construction. Documented in EXCLUSIONS.
+- New harness scripts/run_separate.sh pins the cache behavior;
+  outputs remain byte-identical everywhere (same Core, partitioned
+  emission).
+
 The numeric tower as real classes (M62):
 
 - **Integral** (superclasses Num, Ord) with instances at Int and

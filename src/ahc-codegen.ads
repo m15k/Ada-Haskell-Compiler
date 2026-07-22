@@ -10,7 +10,15 @@
 --  a lambda). Selector variables compile to dictionary field access;
 --  prim variables map to runtime symbols; opaque globals become
 --  loud-failure thunks.
+--
+--  Separate code generation: the program is emitted as one C file per
+--  compilation unit (module), plus a shared header. Every emitted
+--  name is STABLE - globals are mangled from (unit, source name),
+--  locals and lifted functions are numbered per unit - so a unit's
+--  generated text depends only on its own Core, and object files can
+--  be cached by content hash across builds.
 
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with AHC.Builtins;
@@ -20,11 +28,31 @@ with AHC.Prelude_Core;
 
 package AHC.CodeGen is
 
-   function Emit
-     (Table : in out Names.Name_Table;
-      M     : Core.Core_Module;
-      Env   : Builtins.Global_Env;
-      Prims : Prelude_Core.Prim_Maps.Map)
-      return Ada.Strings.Unbounded.Unbounded_String;
+   package UStr_Vectors is new Ada.Containers.Vectors
+     (Positive, Ada.Strings.Unbounded.Unbounded_String,
+      Ada.Strings.Unbounded."=");
+
+   type Unit_File is record
+      Name : Ada.Strings.Unbounded.Unbounded_String;  --  unit name
+      Text : Ada.Strings.Unbounded.Unbounded_String;  --  .c content
+   end record;
+
+   package Unit_File_Vectors is new Ada.Containers.Vectors
+     (Positive, Unit_File);
+
+   --  Owners has one entry per M.Top_Binds group naming its unit.
+   --  Units lists unit names in initialization (dependency) order;
+   --  the LAST unit is the root and receives main(). Header is the
+   --  shared prog.h content (extern globals + init prototypes);
+   --  Files holds one C file per unit, in Units order.
+   procedure Emit_Units
+     (Table  : in out Names.Name_Table;
+      M      : Core.Core_Module;
+      Env    : Builtins.Global_Env;
+      Prims  : Prelude_Core.Prim_Maps.Map;
+      Owners : UStr_Vectors.Vector;
+      Units  : UStr_Vectors.Vector;
+      Header : out Ada.Strings.Unbounded.Unbounded_String;
+      Files  : out Unit_File_Vectors.Vector);
 
 end AHC.CodeGen;

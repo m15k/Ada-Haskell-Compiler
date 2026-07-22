@@ -819,6 +819,42 @@ hand-built Core toward ordinary Haskell — because Haskell in
 `prelude/` or `lib/` is checked by the compiler itself, while
 hand-built Core is only checked by the arena contracts.
 
+### Separate compilation
+
+For most of the project's life the compiler emitted ONE C file for
+the entire program — prelude, libraries, and your code — and clang
+recompiled all of it on every build. Measurement showed why that
+mattered: the whole AHC pipeline (parse through optimized Core)
+takes about a third of a second for the full mini-Lisp interpreter,
+while clang on the 30,000-line monolith takes over five. Ninety-four
+percent of every rebuild was the C compiler redoing work it had
+already done.
+
+The fix is a split with a principle on each side. **Code generation
+is separate**: the program is emitted as one C file per module plus
+a shared header, and every emitted name is *stable* — a global's C
+symbol is mangled from its module and source name (never an arena
+id), and locals and lifted functions are numbered per module,
+counters reset at each unit boundary. Stability is the load-bearing
+property: it makes a module's generated text a pure function of its
+own code, so `ahc-build.sh` can cache each compiled object under a
+hash of its C text and skip clang entirely for anything unchanged.
+The cache is content-addressed, not timestamp-based — editing a
+comment recompiles *nothing*, because comments never survive to the
+generated C. A real edit to one module recompiles exactly one
+object (`scripts/run_separate.sh` proves all of this on every run),
+and interpreter rebuilds dropped from about six seconds to about
+one.
+
+**The frontend deliberately stays whole-program.** Types, classes
+and instances are still resolved with every module in view — there
+are no interface files. That is not laziness but a trade: the
+Report requires instances to be coherent program-wide, and a
+whole-program frontend gets that by construction, with no
+orphan-instance rules, no interface-consistency checking, no
+recompilation-avoidance bugs — the classic sharp edges of the
+interface-file world — at a cost of ~0.3 seconds per build.
+
 ---
 
 ## 10. Numbers
@@ -1158,6 +1194,7 @@ and failed the truth.*
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
 | `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
+| `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the

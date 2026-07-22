@@ -1,5 +1,5 @@
 with Ada.Containers.Hashed_Maps;
-with Ada.Containers.Vectors;
+with Ada.Strings.Unbounded.Hash;
 
 with AHC.Rename;
 
@@ -9,12 +9,15 @@ package body AHC.CodeGen is
    use Ada.Strings.Unbounded;
    use type Names.Name_Id;
 
-   function Emit
-     (Table : in out Names.Name_Table;
-      M     : Core.Core_Module;
-      Env   : Builtins.Global_Env;
-      Prims : Prelude_Core.Prim_Maps.Map)
-      return Ada.Strings.Unbounded.Unbounded_String
+   procedure Emit_Units
+     (Table  : in out Names.Name_Table;
+      M      : Core.Core_Module;
+      Env    : Builtins.Global_Env;
+      Prims  : Prelude_Core.Prim_Maps.Map;
+      Owners : UStr_Vectors.Vector;
+      Units  : UStr_Vectors.Vector;
+      Header : out Ada.Strings.Unbounded.Unbounded_String;
+      Files  : out Unit_File_Vectors.Vector)
    is
       Fns  : Unbounded_String;   --  lifted function bodies
       Decl : Unbounded_String;   --  forward decls + CAF globals
@@ -25,11 +28,29 @@ package body AHC.CodeGen is
         (Real_Var_Id, Unbounded_String,
          Hash => Rename.Var_Hash, Equivalent_Keys => "=");
 
+      package Var_Nat_Maps is new Ada.Containers.Hashed_Maps
+        (Real_Var_Id, Natural,
+         Hash => Rename.Var_Hash, Equivalent_Keys => "=");
+
+      package Str_Nat_Maps is new Ada.Containers.Hashed_Maps
+        (Unbounded_String, Natural,
+         Hash => Ada.Strings.Unbounded.Hash, Equivalent_Keys => "=");
+
       --  Special globals: prims, selectors, missing.
       Special : Var_Str_Maps.Map;
 
       --  Globals that have top-level bindings.
       Has_Body : Var_Str_Maps.Map;
+
+      --  Stable C symbol per bodied global: g_<unit>_<name>, with a
+      --  deterministic counter on (rare) mangling collisions. A
+      --  unit's generated text then never mentions an arena id.
+      Sym : Var_Str_Maps.Map;
+
+      --  Per-unit local numbering (reset for every unit): let-bound
+      --  locals come out as l_0, l_1, ... in first-use order.
+      L_Map : Var_Nat_Maps.Map;
+      L_Next : Natural := 0;
 
       function Img (N : Natural) return String is
          S : constant String := N'Image;
@@ -37,11 +58,39 @@ package body AHC.CodeGen is
          return S (2 .. S'Last);
       end Img;
 
-      function Gid (V : Real_Var_Id) return String
-      is ("g_" & Img (Natural (V)));
+      --  C-identifier mangling: letters/digits kept, '.' becomes
+      --  '_', everything else escapes to _xHH.
+      function Mangle (S : String) return String is
+         R : Unbounded_String;
+         Hex : constant String := "0123456789ABCDEF";
+      begin
+         for C of S loop
+            if C in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' then
+               Append (R, C);
+            elsif C = '.' then
+               Append (R, '_');
+            else
+               Append (R, "_x"
+                       & Hex (Character'Pos (C) / 16 + 1)
+                       & Hex (Character'Pos (C) mod 16 + 1));
+            end if;
+         end loop;
+         return To_String (R);
+      end Mangle;
 
-      function Lid (V : Real_Var_Id) return String
-      is ("l_" & Img (Natural (V)));
+      function Sym_Of (V : Real_Var_Id) return String
+      is (To_String (Sym (V)));
+
+      function Lid (V : Real_Var_Id) return String is
+         C : constant Var_Nat_Maps.Cursor := L_Map.Find (V);
+      begin
+         if Var_Nat_Maps.Has_Element (C) then
+            return "l_" & Img (Var_Nat_Maps.Element (C));
+         end if;
+         L_Map.Include (V, L_Next);
+         L_Next := L_Next + 1;
+         return "l_" & Img (L_Next - 1);
+      end Lid;
 
       function C_Escape (S : String) return String is
          R : Unbounded_String;
@@ -232,7 +281,7 @@ package body AHC.CodeGen is
             return To_String (Special (V));
          end if;
          if Has_Body.Contains (V) then
-            return Gid (V);
+            return Sym_Of (V);
          end if;
          --  Opaque global: fail loudly if ever forced.
          return "ahc_mk_missing(""" &
@@ -625,7 +674,6 @@ package body AHC.CodeGen is
          end case;
       end Gen_Force;
 
-      Result : Unbounded_String;
       Main_Var : Var_Id := No_Var;
 
    begin
@@ -665,28 +713,53 @@ package body AHC.CodeGen is
          end;
       end loop;
 
-      --  Register bodied globals.
-      for G of M.Top_Binds loop
-         for B of G.Binds loop
-            Has_Body.Include (B.Binder, To_Unbounded_String (""));
-            --  Prims/selectors that also got Core bodies keep their
-            --  body (drop the special mapping).
-            if Special.Contains (B.Binder) then
-               Special.Delete (B.Binder);
-            end if;
+      --  Register bodied globals and mint their stable symbols.
+      declare
+         Taken : Str_Nat_Maps.Map;
+      begin
+         for GI in 1 .. M.Top_Binds.Last_Index loop
+            declare
+               Owner : constant String :=
+                 (if GI <= Owners.Last_Index
+                  then To_String (Owners (GI))
+                  else "Prelude");
+            begin
+               for B of M.Top_Binds (GI).Binds loop
+                  Has_Body.Include
+                    (B.Binder, To_Unbounded_String (""));
+                  --  Prims/selectors that also got Core bodies keep
+                  --  their body (drop the special mapping).
+                  if Special.Contains (B.Binder) then
+                     Special.Delete (B.Binder);
+                  end if;
+                  declare
+                     Base : constant Unbounded_String :=
+                       To_Unbounded_String
+                         ("g_" & Mangle (Owner) & "_"
+                          & Mangle (Table.Text
+                              (Names.Real_Name_Id
+                                 (M.Info (B.Binder).Name))));
+                     C : constant Str_Nat_Maps.Cursor :=
+                       Taken.Find (Base);
+                  begin
+                     if Str_Nat_Maps.Has_Element (C) then
+                        declare
+                           N : constant Natural :=
+                             Str_Nat_Maps.Element (C) + 1;
+                        begin
+                           Taken.Replace_Element (C, N);
+                           Sym.Include
+                             (B.Binder, Base & "_" & Img (N));
+                        end;
+                     else
+                        Taken.Include (Base, 1);
+                        Sym.Include (B.Binder, Base);
+                     end if;
+                  end;
+               end loop;
+            end;
          end loop;
-      end loop;
-
-      --  CAF declarations and initializers.
-      for G of M.Top_Binds loop
-         for B of G.Binds loop
-            Append (Decl, "static AhcNode *" & Gid (B.Binder) & ";"
-                    & ASCII.LF);
-            Append (Init, "  " & Gid (B.Binder) & " = "
-                    & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map) & ";"
-                    & ASCII.LF);
-         end loop;
-      end loop;
+      end;
 
       declare
          C : constant Builtins.Var_Maps.Cursor :=
@@ -697,29 +770,90 @@ package body AHC.CodeGen is
          end if;
       end;
 
-      Append (Result, "#include ""ahc_rts.h""" & ASCII.LF & ASCII.LF);
-      Append (Result, Decl);
-      Append (Result, ASCII.LF);
-      Append (Result, Fns);
-      Append (Result, "static void ahc_init_module(void) {"
-              & ASCII.LF);
-      Append (Result, Init);
-      Append (Result, "}" & ASCII.LF & ASCII.LF);
-      Append (Result, "int main(int argc, char **argv) {" & ASCII.LF
-              & "  ahc_set_args(argc, argv);" & ASCII.LF
-              & "  ahc_rts_init();" & ASCII.LF
-              & "  ahc_init_module();" & ASCII.LF);
-      if Main_Var /= No_Var
-        and then Has_Body.Contains (Real_Var_Id (Main_Var))
-      then
-         Append (Result, "  ahc_run_main("
-                 & Gid (Real_Var_Id (Main_Var)) & ");" & ASCII.LF);
-      else
-         Append (Result,
-                 "  ahc_die(""no main function"");" & ASCII.LF);
-      end if;
-      Append (Result, "  return 0;" & ASCII.LF & "}" & ASCII.LF);
-      return Result;
-   end Emit;
+      --  Shared header: extern CAF globals + unit init prototypes.
+      Header := To_Unbounded_String
+        ("#include ""ahc_rts.h""" & ASCII.LF & ASCII.LF);
+      for G of M.Top_Binds loop
+         for B of G.Binds loop
+            Append (Header, "extern AhcNode *" & Sym_Of (B.Binder)
+                    & ";" & ASCII.LF);
+         end loop;
+      end loop;
+      Append (Header, ASCII.LF);
+      for U of Units loop
+         Append (Header, "void ahc_init_" & Mangle (To_String (U))
+                 & "(void);" & ASCII.LF);
+      end loop;
+
+      --  One C file per unit, in Units (dependency) order; the last
+      --  unit is the root and carries main().
+      for UI in 1 .. Units.Last_Index loop
+         declare
+            U : constant String := To_String (Units (UI));
+            F : Unit_File;
+         begin
+            Decl := Null_Unbounded_String;
+            Fns := Null_Unbounded_String;
+            Init := Null_Unbounded_String;
+            Fn_Counter := 0;
+            L_Map.Clear;
+            L_Next := 0;
+
+            for GI in 1 .. M.Top_Binds.Last_Index loop
+               if (if GI <= Owners.Last_Index
+                   then To_String (Owners (GI)) = U
+                   else U = "Prelude")
+               then
+                  for B of M.Top_Binds (GI).Binds loop
+                     Append (Decl, "AhcNode *" & Sym_Of (B.Binder)
+                             & ";" & ASCII.LF);
+                     Append (Init, "  " & Sym_Of (B.Binder) & " = "
+                             & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map)
+                             & ";" & ASCII.LF);
+                  end loop;
+               end if;
+            end loop;
+
+            F.Name := Units (UI);
+            F.Text := To_Unbounded_String
+              ("#include ""ahc_prog.h""" & ASCII.LF & ASCII.LF);
+            Append (F.Text, Decl);
+            Append (F.Text, ASCII.LF);
+            Append (F.Text, Fns);
+            Append (F.Text, "void ahc_init_" & Mangle (U)
+                    & "(void) {" & ASCII.LF);
+            Append (F.Text, Init);
+            Append (F.Text, "}" & ASCII.LF);
+
+            if UI = Units.Last_Index then
+               Append (F.Text, ASCII.LF
+                       & "int main(int argc, char **argv) {"
+                       & ASCII.LF
+                       & "  ahc_set_args(argc, argv);" & ASCII.LF
+                       & "  ahc_rts_init();" & ASCII.LF);
+               for U2 of Units loop
+                  Append (F.Text, "  ahc_init_"
+                          & Mangle (To_String (U2)) & "();"
+                          & ASCII.LF);
+               end loop;
+               if Main_Var /= No_Var
+                 and then Has_Body.Contains (Real_Var_Id (Main_Var))
+               then
+                  Append (F.Text, "  ahc_run_main("
+                          & Sym_Of (Real_Var_Id (Main_Var)) & ");"
+                          & ASCII.LF);
+               else
+                  Append (F.Text,
+                          "  ahc_die(""no main function"");"
+                          & ASCII.LF);
+               end if;
+               Append (F.Text, "  return 0;" & ASCII.LF & "}"
+                       & ASCII.LF);
+            end if;
+
+            Files.Append (F);
+         end;
+      end loop;
+   end Emit_Units;
 
 end AHC.CodeGen;

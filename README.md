@@ -133,8 +133,20 @@ and wall time ~25%; `ahc emit --no-opt` / AHC_NOOPT=1 disables it.
 Generated executables link with a 512MB stack so million-element
 thunk chains evaluate instead of overflowing.
 
-Remaining gaps: separate compilation (and the polymorphic
-`Ratio a`/`Complex a` shapes - the library types are monomorphic).
+Separate compilation: `ahc emit` writes one C file per module with
+STABLE symbols (globals mangled from module+name, locals and lifted
+functions numbered per unit), so a module's generated text depends
+only on its own code; `scripts/ahc-build.sh` compiles each unit to
+an object cached by content hash and links. An edit to one module
+recompiles exactly one object - proven by `scripts/run_separate.sh`
+(no-change and comment-only rebuilds compile ZERO objects; the
+cache is content-addressed, not mtime-based). Rebuilds of the
+mini-Lisp interpreter drop from ~6s to ~1s. The frontend
+(parse-through-Core, ~0.3s for the whole interpreter) deliberately
+stays whole-program: that is what makes the Report's program-wide
+instance coherence hold by construction, with no orphan-instance or
+interface-consistency machinery. Remaining gaps: the polymorphic
+`Ratio a`/`Complex a` shapes (the library types are monomorphic).
 Exhaustiveness and redundancy warnings are real
 (Maranget-style usefulness analysis over function equations and
 case alternatives, for the root module; agrees line-for-line with
@@ -164,6 +176,7 @@ scripts/run_differential.sh        # parse-level GHC agreement
 scripts/run_differential_types.sh  # type-level GHC agreement
 scripts/run_exec.sh                # compile-and-run output goldens
 scripts/run_conformance.sh         # Haskell 2010 conformance subset
+scripts/run_separate.sh            # separate-compilation cache proofs
 ```
 
 Conformance (the PRD success metric): `tests/conformance/` holds 51

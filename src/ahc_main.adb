@@ -145,6 +145,19 @@ procedure AHC_Main is
       Order : Loaded_Vectors.Vector;   --  dependencies first
       Failed : Boolean := False;
 
+      --  Separate code generation: which top-level bind groups (and
+      --  which instances) each module contributed, so codegen can
+      --  partition the program into per-unit C files with stable
+      --  symbols.
+      type Unit_Span is record
+         Name : Ada.Strings.Unbounded.Unbounded_String;
+         From_Group, To_Group : Natural := 0;
+         From_Inst, To_Inst   : Natural := 0;
+      end record;
+      package Unit_Span_Vectors is new Ada.Containers.Vectors
+        (Positive, Unit_Span);
+      Unit_Spans : Unit_Span_Vectors.Vector;
+
       Root_Dir : constant String :=
         Ada.Directories.Containing_Directory (Path);
 
@@ -384,6 +397,10 @@ procedure AHC_Main is
                L : Loaded renames Order (LI);
                Is_Root : constant Boolean :=
                  LI = Order.Last_Index;
+               G0 : constant Natural :=
+                 Natural (M.Top_Binds.Length);
+               I0 : constant Natural :=
+                 Natural (M.Last_Instance);
                L_Res   : AHC.Rename.Resolutions;
                L_Annos : AHC.Kinds.Anno_Maps.Map;
                L_Preds : AHC.Kinds.Pred_Vectors.Vector;
@@ -431,6 +448,16 @@ procedure AHC_Main is
                      L_Annos, L_Preds,
                      Warn_Matches => Is_Root);
                end if;
+               Unit_Spans.Append
+                 (Unit_Span'
+                    (Name => Ada.Strings.Unbounded.
+                       To_Unbounded_String
+                         (Table.Text
+                            (AHC.Names.Real_Name_Id (L.Name))),
+                     From_Group => G0 + 1,
+                     To_Group => Natural (M.Top_Binds.Length),
+                     From_Inst => I0 + 1,
+                     To_Inst => Natural (M.Last_Instance)));
                if Bag.Has_Errors then
                   Bag.Print_All (L.Text);
                   Set_Exit_Status (1);
@@ -477,9 +504,44 @@ procedure AHC_Main is
             if not Bag.Has_Errors then
                AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
                declare
+                  use Ada.Strings.Unbounded;
                   Prims : AHC.Prelude_Core.Prim_Maps.Map;
-                  C_Src : Ada.Text_IO.File_Type;
-                  C_Path : constant String := Out_Path & ".c";
+                  Build_Dir : constant String := Out_Path & ".build";
+
+                  --  Elaboration binds instance dictionaries as new
+                  --  top-level groups; attribute each dict global to
+                  --  the module that declared its instance.
+                  package Var_UStr_Maps is new
+                    Ada.Containers.Hashed_Maps
+                      (AHC.Core.Real_Var_Id, Unbounded_String,
+                       Hash => AHC.Rename.Var_Hash,
+                       Equivalent_Keys => AHC.Core."=");
+                  Dict_Owner : Var_UStr_Maps.Map;
+
+                  Owners : AHC.CodeGen.UStr_Vectors.Vector;
+                  Units  : AHC.CodeGen.UStr_Vectors.Vector;
+                  Header : Unbounded_String;
+                  Files  : AHC.CodeGen.Unit_File_Vectors.Vector;
+
+                  function Sanitize (S : String) return String is
+                     R : String := S;
+                  begin
+                     for C of R loop
+                        if C not in 'A' .. 'Z' | 'a' .. 'z'
+                                    | '0' .. '9'
+                        then
+                           C := '_';
+                        end if;
+                     end loop;
+                     return R;
+                  end Sanitize;
+
+                  function Img2 (N : Natural) return String is
+                     S : constant String := N'Image;
+                     T : constant String := S (2 .. S'Last);
+                  begin
+                     return (if T'Length = 1 then "0" & T else T);
+                  end Img2;
                begin
                   AHC.Refine.Insert_Checks
                     (Table, M, Sigs, Prims, Checks_Enabled => Refined);
@@ -491,12 +553,98 @@ procedure AHC_Main is
                         AHC.Optimizer.Optimize (M, Rounds);
                      end;
                   end if;
-                  Create (C_Src, Out_File, C_Path);
-                  Put (C_Src,
-                       Ada.Strings.Unbounded.To_String
-                         (AHC.CodeGen.Emit (Table, M, Env, Prims)));
-                  Close (C_Src);
-                  Put_Line ("wrote " & C_Path);
+
+                  for Sp of Unit_Spans loop
+                     for II in Sp.From_Inst .. Sp.To_Inst loop
+                        declare
+                           use type AHC.Core.Var_Id;
+                           DG : constant AHC.Core.Var_Id :=
+                             M.Info
+                               (AHC.Core.Real_Instance_Id (II))
+                               .Dict_Global;
+                        begin
+                           if DG /= AHC.Core.No_Var then
+                              Dict_Owner.Include
+                                (AHC.Core.Real_Var_Id (DG),
+                                 Sp.Name);
+                           end if;
+                        end;
+                     end loop;
+                  end loop;
+
+                  --  One owner entry per group: Prelude by default
+                  --  (wired prelude, prim bodies), the declaring
+                  --  module for its frontend groups, and the
+                  --  instance's module for elaborated dictionaries.
+                  for GI in 1 .. Natural (M.Top_Binds.Length) loop
+                     declare
+                        Name : Unbounded_String :=
+                          To_Unbounded_String ("Prelude");
+                     begin
+                        for Sp of Unit_Spans loop
+                           if GI in Sp.From_Group .. Sp.To_Group then
+                              Name := Sp.Name;
+                           end if;
+                        end loop;
+                        if not M.Top_Binds (GI).Binds.Is_Empty then
+                           declare
+                              B0 : constant AHC.Core.Real_Var_Id :=
+                                M.Top_Binds (GI).Binds (1).Binder;
+                              C : constant Var_UStr_Maps.Cursor :=
+                                Dict_Owner.Find (B0);
+                           begin
+                              if Var_UStr_Maps.Has_Element (C) then
+                                 Name := Var_UStr_Maps.Element (C);
+                              end if;
+                           end;
+                        end if;
+                        Owners.Append (Name);
+                     end;
+                  end loop;
+
+                  Units.Append (To_Unbounded_String ("Prelude"));
+                  for Sp of Unit_Spans loop
+                     if To_String (Sp.Name) /= "Prelude" then
+                        Units.Append (Sp.Name);
+                     end if;
+                  end loop;
+
+                  AHC.CodeGen.Emit_Units
+                    (Table, M, Env, Prims, Owners, Units,
+                     Header, Files);
+
+                  Ada.Directories.Create_Path (Build_Dir);
+                  declare
+                     Search : Ada.Directories.Search_Type;
+                     Ent : Ada.Directories.Directory_Entry_Type;
+                  begin
+                     Ada.Directories.Start_Search
+                       (Search, Build_Dir, "*.c");
+                     while Ada.Directories.More_Entries (Search) loop
+                        Ada.Directories.Get_Next_Entry (Search, Ent);
+                        Ada.Directories.Delete_File
+                          (Ada.Directories.Full_Name (Ent));
+                     end loop;
+                     Ada.Directories.End_Search (Search);
+                  end;
+                  declare
+                     F : Ada.Text_IO.File_Type;
+                  begin
+                     Create (F, Out_File,
+                             Build_Dir & "/ahc_prog.h");
+                     Put (F, To_String (Header));
+                     Close (F);
+                     for I in 1 .. Files.Last_Index loop
+                        Create (F, Out_File,
+                                Build_Dir & "/u" & Img2 (I) & "_"
+                                & Sanitize
+                                    (To_String (Files (I).Name))
+                                & ".c");
+                        Put (F, To_String (Files (I).Text));
+                        Close (F);
+                     end loop;
+                  end;
+                  Put_Line ("wrote " & Build_Dir);
                end;
             end if;
          else
