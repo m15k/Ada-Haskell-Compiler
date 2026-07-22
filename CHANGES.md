@@ -1,6 +1,12 @@
 # AHC Changelog
 
-## Unreleased
+## v1.1 (2026-07-21)
+
+Everything after v1.0: the complete standard library (including the
+formerly-deferred quartet and Data.Map), the mini-Lisp dogfood
+program and the three compiler bugs it found, exhaustiveness and
+redundancy warnings, the numeric tower as real classes, and
+separate compilation. The deliberately-unbuilt list is empty.
 
 Separate compilation (M63):
 
