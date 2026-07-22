@@ -1258,6 +1258,35 @@ package body AHC.Prelude_Core is
                                    Fill => Ms));
                      end if;
                   elsif Cl_Id = Env.Enum_Cl
+                    and then Inst.Head = Env.Char_TC
+                  then
+                     --  Char rides ord/chr over the Int instance;
+                     --  bodies are Prelude source (charSucc_ etc.).
+                     Ms.Append (V (Lookup ("charSucc_")));
+                     Ms.Append (V (Lookup ("charPred_")));
+                     Ms.Append (V (Lookup ("chr")));
+                     Ms.Append (V (Lookup ("ord")));
+                     Ms.Append (V (Lookup ("charEF_")));
+                     Ms.Append (V (Lookup ("charEFTh_")));
+                     Ms.Append (V (Lookup ("charEFT_")));
+                     Ms.Append (V (Lookup ("charEFThT_")));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Enum_Cl
+                    and then (Inst.Head = Env.Double_TC
+                              or else Inst.Head = Env.Float_TC)
+                  then
+                     --  Report 6.3.4 numeric enumeration (half-step
+                     --  rule); bodies are Prelude source (dbl*_).
+                     Ms.Append (V (Lookup ("dblSucc_")));
+                     Ms.Append (V (Lookup ("dblPred_")));
+                     Ms.Append (V (Lookup ("dblToE_")));
+                     Ms.Append (V (Lookup ("dblFromE_")));
+                     Ms.Append (V (Lookup ("dblEF_")));
+                     Ms.Append (V (Lookup ("dblEFTh_")));
+                     Ms.Append (V (Lookup ("dblEFT_")));
+                     Ms.Append (V (Lookup ("dblEFThT_")));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Enum_Cl
                     and then (Inst.Head = Env.Int_TC
                               or else Inst.Head =
                                         Env.Integer_TC)

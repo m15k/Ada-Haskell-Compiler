@@ -794,6 +794,8 @@ package body AHC.Builtins is
          end loop;
          Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Fractional_Cl), TCn (Env.Double_TC));
+         Def_Instance (Cl (Env.Enum_Cl), TCn (Env.Float_TC));
+         Def_Instance (Cl (Env.Enum_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Int_TC));
          Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Integer_TC));
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Float_TC));

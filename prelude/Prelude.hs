@@ -192,6 +192,67 @@ x ^ n
 (^^) :: (Fractional a, Integral b) => a -> b -> a
 x ^^ n = if n >= 0 then x ^ n else recip (x ^ negate n)
 
+-- Enum at Char and Double: dictionary method bodies, bound by the
+-- compiler into the instance dictionaries (trailing underscore =
+-- internal). Char rides ord/chr over the Int instance; Double
+-- follows Report 6.3.4's numeric enumeration (the half-step rule).
+charSucc_ :: Char -> Char
+charSucc_ c = chr (ord c + 1)
+
+charPred_ :: Char -> Char
+charPred_ c = chr (ord c - 1)
+
+charEF_ :: Char -> [Char]
+charEF_ a = charEFT_ a '\1114111'
+
+charEFTh_ :: Char -> Char -> [Char]
+charEFTh_ a b =
+  map chr
+    (enumFromThenTo (ord a) (ord b)
+       (if ord b >= ord a then 1114111 else 0))
+
+charEFT_ :: Char -> Char -> [Char]
+charEFT_ a b = map chr [ord a .. ord b]
+
+charEFThT_ :: Char -> Char -> Char -> [Char]
+charEFThT_ a b c = map chr (enumFromThenTo (ord a) (ord b) (ord c))
+
+dblSucc_ :: Double -> Double
+dblSucc_ x = x + 1.0
+
+dblPred_ :: Double -> Double
+dblPred_ x = x - 1.0
+
+dblToE_ :: Int -> Double
+dblToE_ i = fromIntegral i
+
+dblFromE_ :: Double -> Int
+dblFromE_ x = fromInteger (truncate x)
+
+dblEF_ :: Double -> [Double]
+dblEF_ n = n : dblEF_ (n + 1)
+
+-- k-indexed (n + k*delta), matching GHC's Double enumeration: the
+-- chained recurrence accumulates rounding ([0.1,0.2..] would show
+-- 0.4000000000000001 where GHC prints 0.4).
+dblEFTh_ :: Double -> Double -> [Double]
+dblEFTh_ n m = goTh_ n (m - n) 0
+
+goTh_ :: Double -> Double -> Int -> [Double]
+goTh_ n delta k =
+  (n + fromIntegral k * delta) : goTh_ n delta (k + 1)
+
+dblEFT_ :: Double -> Double -> [Double]
+dblEFT_ n m = takeWhile (\x -> x <= m + 1 / 2) (dblEF_ n)
+
+dblEFThT_ :: Double -> Double -> Double -> [Double]
+dblEFThT_ n n' m =
+  takeWhile
+    (if n' >= n
+       then \x -> x <= m + (n' - n) / 2
+       else \x -> x >= m + (n' - n) / 2)
+    (dblEFTh_ n n')
+
 infixl 4 <$>, <*>, *>, <*
 
 (<$>) :: Functor f => (a -> b) -> f a -> f b
