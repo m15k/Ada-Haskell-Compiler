@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Enum at Char/Double + the deriving family (M67-M68):
+
+- **Enum at Char and Double** (M67): real dictionaries with every
+  method body as Prelude source. Char rides ord/chr (['a'..'z'],
+  stepped, succ/pred, to/fromEnum); Double follows GHC's numeric
+  enumeration - +1 chains with the Report 6.3.4 half-step limit,
+  and K-INDEXED stepping (n + k*delta) for enumFromThen(To), probed
+  empirically: the chained recurrence accumulates rounding where
+  GHC's per-element rounding prints 0.4. The Enum Double/Float
+  instances had never been registered; now they are.
+- **deriving Enum, Bounded, Ix, Read for enumerations** (M68):
+  constructor-tag arithmetic end to end - succ/pred/toEnum/
+  fromEnum/all four enumFroms, minBound/maxBound, range/index/
+  inRange/rangeSize, and Read via a maximal-munch token matcher
+  (readsEnum_ in Text.Read) against a generated constructor table.
+  Ix and Read derives target SOURCE classes - the deriving
+  machinery finds any registered class. Bonus: the wired
+  Bool/Ordering Enum instances ride the same branch, so [False ..]
+  works. Suite now 55 programs (ch06_03_enum_char_double,
+  ch11_01_derives).
+
 Polish track A + Applicative (M64-M66, docs/polish-plan.md):
 
 - **Fixed: cross-module diagnostic spans** (M64). Diagnostics carry

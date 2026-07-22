@@ -1,6 +1,6 @@
 module Text.Read (Read (..), reads, read) where
 
-import Data.Char (isDigit, isSpace)
+import Data.Char (isAlphaNum, isDigit, isSpace)
 
 --  The Report's Read, as an ordinary source class (readsPrec only;
 --  readList via the default-free list instance below).
@@ -15,6 +15,17 @@ read s =
   case [x | (x, t) <- reads s, all isSpace t] of
     [x] -> x
     _   -> error "Prelude.read: no parse"
+
+--  Derived-Read support (bound by the compiler for
+--  deriving Read on enumerations): match one maximal identifier
+--  token against the constructor table.
+readsEnum_ :: [(String, a)] -> Int -> String -> [(a, String)]
+readsEnum_ table _ s =
+  case span isIdChar_ (dropWhile isSpace s) of
+    (tok, rest) -> [ (v, rest) | (nm, v) <- table, nm == tok ]
+
+isIdChar_ :: Char -> Bool
+isIdChar_ c = isAlphaNum c || c == '\''
 
 skipSpace :: String -> String
 skipSpace = dropWhile isSpace

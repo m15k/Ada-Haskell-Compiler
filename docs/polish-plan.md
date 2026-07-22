@@ -36,13 +36,13 @@ Wire class Applicative (super Functor; pure, <*>, liftA2, *>, <*)
 with instances at IO/[]/Maybe, like Monad's dicts. `return = pure`
 alias question documented. Medium.
 
-### M67 - Enum at Char (and Double)
+### M67 - Enum at Char (and Double) (DONE - plus Bool/Ordering via the derive branch)
 `['a' .. 'z']`, succ/pred at Char - ord/chr prims exist, this is
 dictionary work. Enum Double with the Report's odd half-step rule
 ([1.0, 1.5 ..] stops at limit + 1/2 step), documented carefully.
 Small.
 
-### M68 - deriving Enum, Bounded, Ix, Read
+### M68 - deriving Enum, Bounded, Ix, Read (DONE for enumerations - incl. Read via maximal-munch token matching; non-nullary shapes documented in EXCLUSIONS)
 Enum/Bounded/Ix derive for nullary-constructor types is mechanical
 (tags already exist). deriving Read is the big one - inverse of
 deriving Show against the Text.Read machinery; monomorphic subset

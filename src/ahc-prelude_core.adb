@@ -353,6 +353,258 @@ package body AHC.Prelude_Core is
          Bind (Inst.Dict_Global, Dict);
       end Give_Dict;
 
+      --  Derived Enum/Bounded/Ix/Read for ENUMERATIONS (all-nullary
+      --  constructors): everything is constructor-tag arithmetic.
+      --  Every builder mints fresh nodes per use (tree invariant).
+
+      function All_Nullary (TC : Real_TyCon_Id) return Boolean is
+      begin
+         for DC of M.Info (TC).Cons loop
+            if M.Info (Real_DataCon_Id (DC)).Arity /= 0 then
+               return False;
+            end if;
+         end loop;
+         return not M.Info (TC).Cons.Is_Empty;
+      end All_Nullary;
+
+      function IntE (K : Integer) return Real_Expr_Id is
+         Img : constant String := K'Image;
+         T : constant String :=
+           (if Img (Img'First) = ' '
+            then Img (Img'First + 1 .. Img'Last) else Img);
+      begin
+         return M.Add (Expr_Node'
+           (Kind => Lit_C, Span => Span,
+            Lit => (Kind => L_Int,
+                    Text => Names.Name_Id (Table.Intern (T)))));
+      end IntE;
+
+      --  case X of C1 -> tag-1 exprs ... (one alt per constructor,
+      --  bodies supplied per tag by F).
+      function Tag_Case
+        (TC : Real_TyCon_Id; X : Real_Var_Id;
+         F : access function (Tag : Positive) return Real_Expr_Id)
+         return Real_Expr_Id
+      is
+         Alts : Alt_Id_Vectors.Vector;
+      begin
+         for I in 1 .. M.Info (TC).Cons.Last_Index loop
+            Alts.Append (M.Add (Alt_Node'
+              (Kind => Con_Alt, Span => Span,
+               A_Con => Real_DataCon_Id (M.Info (TC).Cons (I)),
+               Binders => Var_Id_Vectors.Empty_Vector,
+               Alt_Body => F (I))));
+         end loop;
+         return M.Add (Expr_Node'
+           (Kind => Case_C, Span => Span,
+            Scrutinee => V (Var_Id (X)), Alts => Alts));
+      end Tag_Case;
+
+      --  fromEnum body over variable X: constructor -> tag-1.
+      function From_E
+        (TC : Real_TyCon_Id; X : Real_Var_Id) return Real_Expr_Id
+      is
+         function F (Tag : Positive) return Real_Expr_Id
+         is (IntE (Tag - 1));
+      begin
+         return Tag_Case (TC, X, F'Access);
+      end From_E;
+
+      --  toEnum as a fresh lambda: eq-chain over tags.
+      function To_E_Lam (TC : Real_TyCon_Id) return Real_Expr_Id is
+         I : constant Real_Var_Id := Fresh ("i");
+         N : constant Positive := M.Info (TC).Cons.Last_Index;
+         Body_E : Real_Expr_Id := Err ("toEnum: bad argument");
+      begin
+         for K in reverse 1 .. N loop
+            Body_E := Bool_Case
+              (Ap2 (V (P_EqP), V (Var_Id (I)), IntE (K - 1)),
+               ConE (M.Info (TC).Cons (K)), Body_E);
+         end loop;
+         return Lam (I, Body_E);
+      end To_E_Lam;
+
+      --  map toEnum Over  (fresh trees per call).
+      function Map_To_E
+        (TC : Real_TyCon_Id; Over : Real_Expr_Id) return Real_Expr_Id
+      is (Ap2 (V (Lookup ("map")), To_E_Lam (TC), Over));
+
+      procedure Derive_Enum (II : Real_Instance_Id) is
+         TC : constant Real_TyCon_Id :=
+           Real_TyCon_Id (M.Info (II).Head);
+         N : constant Positive := M.Info (TC).Cons.Last_Index;
+         Ms : Expr_Id_Vectors.Vector;
+
+         function Succ_F (Tag : Positive) return Real_Expr_Id
+         is (if Tag < N then ConE (M.Info (TC).Cons (Tag + 1))
+             else Err ("succ: bad argument"));
+         function Pred_F (Tag : Positive) return Real_Expr_Id
+         is (if Tag > 1 then ConE (M.Info (TC).Cons (Tag - 1))
+             else Err ("pred: bad argument"));
+      begin
+         declare
+            X : constant Real_Var_Id := Fresh ("x");
+         begin
+            Ms.Append (Lam (X, Tag_Case (TC, X, Succ_F'Access)));
+         end;
+         declare
+            X : constant Real_Var_Id := Fresh ("x");
+         begin
+            Ms.Append (Lam (X, Tag_Case (TC, X, Pred_F'Access)));
+         end;
+         Ms.Append (To_E_Lam (TC));
+         declare
+            X : constant Real_Var_Id := Fresh ("x");
+         begin
+            Ms.Append (Lam (X, From_E (TC, X)));
+         end;
+         declare
+            A : constant Real_Var_Id := Fresh ("a");
+         begin
+            Ms.Append (Lam (A, Map_To_E (TC,
+              Ap2 (V (P_EnumFT), From_E (TC, A), IntE (N - 1)))));
+         end;
+         declare
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+            Bound : constant Real_Expr_Id :=
+              Bool_Case (Ap2 (V (P_GtI), From_E (TC, A),
+                              From_E (TC, B)),
+                         IntE (0), IntE (N - 1));
+         begin
+            Ms.Append (Lam (A, Lam (B, Map_To_E (TC,
+              Ap (Ap2 (V (P_EnumFTT), From_E (TC, A),
+                       From_E (TC, B)), Bound)))));
+         end;
+         declare
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+         begin
+            Ms.Append (Lam (A, Lam (B, Map_To_E (TC,
+              Ap2 (V (P_EnumFT), From_E (TC, A),
+                   From_E (TC, B))))));
+         end;
+         declare
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+            C : constant Real_Var_Id := Fresh ("c");
+         begin
+            Ms.Append (Lam (A, Lam (B, Lam (C, Map_To_E (TC,
+              Ap (Ap2 (V (P_EnumFTT), From_E (TC, A),
+                       From_E (TC, B)), From_E (TC, C)))))));
+         end;
+         Give_Dict (II, Ms);
+      end Derive_Enum;
+
+      procedure Derive_Bounded (II : Real_Instance_Id) is
+         TC : constant Real_TyCon_Id :=
+           Real_TyCon_Id (M.Info (II).Head);
+         Ms : Expr_Id_Vectors.Vector;
+      begin
+         Ms.Append (ConE (M.Info (TC).Cons (1)));
+         Ms.Append
+           (ConE (M.Info (TC).Cons (M.Info (TC).Cons.Last_Index)));
+         Give_Dict (II, Ms);
+      end Derive_Bounded;
+
+      --  case P of (a, b) -> Body (a, b)  (pair scrutinee).
+      function Pair_Case
+        (P : Real_Var_Id; A, B : Real_Var_Id;
+         Body_E : Real_Expr_Id) return Real_Expr_Id
+      is
+         Alts : Alt_Id_Vectors.Vector;
+         Bs : Var_Id_Vectors.Vector;
+      begin
+         Bs.Append (Var_Id (A));
+         Bs.Append (Var_Id (B));
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span,
+            A_Con => Real_DataCon_Id (Env.Tuple_DCs (2)),
+            Binders => Bs, Alt_Body => Body_E)));
+         return M.Add (Expr_Node'
+           (Kind => Case_C, Span => Span,
+            Scrutinee => V (Var_Id (P)), Alts => Alts));
+      end Pair_Case;
+
+      procedure Derive_Ix (II : Real_Instance_Id) is
+         TC : constant Real_TyCon_Id :=
+           Real_TyCon_Id (M.Info (II).Head);
+         Ms : Expr_Id_Vectors.Vector;
+      begin
+         declare
+            P : constant Real_Var_Id := Fresh ("p");
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+         begin
+            Ms.Append (Lam (P, Pair_Case (P, A, B, Map_To_E (TC,
+              Ap2 (V (P_EnumFT), From_E (TC, A),
+                   From_E (TC, B))))));
+         end;
+         declare
+            P : constant Real_Var_Id := Fresh ("p");
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+            I : constant Real_Var_Id := Fresh ("i");
+         begin
+            Ms.Append (Lam (P, Lam (I, Pair_Case (P, A, B,
+              Ap2 (V (P_Sub), From_E (TC, I),
+                   From_E (TC, A))))));
+         end;
+         declare
+            P : constant Real_Var_Id := Fresh ("p");
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+            I : constant Real_Var_Id := Fresh ("i");
+         begin
+            Ms.Append (Lam (P, Lam (I, Pair_Case (P, A, B,
+              Bool_Case
+                (Ap2 (V (P_GtI), From_E (TC, A), From_E (TC, I)),
+                 ConE (Env.False_DC),
+                 Bool_Case
+                   (Ap2 (V (P_GtI), From_E (TC, I),
+                         From_E (TC, B)),
+                    ConE (Env.False_DC),
+                    ConE (Env.True_DC)))))));
+         end;
+         declare
+            P : constant Real_Var_Id := Fresh ("p");
+            A : constant Real_Var_Id := Fresh ("a");
+            B : constant Real_Var_Id := Fresh ("b");
+         begin
+            Ms.Append (Lam (P, Pair_Case (P, A, B,
+              Bool_Case
+                (Ap2 (V (P_GtI), From_E (TC, A), From_E (TC, B)),
+                 IntE (0),
+                 Ap2 (V (P_Add),
+                      Ap2 (V (P_Sub), From_E (TC, B),
+                           From_E (TC, A)),
+                      IntE (1))))));
+         end;
+         Give_Dict (II, Ms);
+      end Derive_Ix;
+
+      procedure Derive_Read (II : Real_Instance_Id) is
+         TC : constant Real_TyCon_Id :=
+           Real_TyCon_Id (M.Info (II).Head);
+         Ms : Expr_Id_Vectors.Vector;
+         Tbl : Real_Expr_Id := Nil;
+      begin
+         for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
+            declare
+               DC : constant Real_DataCon_Id :=
+                 Real_DataCon_Id (M.Info (TC).Cons (I));
+            begin
+               Tbl := Cons
+                 (Ap2 (ConE (Env.Tuple_DCs (2)),
+                       Str (Table.Text (M.Info (DC).Name)),
+                       ConE (DataCon_Id (DC))),
+                  Tbl);
+            end;
+         end loop;
+         Ms.Append (Ap (V (Lookup ("readsEnum_")), Tbl));
+         Give_Dict (II, Ms);
+      end Derive_Read;
+
       --  Report 11.4 Show method shapes. Each helper embeds the given
       --  show-function expression once (callers rebuild it per use to
       --  keep Core a tree).
@@ -1465,6 +1717,28 @@ package body AHC.Prelude_Core is
                         Ms.Append (Lam (S, Nil));
                         Give_Dict (Real_Instance_Id (II), Ms);
                      end;
+                  elsif Cl_Id = Env.Enum_Cl
+                    and then Has_DataCons (Real_TyCon_Id (Inst.Head))
+                    and then All_Nullary (Real_TyCon_Id (Inst.Head))
+                  then
+                     --  deriving Enum for enumerations (also covers
+                     --  the wired Bool/Ordering/() instances).
+                     Derive_Enum (Real_Instance_Id (II));
+                  elsif Cl_Id = Env.Bounded_Cl
+                    and then Has_DataCons (Real_TyCon_Id (Inst.Head))
+                    and then All_Nullary (Real_TyCon_Id (Inst.Head))
+                  then
+                     Derive_Bounded (Real_Instance_Id (II));
+                  elsif Table.Text (M.Info (Cl).Name) = "Ix"
+                    and then Has_DataCons (Real_TyCon_Id (Inst.Head))
+                    and then All_Nullary (Real_TyCon_Id (Inst.Head))
+                  then
+                     Derive_Ix (Real_Instance_Id (II));
+                  elsif Table.Text (M.Info (Cl).Name) = "Read"
+                    and then Has_DataCons (Real_TyCon_Id (Inst.Head))
+                    and then All_Nullary (Real_TyCon_Id (Inst.Head))
+                  then
+                     Derive_Read (Real_Instance_Id (II));
                   else
                      Give_Dict (Real_Instance_Id (II), Errs (Cl));
                   end if;
