@@ -760,14 +760,27 @@ package body AHC.Desugar is
                      declare
                         X : constant Core.Real_Var_Id :=
                           Fresh ("$b", Span);
+                        FV : constant Core.Real_Var_Id :=
+                          Fresh ("$fail", Span);
                         Fail_E : constant Core.Real_Expr_Id :=
                           App1 (Global (Env.Fail_V, Span),
                                 Str_Lit ("pattern match failure in"
                                          & " do block", Span), Span);
                      begin
+                        --  Match_One's contract: Fail must be a
+                        --  VARIABLE reference to a join point, so
+                        --  each failure position embeds a fresh Var
+                        --  node (tree invariant). Passing the fail
+                        --  CALL directly shared its `fail` node
+                        --  between nested failure positions and the
+                        --  evidence rewriter applied the dictionary
+                        --  twice.
                         K := Lam (X,
-                                  Match_One (X, N.Bind_Pat, Rest,
-                                             Fail_E),
+                                  Let1 (FV, Fail_E,
+                                        Match_One
+                                          (X, N.Bind_Pat, Rest,
+                                           VarE (FV, Span)),
+                                        Span),
                                   Span);
                      end;
                   end if;

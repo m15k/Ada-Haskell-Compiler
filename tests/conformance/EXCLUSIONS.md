@@ -12,7 +12,7 @@ the reason a conformance program does not exist for it.
 | 6.4.3 | `RealFrac` results at `Integer` | `Integral`/`Floating`/`RealFrac` are real classes (instances Int/Integer and Double; fromIntegral/(^)/(^^) polymorphic), but floor/ceiling/round/truncate return `Integer` rather than `Integral b => b` (GHC defaults `b` there anyway); `properFraction` and `RealFloat` (beyond a monomorphic atan2) are absent |
 | 6.3.4 | `Enum` at Char/Double (`['a'..'z']`) | `Enum` is complete at `Int` (incl. stepped ranges, succ/pred, to/fromEnum); other types have no runtime |
 | 11.1 | `deriving (Enum, Bounded, Ix, Read)` | `Eq`/`Ord`/`Show` derive |
-| 3.14 | `fail`-desugared refutable do-binds at `Maybe`/`[]` | Monad runtimes cover `IO` and `[]` bind/return only |
+| 3.14 | ~~`fail` at `Maybe`/`[]`~~ WORKS | refutable do-binds fail to Nothing / skip per the Report (ch03_14_faildo.hs); IO's fail errors, as GHC's does |
 | ch. 4 | Class-hierarchy completeness (`Functor`/`Applicative` law programs, `Read`) | signatures wired, no runtime |
 
 | lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs stay in ASCII |
