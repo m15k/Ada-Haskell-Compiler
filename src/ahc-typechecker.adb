@@ -28,7 +28,11 @@ package body AHC.Typechecker is
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Sigs  : Kinds.Sig_Maps.Map)
+      Sigs  : Kinds.Sig_Maps.Map;
+      Group_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector;
+      Inst_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector)
    is
       ------------------------------------------------------------------
       --  Inference state
@@ -1343,6 +1347,11 @@ package body AHC.Typechecker is
             declare
                Merged : Bind_Vectors.Vector;
             begin
+               if SCC_Sizes (SI) >= 1
+                 and then SCCs (Pos + 1) <= Group_Origins.Last_Index
+               then
+                  Bag.Set_Origin (Group_Origins (SCCs (Pos + 1)));
+               end if;
                for K in 1 .. SCC_Sizes (SI) loop
                   for B of M.Top_Binds (SCCs (Pos + K)).Binds loop
                      Merged.Append (B);
@@ -1360,6 +1369,9 @@ package body AHC.Typechecker is
          declare
             Inst : Instance_Info := M.Info (Real_Instance_Id (II));
          begin
+            if Natural (II) <= Inst_Origins.Last_Index then
+               Bag.Set_Origin (Inst_Origins (Natural (II)));
+            end if;
             if not Inst.Method_Binds.Is_Empty
               and then Inst.Of_Class /= No_Class
             then

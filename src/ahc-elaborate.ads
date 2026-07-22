@@ -33,7 +33,9 @@ package AHC.Elaborate is
      (Table : in out Names.Name_Table;
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
-      Env   : in out Builtins.Global_Env)
+      Env   : in out Builtins.Global_Env;
+      Inst_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector)
      with Post => Bag.Has_Errors or else All_Dictionaries_Built (M);
 
 end AHC.Elaborate;

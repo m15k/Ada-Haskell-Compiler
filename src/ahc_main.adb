@@ -153,10 +153,40 @@ procedure AHC_Main is
          Name : Ada.Strings.Unbounded.Unbounded_String;
          From_Group, To_Group : Natural := 0;
          From_Inst, To_Inst   : Natural := 0;
+         Tag : Natural := 0;   --  diagnostic origin (Diag_Texts idx)
       end record;
       package Unit_Span_Vectors is new Ada.Containers.Vectors
         (Positive, Unit_Span);
       Unit_Spans : Unit_Span_Vectors.Vector;
+
+      --  Diagnostic origin table: tag -> that module's source text,
+      --  so cross-module diagnostics print against the RIGHT file.
+      package Text_Vectors is new Ada.Containers.Vectors
+        (Positive, AHC.Source_Text.Source,
+         "=" => AHC.Source_Text."=");
+      Diag_Texts : Text_Vectors.Vector;
+      Prelude_Tag : Natural := 0;
+      Group_Origins, Inst_Origins :
+        AHC.Diagnostics.Origin_Vectors.Vector;
+
+      procedure Print_Diags is
+      begin
+         for I in 1 .. Bag.Count loop
+            declare
+               Tag : constant Natural := Bag.Origin_Of (I);
+            begin
+               if Tag in 1 .. Diag_Texts.Last_Index then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     Bag.Render (Diag_Texts (Tag), I));
+               else
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     Bag.Render (Text, I));
+               end if;
+            end;
+         end loop;
+      end Print_Diags;
 
       Root_Dir : constant String :=
         Ada.Directories.Containing_Directory (Path);
@@ -357,6 +387,9 @@ procedure AHC_Main is
                   Loaded := False;
             end;
             if Loaded then
+               Diag_Texts.Append (P_Text);
+               Prelude_Tag := Diag_Texts.Last_Index;
+               Bag.Set_Origin (Prelude_Tag);
                AHC.Lexer.Scan (P_Text, Table, Bag, P_Stream);
                AHC.Parser.Parse_Module (P_Stream, Table, Bag, P_Arena);
                AHC.Fixity.Resolve_Module (P_Arena, Table, Bag);
@@ -401,12 +434,16 @@ procedure AHC_Main is
                  Natural (M.Top_Binds.Length);
                I0 : constant Natural :=
                  Natural (M.Last_Instance);
+               L_Tag : Natural;
                L_Res   : AHC.Rename.Resolutions;
                L_Annos : AHC.Kinds.Anno_Maps.Map;
                L_Preds : AHC.Kinds.Pred_Vectors.Vector;
                Tops     : aliased AHC.Fixity.Fixity_Maps.Map;
                Base_Fix : AHC.Fixity.Fixity_Maps.Map;
             begin
+               Diag_Texts.Append (L.Text);
+               L_Tag := Diag_Texts.Last_Index;
+               Bag.Set_Origin (L_Tag);
                for Imp of L.Ref.Imports loop
                   declare
                      MI : constant Natural :=
@@ -457,7 +494,8 @@ procedure AHC_Main is
                      From_Group => G0 + 1,
                      To_Group => Natural (M.Top_Binds.Length),
                      From_Inst => I0 + 1,
-                     To_Inst => Natural (M.Last_Instance)));
+                     To_Inst => Natural (M.Last_Instance),
+                     Tag => L_Tag));
                if Bag.Has_Errors then
                   Bag.Print_All (L.Text);
                   Set_Exit_Status (1);
@@ -466,11 +504,46 @@ procedure AHC_Main is
             end;
          end loop;
       end if;
+
+      --  Per-group and per-instance diagnostic origins for the
+      --  whole-program phases; fallback = the root module's text.
+      declare
+         Root_Tag : constant Natural := Diag_Texts.Last_Index;
+      begin
+         Bag.Set_Origin (Root_Tag);
+         for GI in 1 .. Natural (M.Top_Binds.Length) loop
+            declare
+               Tag : Natural := Prelude_Tag;
+            begin
+               for Sp of Unit_Spans loop
+                  if GI in Sp.From_Group .. Sp.To_Group then
+                     Tag := Sp.Tag;
+                  end if;
+               end loop;
+               Group_Origins.Append (Tag);
+            end;
+         end loop;
+         for II in 1 .. Natural (M.Last_Instance) loop
+            declare
+               Tag : Natural := Prelude_Tag;
+            begin
+               for Sp of Unit_Spans loop
+                  if II in Sp.From_Inst .. Sp.To_Inst then
+                     Tag := Sp.Tag;
+                  end if;
+               end loop;
+               Inst_Origins.Append (Tag);
+            end;
+         end loop;
+      end;
+
       if not Bag.Has_Errors then
          if Mode = 't' then
-            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            AHC.Typechecker.Check_Module
+              (Table, Bag, M, Env, Sigs, Group_Origins, Inst_Origins);
             if not Bag.Has_Errors then
-               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+               AHC.Elaborate.Elaborate_Dictionaries
+                 (Table, Bag, M, Env, Inst_Origins);
             end if;
             if not Bag.Has_Errors then
                for GI in Prelude_Groups + 1 ..
@@ -500,9 +573,11 @@ procedure AHC_Main is
                end loop;
             end if;
          elsif Mode = 'b' then
-            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            AHC.Typechecker.Check_Module
+              (Table, Bag, M, Env, Sigs, Group_Origins, Inst_Origins);
             if not Bag.Has_Errors then
-               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+               AHC.Elaborate.Elaborate_Dictionaries
+                 (Table, Bag, M, Env, Inst_Origins);
                declare
                   use Ada.Strings.Unbounded;
                   Prims : AHC.Prelude_Core.Prim_Maps.Map;
@@ -648,9 +723,11 @@ procedure AHC_Main is
                end;
             end if;
          else
-            AHC.Typechecker.Check_Module (Table, Bag, M, Env, Sigs);
+            AHC.Typechecker.Check_Module
+              (Table, Bag, M, Env, Sigs, Group_Origins, Inst_Origins);
             if not Bag.Has_Errors then
-               AHC.Elaborate.Elaborate_Dictionaries (Table, Bag, M, Env);
+               AHC.Elaborate.Elaborate_Dictionaries
+                 (Table, Bag, M, Env, Inst_Origins);
                declare
                   Prims : AHC.Prelude_Core.Prim_Maps.Map;
                begin
@@ -662,7 +739,7 @@ procedure AHC_Main is
          end if;
       end if;
 
-      Bag.Print_All (Text);
+      Print_Diags;
       if Bag.Has_Errors then
          Set_Exit_Status (1);
       end if;

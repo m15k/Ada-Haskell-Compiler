@@ -7,6 +7,8 @@
 --  Source. (Single-file for Phase 1; a file table arrives with
 --  multi-module compilation.)
 
+with Ada.Containers.Vectors;
+
 with AHC.Source_Text;
 
 private with Ada.Containers.Indefinite_Vectors;
@@ -72,6 +74,21 @@ package AHC.Diagnostics is
       Span    : Source_Span;
       Message : String);
 
+   --  Multi-module attribution: spans are offsets into ONE module's
+   --  text, so every diagnostic records which module's source it
+   --  belongs to. Phases set the current origin tag (the driver's
+   --  numbering); Add stamps it; the driver renders each diagnostic
+   --  against the tagged module's own Source. Tag 0 = untagged
+   --  (single-file callers never notice).
+   package Origin_Vectors is new Ada.Containers.Vectors
+     (Positive, Natural);
+
+   procedure Set_Origin (Bag : in out Diagnostic_Bag; Tag : Natural);
+
+   function Origin_Of
+     (Bag : Diagnostic_Bag; Index : Positive) return Natural
+     with Pre => Index <= Bag.Count;
+
    function Count (Bag : Diagnostic_Bag) return Natural;
    function Error_Count (Bag : Diagnostic_Bag) return Natural;
    function Has_Errors (Bag : Diagnostic_Bag) return Boolean
@@ -97,6 +114,7 @@ private
       Sev     : Severity_Kind;
       Code    : Diag_Code;
       Span    : Source_Span;
+      Origin  : Natural := 0;
       Message : String (1 .. Message_Length);
    end record;
 
@@ -104,8 +122,9 @@ private
      (Index_Type => Positive, Element_Type => Diagnostic);
 
    type Diagnostic_Bag is tagged limited record
-      Items  : Diagnostic_Vectors.Vector;
-      Errors : Natural := 0;  --  includes errors dropped past the cap
+      Items   : Diagnostic_Vectors.Vector;
+      Errors  : Natural := 0;  --  includes errors dropped past the cap
+      Current : Natural := 0;  --  origin tag stamped on Add
    end record;
 
 end AHC.Diagnostics;

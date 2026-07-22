@@ -29,12 +29,19 @@ package AHC.Typechecker is
    --  binder a meta-free type: the PRD's "every Core node has a type".
    function Fully_Typed (M : Core.Core_Module) return Boolean;
 
+   --  Group_Origins/Inst_Origins: per-top-group and per-instance
+   --  diagnostic origin tags (see Diagnostics.Set_Origin); empty in
+   --  single-module use.
    procedure Check_Module
      (Table : in out Names.Name_Table;
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Sigs  : Kinds.Sig_Maps.Map)
+      Sigs  : Kinds.Sig_Maps.Map;
+      Group_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector;
+      Inst_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector)
      with Post => Bag.Has_Errors or else Fully_Typed (M);
 
 end AHC.Typechecker;

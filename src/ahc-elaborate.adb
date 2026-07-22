@@ -43,7 +43,9 @@ package body AHC.Elaborate is
      (Table : in out Names.Name_Table;
       Bag   : in out Diagnostics.Diagnostic_Bag;
       M     : in out Core.Core_Module;
-      Env   : in out Builtins.Global_Env)
+      Env   : in out Builtins.Global_Env;
+      Inst_Origins : Diagnostics.Origin_Vectors.Vector :=
+        Diagnostics.Origin_Vectors.Empty_Vector)
    is
 
       --  Given evidence: instance-context constraints and their
@@ -179,6 +181,9 @@ package body AHC.Elaborate is
             Inst : constant Instance_Info :=
               M.Info (Real_Instance_Id (II));
          begin
+            if Natural (II) <= Inst_Origins.Last_Index then
+               Bag.Set_Origin (Inst_Origins (Natural (II)));
+            end if;
             if Needs_Dict (M, Inst) then
                declare
                   Cl : constant Real_Class_Id :=

@@ -20,8 +20,19 @@ package body AHC.Diagnostics is
                      Sev            => Sev,
                      Code           => Code,
                      Span           => Span,
+                     Origin         => Bag.Current,
                      Message        => Message));
    end Add;
+
+   procedure Set_Origin (Bag : in out Diagnostic_Bag; Tag : Natural)
+   is
+   begin
+      Bag.Current := Tag;
+   end Set_Origin;
+
+   function Origin_Of
+     (Bag : Diagnostic_Bag; Index : Positive) return Natural
+   is (Bag.Items (Index).Origin);
 
    function Count (Bag : Diagnostic_Bag) return Natural
    is (Natural (Bag.Items.Length));
