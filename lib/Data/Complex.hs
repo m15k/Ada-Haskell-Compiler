@@ -5,41 +5,44 @@ module Data.Complex
 
 infix 6 :+
 
-data Complex = Double :+ Double
+--  Polymorphic complex numbers, as in base: the polar family needs
+--  RealFloat (atan2 lives there), which exists as a real class
+--  since M69.
+data Complex a = a :+ a
 
-realPart :: Complex -> Double
+realPart :: Complex a -> a
 realPart (x :+ _) = x
 
-imagPart :: Complex -> Double
+imagPart :: Complex a -> a
 imagPart (_ :+ y) = y
 
-conjugate :: Complex -> Complex
+conjugate :: Num a => Complex a -> Complex a
 conjugate (x :+ y) = x :+ negate y
 
-magnitude :: Complex -> Double
+magnitude :: RealFloat a => Complex a -> a
 magnitude (x :+ y) = sqrt (x * x + y * y)
 
-phase :: Complex -> Double
+phase :: RealFloat a => Complex a -> a
 phase (x :+ y) = atan2 y x
 
-mkPolar :: Double -> Double -> Complex
+mkPolar :: RealFloat a => a -> a -> Complex a
 mkPolar r theta = (r * cos theta) :+ (r * sin theta)
 
-cis :: Double -> Complex
+cis :: RealFloat a => a -> Complex a
 cis theta = cos theta :+ sin theta
 
-polar :: Complex -> (Double, Double)
+polar :: RealFloat a => Complex a -> (a, a)
 polar z = (magnitude z, phase z)
 
-instance Eq Complex where
+instance Eq a => Eq (Complex a) where
   (a :+ b) == (c :+ d) = a == c && b == d
 
-instance Show Complex where
+instance Show a => Show (Complex a) where
   showsPrec p (x :+ y) s =
     showParen (p > 6)
       (\t -> showsPrec 7 x (" :+ " ++ showsPrec 7 y t)) s
 
-instance Num Complex where
+instance RealFloat a => Num (Complex a) where
   (a :+ b) + (c :+ d) = (a + c) :+ (b + d)
   (a :+ b) - (c :+ d) = (a - c) :+ (b - d)
   (a :+ b) * (c :+ d) = (a * c - b * d) :+ (a * d + b * c)
@@ -48,8 +51,4 @@ instance Num Complex where
   signum (0 :+ 0) = 0 :+ 0
   signum z = (realPart z / m) :+ (imagPart z / m)
     where m = magnitude z
-  fromInteger n = fromIntegral2 n :+ 0
-
---  Integer -> Double (fromIntegral is Int -> Double in AHC).
-fromIntegral2 :: Integer -> Double
-fromIntegral2 n = fromInteger n
+  fromInteger n = fromInteger n :+ 0

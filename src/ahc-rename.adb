@@ -561,11 +561,21 @@ package body AHC.Rename is
                declare
                   TC : constant Core.TyCon_Id :=
                     Mod_Find_TyCon (N.Con);
+                  --  A visible synonym takes precedence over a
+                  --  BUILTIN TyCon it shadows (`type Rational =
+                  --  Ratio Integer` vs the wired placeholder); a
+                  --  user data type still wins over any synonym
+                  --  from another module.
+                  Use_Syn : constant Boolean :=
+                    Mod_Syn_Visible (N.Con)
+                    and then (TC = Core.No_TyCon
+                              or else M.Info
+                                (Core.Real_TyCon_Id (TC)).Is_Builtin);
                begin
-                  if TC /= Core.No_TyCon then
+                  if TC /= Core.No_TyCon and then not Use_Syn then
                      Res.Ty_Res.Replace_Element
                        (Positive (Id), TC);
-                  elsif Mod_Syn_Visible (N.Con) then
+                  elsif Use_Syn then
                      null;   --  expanded during conversion, by name
                   else
                      Bag.Add (Diagnostics.Error,
@@ -1608,14 +1618,29 @@ package body AHC.Rename is
                when Data_D | Newtype_D =>
                   Declare_Data (D, N);
                when Type_Syn_D =>
-                  if Env.Synonyms.Contains (N.S_Name)
-                    or else Env.TyCons.Contains (N.S_Name)
-                  then
-                     Bag.Add (Diagnostics.Error,
-                              Diagnostics.Rename_Duplicate, N.Span,
-                              "type '" & Text (N.S_Name)
-                              & "' is defined more than once");
-                  end if;
+                  --  Like data declarations, a synonym may shadow a
+                  --  BUILTIN TyCon (how `type Rational = Ratio
+                  --  Integer` takes its name over the wired
+                  --  placeholder); user-vs-user still clashes.
+                  declare
+                     C : constant Builtins.TyCon_Maps.Cursor :=
+                       Env.TyCons.Find (N.S_Name);
+                     Clash : Boolean :=
+                       Env.Synonyms.Contains (N.S_Name);
+                  begin
+                     if Builtins.TyCon_Maps.Has_Element (C)
+                       and then not M.Info
+                         (Builtins.TyCon_Maps.Element (C)).Is_Builtin
+                     then
+                        Clash := True;
+                     end if;
+                     if Clash then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Duplicate, N.Span,
+                                 "type '" & Text (N.S_Name)
+                                 & "' is defined more than once");
+                     end if;
+                  end;
                   Own.Synonyms.Include
                     (N.S_Name, Fixity.Fixity_Info'(others => <>));
                   Env.Synonyms.Include
