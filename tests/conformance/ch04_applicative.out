@@ -1,0 +1,11 @@
+Just 3
+Just 42
+Nothing
+[2,3,4,10,20,30]
+"x"
+Just (1,'x')
+Just 4
+Nothing
+[1,1,1,2,2,2]
+Just (-5)
+99

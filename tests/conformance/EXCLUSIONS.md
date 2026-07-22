@@ -13,7 +13,7 @@ the reason a conformance program does not exist for it.
 | 6.3.4 | `Enum` at Char/Double (`['a'..'z']`) | `Enum` is complete at `Int` (incl. stepped ranges, succ/pred, to/fromEnum); other types have no runtime |
 | 11.1 | `deriving (Enum, Bounded, Ix, Read)` | `Eq`/`Ord`/`Show` derive |
 | 3.14 | ~~`fail` at `Maybe`/`[]`~~ WORKS | refutable do-binds fail to Nothing / skip per the Report (ch03_14_faildo.hs); IO's fail errors, as GHC's does |
-| ch. 4 | Class-hierarchy completeness (`Functor`/`Applicative` law programs, `Read`) | signatures wired, no runtime |
+| ch. 4 | Class-hierarchy corners | `Functor`/`Applicative` (pure/`<*>`/`*>`/`<*`/`<$>`, ch04_applicative.hs) and `Read` work at Maybe/[]/IO; `Monad` does NOT have `Applicative` as superclass (the 2010 shape - `return` and `pure` are separate but agree) |
 
 | lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs stay in ASCII |
 | lib | `Data.List.foldl'` is `foldl` | AHC has no `seq`; observable results agree, strictness does not |

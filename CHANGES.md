@@ -1,5 +1,32 @@
 # AHC Changelog
 
+## Unreleased
+
+Polish track A + Applicative (M64-M66, docs/polish-plan.md):
+
+- **Fixed: cross-module diagnostic spans** (M64). Diagnostics carry
+  an origin tag; the driver renders each against its own module's
+  source. The fromRational warning now reports
+  lib/Data/Ratio.hs:45:1 (the instance) instead of a meaningless
+  root-file position; type errors in imported modules report the
+  right file.
+- **Fixed: refutable do-binds with multi-position patterns** (M65).
+  The fail dictionaries were already complete (Maybe -> Nothing,
+  [] -> skip), but Ds_Do passed the fail CALL as Match_One's
+  failure continuation instead of a let-bound join-point variable -
+  so a pattern like (x : y : _) failing at the second cons shared
+  one `fail` node between failure positions and the evidence
+  rewriter applied the dictionary twice ("applied a non-function").
+  The tree invariant's third strike. Pinned by ch03_14_faildo.hs;
+  EXCLUSIONS' stale 3.14 row corrected.
+- **Applicative** (M66): an ordinary source Prelude class over the
+  wired Functor - pure, <*>, liftA2 (with defaults for liftA2/
+  *>/<*), plus <$> in the Prelude - instances at Maybe, [] and IO.
+  First source class with a SUPERCLASS (the default methods reach
+  fmap through sup$Applicative$1) and first []-headed source
+  instances; both just worked. ch04_applicative.hs byte-identical
+  to GHC. Suite now 53 programs.
+
 ## v1.1 (2026-07-21)
 
 Everything after v1.0: the complete standard library (including the

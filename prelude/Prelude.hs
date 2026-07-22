@@ -192,6 +192,36 @@ x ^ n
 (^^) :: (Fractional a, Integral b) => a -> b -> a
 x ^^ n = if n >= 0 then x ^ n else recip (x ^ negate n)
 
+infixl 4 <$>, <*>, *>, <*
+
+(<$>) :: Functor f => (a -> b) -> f a -> f b
+f <$> x = fmap f x
+
+-- Applicative, as GHC's base has it (the Report predates it); an
+-- ordinary source class over the wired Functor.
+class Functor f => Applicative f where
+  pure :: a -> f a
+  (<*>) :: f (a -> b) -> f a -> f b
+  liftA2 :: (a -> b -> c) -> f a -> f b -> f c
+  liftA2 f x y = fmap f x <*> y
+  (*>) :: f a -> f b -> f b
+  (*>) x y = liftA2 (\_ b -> b) x y
+  (<*) :: f a -> f b -> f a
+  (<*) x y = liftA2 (\a _ -> a) x y
+
+instance Applicative Maybe where
+  pure x = Just x
+  Nothing <*> _ = Nothing
+  Just f <*> mx = fmap f mx
+
+instance Applicative [] where
+  pure x = [x]
+  fs <*> xs = concatMap (\f -> map f xs) fs
+
+instance Applicative IO where
+  pure x = return x
+  mf <*> mx = mf >>= \f -> mx >>= \x -> return (f x)
+
 span :: (a -> Bool) -> [a] -> ([a], [a])
 span p xs = (takeWhile p xs, dropWhile p xs)
 

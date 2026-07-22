@@ -10,7 +10,7 @@ weakens, the MANUAL keeps up.
 
 ## Track A - correctness debt first
 
-### M64 - cross-module diagnostic spans
+### M64 - cross-module diagnostic spans (DONE)
 The one known wrong behavior: a diagnostic raised while compiling a
 non-root module prints against the ROOT module's source text, so
 "Main.hs:38:30" can really mean a line in lib/Data/Ratio.hs. Seen
@@ -19,7 +19,7 @@ warning). Fix: diagnostics carry their originating module; the
 driver prints each against its own Source_Text. Medium (Bag record
 + driver plumbing).
 
-### M65 - `fail` at Maybe and []
+### M65 - `fail` at Maybe and [] (DONE - the dicts were already complete; testing found and fixed a real join-point sharing bug instead)
 Refutable pattern binds in do-blocks desugar to `fail` per Report
 3.14, but only IO has a fail runtime; Maybe/[] are an EXCLUSIONS
 row. Give Maybe (fail = Nothing) and [] (fail = []) real Monad
@@ -28,7 +28,7 @@ in Maybe do-blocks.
 
 ## Track B - GHC-compat breadth
 
-### M66 - Applicative
+### M66 - Applicative (DONE)
 Haskell 2010 predates the Applicative-Monad Proposal, but the
 oracle's base has it, so every modern GHC program uses `pure` and
 `<*>` freely - the single biggest remaining source-compat gap.
