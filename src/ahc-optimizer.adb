@@ -72,6 +72,185 @@ package body AHC.Optimizer is
          end case;
       end Count;
 
+      --  Any free occurrence of V under a lambda within E: inlining
+      --  there could turn one evaluation into many, so it is barred.
+      function Under_Lam
+        (V : Real_Var_Id; E : Real_Expr_Id; In_Lam : Boolean)
+         return Boolean
+      is
+         N : constant Expr_Node := M.Node (E);
+      begin
+         case N.Kind is
+            when Var_C =>
+               return N.V = V and then In_Lam;
+            when Lit_C | Con_C =>
+               return False;
+            when App_C =>
+               return Under_Lam (V, N.Fun, In_Lam)
+                 or else Under_Lam (V, N.Arg, In_Lam);
+            when Lam_C =>
+               return N.Binder /= V
+                 and then Under_Lam (V, N.Lam_Body, True);
+            when Let_C =>
+               for B of N.Binds loop
+                  if B.Binder = V then
+                     return False;   --  shadowed
+                  end if;
+               end loop;
+               for B of N.Binds loop
+                  if Under_Lam (V, B.Rhs, In_Lam) then
+                     return True;
+                  end if;
+               end loop;
+               return Under_Lam (V, N.Let_Body, In_Lam);
+            when Case_C =>
+               if Under_Lam (V, N.Scrutinee, In_Lam) then
+                  return True;
+               end if;
+               for A of N.Alts loop
+                  declare
+                     Alt : constant Alt_Node := M.Node (A);
+                     Shadowed : Boolean := False;
+                  begin
+                     if Alt.Kind = Con_Alt then
+                        for B of Alt.Binders loop
+                           if B = V then
+                              Shadowed := True;
+                           end if;
+                        end loop;
+                     end if;
+                     if not Shadowed
+                       and then Under_Lam (V, Alt.Alt_Body, In_Lam)
+                     then
+                        return True;
+                     end if;
+                  end;
+               end loop;
+               return False;
+         end case;
+      end Under_Lam;
+
+      --  Replace the single free occurrence of V in E with R (which
+      --  MOVES - the caller guarantees exactly one occurrence, so
+      --  the tree invariant is preserved). Untouched subtrees are
+      --  reused; the path to the occurrence is rebuilt.
+      function Subst_One
+        (V : Real_Var_Id; R : Real_Expr_Id; E : Real_Expr_Id)
+         return Real_Expr_Id
+      is
+         N : constant Expr_Node := M.Node (E);
+      begin
+         case N.Kind is
+            when Var_C =>
+               return (if N.V = V then R else E);
+            when Lit_C | Con_C =>
+               return E;
+            when App_C =>
+               if Count (V, N.Fun) > 0 then
+                  return M.Add (Expr_Node'
+                    (Kind => App_C, Span => N.Span,
+                     Fun => Subst_One (V, R, N.Fun),
+                     Arg => N.Arg));
+               end if;
+               return M.Add (Expr_Node'
+                 (Kind => App_C, Span => N.Span, Fun => N.Fun,
+                  Arg => Subst_One (V, R, N.Arg)));
+            when Lam_C =>
+               if N.Binder = V then
+                  return E;
+               end if;
+               return M.Add (Expr_Node'
+                 (Kind => Lam_C, Span => N.Span, Binder => N.Binder,
+                  Lam_Body => Subst_One (V, R, N.Lam_Body)));
+            when Let_C =>
+               for B of N.Binds loop
+                  if B.Binder = V then
+                     return E;   --  shadowed
+                  end if;
+               end loop;
+               declare
+                  Binds : Bind_Vectors.Vector;
+                  Done : Boolean := False;
+               begin
+                  for B of N.Binds loop
+                     if not Done and then Count (V, B.Rhs) > 0 then
+                        Binds.Append (Bind_Pair'
+                          (Binder => B.Binder,
+                           Rhs => Subst_One (V, R, B.Rhs)));
+                        Done := True;
+                     else
+                        Binds.Append (B);
+                     end if;
+                  end loop;
+                  return M.Add (Expr_Node'
+                    (Kind => Let_C, Span => N.Span,
+                     Is_Rec => N.Is_Rec, Binds => Binds,
+                     Let_Body =>
+                       (if Done then N.Let_Body
+                        else Subst_One (V, R, N.Let_Body))));
+               end;
+            when Case_C =>
+               if Count (V, N.Scrutinee) > 0 then
+                  return M.Add (Expr_Node'
+                    (Kind => Case_C, Span => N.Span,
+                     Scrutinee => Subst_One (V, R, N.Scrutinee),
+                     Alts => N.Alts));
+               end if;
+               declare
+                  Alts : Alt_Id_Vectors.Vector;
+                  Done : Boolean := False;
+               begin
+                  for A of N.Alts loop
+                     declare
+                        Alt : constant Alt_Node := M.Node (A);
+                        Shadowed : Boolean := False;
+                     begin
+                        if Alt.Kind = Con_Alt then
+                           for B of Alt.Binders loop
+                              if B = V then
+                                 Shadowed := True;
+                              end if;
+                           end loop;
+                        end if;
+                        if not Done and then not Shadowed
+                          and then Count (V, Alt.Alt_Body) > 0
+                        then
+                           case Alt.Kind is
+                              when Con_Alt =>
+                                 Alts.Append (M.Add (Alt_Node'
+                                   (Kind => Con_Alt,
+                                    Span => Alt.Span,
+                                    A_Con => Alt.A_Con,
+                                    Binders => Alt.Binders,
+                                    Alt_Body => Subst_One
+                                      (V, R, Alt.Alt_Body))));
+                              when Lit_Alt =>
+                                 Alts.Append (M.Add (Alt_Node'
+                                   (Kind => Lit_Alt,
+                                    Span => Alt.Span,
+                                    A_Lit => Alt.A_Lit,
+                                    Alt_Body => Subst_One
+                                      (V, R, Alt.Alt_Body))));
+                              when Default_Alt =>
+                                 Alts.Append (M.Add (Alt_Node'
+                                   (Kind => Default_Alt,
+                                    Span => Alt.Span,
+                                    Alt_Body => Subst_One
+                                      (V, R, Alt.Alt_Body))));
+                           end case;
+                           Done := True;
+                        else
+                           Alts.Append (A);
+                        end if;
+                     end;
+                  end loop;
+                  return M.Add (Expr_Node'
+                    (Kind => Case_C, Span => N.Span,
+                     Scrutinee => N.Scrutinee, Alts => Alts));
+               end;
+         end case;
+      end Subst_One;
+
       --  Constructor spine of a rebuilt expression: Con applied to
       --  zero or more arguments. Returns the DataCon (0 if not a
       --  spine) and fills Args.
@@ -174,22 +353,38 @@ package body AHC.Optimizer is
                      end;
                   end loop;
                   declare
-                     SB : constant Real_Expr_Id :=
+                     SB : Real_Expr_Id :=
                        Simp (N.Let_Body, Env2);
                      Live : Bind_Vectors.Vector;
                   begin
                      --  Dead non-recursive bindings are unforced
-                     --  thunks: drop them. (Recursive groups are
-                     --  kept whole.)
+                     --  thunks: drop them; a binding used exactly
+                     --  ONCE outside any lambda inlines at its use
+                     --  site (still evaluated at most once, but the
+                     --  let thunk vanishes - and a use in scrutinee
+                     --  position evaluates directly). (Recursive
+                     --  groups are kept whole.)
                      if N.Is_Rec then
                         Live := Kept;
                      else
                         for B of Kept loop
-                           if Count (B.Binder, SB) > 0 then
-                              Live.Append (B);
-                           else
-                              Changes := Changes + 1;
-                           end if;
+                           declare
+                              Uses : constant Natural :=
+                                Count (B.Binder, SB);
+                           begin
+                              if Uses = 0 then
+                                 Changes := Changes + 1;
+                              elsif Uses = 1
+                                and then not Under_Lam
+                                  (B.Binder, SB, False)
+                              then
+                                 SB := Subst_One
+                                   (B.Binder, B.Rhs, SB);
+                                 Changes := Changes + 1;
+                              else
+                                 Live.Append (B);
+                              end if;
+                           end;
                         end loop;
                      end if;
                      if Live.Is_Empty then

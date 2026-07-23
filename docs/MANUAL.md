@@ -1192,15 +1192,33 @@ two constraints:
   dictionary machinery generate.
 - **Default-only case elision**: `case e of _ -> body` is just
   `body`, because a wildcard demands nothing (chapter 8).
+- **Used-once let inlining**: `let x = e in body` where `x` occurs
+  exactly once in `body` and that occurrence is *not under a
+  lambda* substitutes `e` at the use site. One occurrence means the
+  thunk would have been forced at most once anyway, so sharing is
+  exact; the under-a-lambda bar is load-bearing, because a lambda's
+  body can run many times and each run would re-evaluate the moved
+  expression. The win is twofold: the thunk allocation vanishes,
+  and an expression moved into *scrutinee* position is evaluated
+  directly instead of being built as a heap closure first — which
+  is why this transform, added last, was measured as the largest
+  single win (dictionary-heavy inner loops are full of used-once
+  lets that the pattern-match compiler and elaborator generate).
 
 The simplifier rebuilds expressions bottom-up (always fresh nodes —
-the tree invariant, held by construction this time) and repeats
-until nothing changes, with a hard cap of eight rounds as the
-termination guarantee. It runs only in the build path — `ahc core`
-still shows the honest desugarer output — and `--no-opt` disables
-it. Measured effect: ~7% smaller generated C, ~25% faster on the
-benchmark; and the strongest evidence it changes nothing is that all
-44 GHC-oracle conformance programs are byte-identical with it on.
+the tree invariant, held by construction this time; used-once
+inlining *moves* the right-hand side, which preserves it) and
+repeats until nothing changes, with a hard cap of eight rounds as
+the termination guarantee. It runs only in the build path — `ahc
+core` still shows the honest desugarer output — and `--no-opt`
+disables it. Measured effect (`scripts/run_bench.sh`, best-of-5
+interleaved wall time, opt vs `--no-opt`): 2.10x on a strict fold,
+1.91x on `Data.List.sort` over 30k elements, 1.28x on a 40k-entry
+`Data.Map` build-and-fold, and ~1.0x on call-dominated (`fib`) and
+bignum-primitive-dominated workloads, whose time is spent where the
+simplifier doesn't reach. The strongest evidence it changes nothing
+is that all 59 GHC-oracle conformance programs are byte-identical
+with it on.
 
 ---
 
@@ -1240,7 +1258,7 @@ not parsing, Show escape handling. That week is the argument for
 oracle testing in one sentence: *the compiler passed its own tests
 and failed the truth.*
 
-### The five harnesses
+### The harnesses
 
 | Harness | Question it answers |
 |---|---|
@@ -1251,6 +1269,7 @@ and failed the truth.*
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
 | `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
+| `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the

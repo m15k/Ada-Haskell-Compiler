@@ -107,10 +107,14 @@ writes it; the position in brief):
 
 ## Track E - performance and leftovers
 
-### M74 - measurement-driven optimizer round
+### M74 - measurement-driven optimizer round (DONE)
 Benchmark harness first (the bignum/fib/sort programs, wall+alloc),
 then the profitable next transforms (case-of-case, single-use
 inlining across let). Only what measurement justifies.
+(Shipped: scripts/run_bench.sh + tests/bench/, and used-once let
+inlining barred under lambdas - sumfold 1.58x->2.10x, sort
+1.19x->1.91x, map 1.11x->1.28x, fib/bignum flat. Case-of-case was
+NOT shipped: nothing in the measured profile justified it.)
 
 ### M75 - module-system corners
 The two EXCLUSIONS stragglers: restricting the implicit Prelude

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+Measurement-driven optimizer round (M74):
+
+- **Benchmark harness** scripts/run_bench.sh: five workloads in
+  tests/bench/ (fib, strict fold over 2M ints, Data.List.sort on
+  30k LCG-random elements, factorial-2000 bignum, 40k-entry
+  Data.Map build-and-fold), each built with and without --no-opt,
+  outputs verified identical, then timed with warmup plus
+  interleaved best-of-5 so noise hits both sides equally. An
+  initial sequential timing "found" a 24% fib regression that the
+  interleaved harness dissolved entirely - the harness was
+  hardened before the optimizer was touched, which is the point
+  of measurement-driven.
+- **Used-once let inlining**: a non-recursive let binding whose
+  variable occurs exactly once, not under a lambda, is substituted
+  at its use site (the rhs MOVES, preserving the tree invariant).
+  One occurrence means the thunk was forced at most once anyway -
+  sharing-exact; the lambda bar prevents turning one evaluation
+  into many. Measured: 2.10x on the fold (was 1.58x), 1.91x on
+  sort (was 1.19x), 1.28x on Map (was 1.11x), ~1.0x on
+  call-dominated fib and prim-dominated bignum. All 59 conformance
+  programs remain byte-identical with the optimizer on.
+
 Function contracts (M72-M73, docs/contracts-design-note.md):
 
 - **Ada's Pre/Post as pragmas**: {-# PRE f expr #-} /
