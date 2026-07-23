@@ -986,15 +986,43 @@ static AhcNode *p_signum_d(AhcNode *a) {
   double v = ahc_eval(a)->u.d;
   return ahc_mk_double(v > 0 ? 1.0 : v < 0 ? -1.0 : 0.0);
 }
-/* Num Double's fromInteger: the argument is an AHC_INT node. */
+/* Num Double's fromInteger: the argument is an AHC_INT node.
+   A bignum beyond 53 bits gets ONE round-to-nearest-even of the
+   exact value (top 53 bits, then round/sticky), matching GHC's
+   integerToDouble; the naive per-limb accumulation rounds at every
+   step and drifts by ulps (fuzzer find, seed 57). */
 static AhcNode *p_from_integer_d(AhcNode *a) {
   AhcNode *e = ahc_eval(a);
   if (e->tag == AHC_INT) return ahc_mk_double((double)e->u.i);
   {
-    double v = 0;
-    for (int i = e->u.big.n - 1; i >= 0; i--)
-      v = v * 4294967296.0 + e->u.big.d[i];
-    return ahc_mk_double(e->u.big.sign < 0 ? -v : v);
+    int n = e->u.big.n;
+    const uint32_t *d = e->u.big.d;
+    int nb = 32 * (n - 1);
+    uint32_t top = d[n - 1];
+    while (top) { nb++; top >>= 1; }
+    if (nb <= 53) {              /* exact: every step representable */
+      double v = 0;
+      for (int i = n - 1; i >= 0; i--) v = v * 4294967296.0 + d[i];
+      return ahc_mk_double(e->u.big.sign < 0 ? -v : v);
+    }
+    {
+      int lo = nb - 53;          /* lowest kept bit */
+      uint64_t mant = 0;
+      int sticky = 0, round, k;
+      for (k = nb - 1; k >= lo; k--)
+        mant = (mant << 1) | ((d[k >> 5] >> (k & 31)) & 1u);
+      round = (d[(lo - 1) >> 5] >> ((lo - 1) & 31)) & 1u;
+      for (k = 0; k < (lo - 1) >> 5 && !sticky; k++)
+        if (d[k]) sticky = 1;
+      if (!sticky && ((lo - 1) & 31)
+          && (d[(lo - 1) >> 5] & ((1u << ((lo - 1) & 31)) - 1u)))
+        sticky = 1;
+      if (round && (sticky || (mant & 1))) mant++;
+      {
+        double v = ldexp((double)mant, lo);
+        return ahc_mk_double(e->u.big.sign < 0 ? -v : v);
+      }
+    }
   }
 }
 /* %.15g round-trips typical values; append .0 when the image has no

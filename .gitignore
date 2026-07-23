@@ -12,3 +12,4 @@ examples/lisp/minilisp.c
 examples/lisp/lisp.c
 examples/lisp/minilisp.build/
 examples/contracts
+tests/fuzz-failures/

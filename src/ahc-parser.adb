@@ -221,6 +221,14 @@ package body AHC.Parser is
       --  Scan ahead for '<-' at bracket depth 0, stopping at any of the
       --  stop kinds at depth 0. Distinguishes 'pat <- exp' from plain
       --  expressions in do-statements and list-comprehension quals.
+      --
+      --  The scan must ALSO stop, at any depth, on the first token a
+      --  pattern cannot contain (let/case/if/do/lambda and friends):
+      --  the answer is already "not a bind", and - load-bearing -
+      --  Peek drains tokens through the layout engine WITHOUT the
+      --  parser's parse-error(t) feedback, so scanning past a 'let'
+      --  would leave its implicit context dangling and a later
+      --  explicit '}' mis-matched (found by the fuzzer, seed 3).
       function Arrow_Ahead return Boolean is
          Depth : Natural := 0;
          N     : Positive := 1;
@@ -232,6 +240,9 @@ package body AHC.Parser is
          case Tok.Kind is
             when Left_Paren | Left_Bracket | Left_Brace | V_Left_Brace =>
                Depth := 1;
+            when Kw_Let | Kw_Case | Kw_If | Kw_Do | Kw_Of | Kw_Then
+               | Kw_Else | Kw_In | Kw_Where | Backslash =>
+               return False;
             when others =>
                null;
          end case;
@@ -258,6 +269,10 @@ package body AHC.Parser is
                      if Depth = 0 then
                         return False;
                      end if;
+                  when Kw_Let | Kw_Case | Kw_If | Kw_Do | Kw_Of
+                     | Kw_Then | Kw_Else | Kw_In | Kw_Where
+                     | Backslash =>
+                     return False;
                   when others =>
                      null;
                end case;

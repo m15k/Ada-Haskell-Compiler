@@ -1290,6 +1290,7 @@ and failed the truth.*
 | `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
+| `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the
@@ -1297,6 +1298,34 @@ differentials catch front-end drift on programs that never run.
 Every milestone in the project ended with all of them green — that
 rule ("each milestone independently shippable, full suite green")
 was house law from the beginning.
+
+### The fuzzer: don't hand-pick your homework either
+
+Every hand-written test still embeds one author's imagination of
+where bugs live, and the project's history says that imagination is
+the weak link: each dogfood round (the Lisp interpreter, the
+Data.Map port, the examples) found a real compiler bug the suite
+had missed. `scripts/run_fuzz.sh` automates that discovery. A
+seeded generator (`tests/fuzz/Gen.hs`, deterministic — the same
+seed always yields the same program) emits random *well-typed*
+Haskell 2010 programs; each is compiled by AHC and interpreted by
+GHC, stdout byte-diffed. Two design rules make a divergence
+meaningful. First, the generator's menu was pre-verified: every
+construct and library function it can emit was pinned
+byte-identical on both compilers before entering the menu, so
+"AHC rejects a generated program" is a finding, not noise. Second,
+known-undefined territory is avoided by construction — Int
+arithmetic stays far from overflow (the Report leaves it
+undefined; AHC promotes), text stays ASCII, and no partial
+function is ever emitted (division is guarded, `maximum` gets a
+consed head, recursion is structural). Divergences are saved to
+`tests/fuzz-failures/` and shrunk automatically by delta debugging
+(`scripts/shrink_fuzz.py`); the survivors of a shrink are small
+enough to diagnose by hand, and each confirmed bug is then pinned
+as a permanent conformance test. The very first campaign paid for
+the harness: its third seed exposed a new corner of the
+layout-vs-lookahead bug farm (chapter 16) that the entire
+hand-written suite had never touched.
 
 ---
 
@@ -1380,6 +1409,15 @@ close a block. The fix leaned on a property of the layout algorithm
 close blocks itself, and, at end-of-file, *relocate* an
 already-queued virtual brace. Rule: when two streaming algorithms
 are mutually recursive, buffering in one is a bug farm in the other.
+The rule proved itself again on the differential fuzzer's third
+seed (chapter 14): the same lookahead, drained through a one-line
+`let` inside an *explicit-brace* case alternative, left the let's
+implicit context open and the case's real `}` unmatched. That fix
+was structural rather than compensating: the bind-vs-expression
+scan now stops at the first token a pattern cannot contain
+(`let`, `case`, `if`, lambda, ...), so lookahead can no longer
+open a layout context at all — the answer is known before the
+hazard is reachable.
 
 **The stack-overflow-after-success.** `print (sum [1 .. 1000000])`
 printed the correct answer and *then* segfaulted — a

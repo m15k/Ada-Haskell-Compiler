@@ -1,5 +1,40 @@
 # AHC Changelog
 
+## Unreleased
+
+Differential fuzzer (M76):
+
+- **scripts/run_fuzz.sh + tests/fuzz/Gen.hs**: a seeded generator
+  of random well-typed Haskell 2010 programs (deterministic 64-bit
+  LCG; runs under GHC, base-only) whose every construct and library
+  function was first pinned byte-identical on both compilers, so a
+  divergence is always a real finding. Each seed's program is
+  compiled by AHC and interpreted by GHC and the stdout compared
+  byte for byte; divergences are saved to tests/fuzz-failures/ and
+  auto-shrunk by delta debugging (scripts/shrink_fuzz.py: drop main
+  statements and whole definitions while the same divergence
+  reproduces). Known-undefined territory is avoided by
+  construction: Int arithmetic stays small, text stays ASCII,
+  partial functions are never emitted.
+- **First blood, seed 3**: a single-line `let ... in` inside an
+  explicit-brace case alternative inside a do block produced
+  spurious "'}' without matching explicit '{'" errors. Root cause:
+  the do-statement bind/expression lookahead (Arrow_Ahead) drained
+  tokens through the layout engine WITHOUT the parser's
+  parse-error(t) feedback, so the let's implicit context was never
+  closed. Fix: the scan now stops at the first token a pattern
+  cannot contain (let/case/if/do/lambda/...), which both answers
+  the question early and keeps lookahead from opening layout
+  contexts at all. Pinned as ch10_03_lookahead_let.hs.
+- **Seed 57: Integer->Double rounding**. `fromIntegral` on a
+  bignum accumulated per-limb (`v * 2^32 + limb`), rounding at
+  every step; values a few bits past 53 drifted by ulps from GHC
+  (1.610269053685309e26 vs the correct ...095e26). The runtime now
+  takes the top 53 bits and applies ONE round-to-nearest-even with
+  a proper round/sticky pair - GHC's integerToDouble semantics.
+  Pinned as ch06_04_integer_to_double.hs (suite: 64, including
+  2^64±1, 2^53+1, and 10^300).
+
 ## v1.2 (2026-07-23)
 
 The polish-and-depth release: every milestone of docs/polish-plan.md
