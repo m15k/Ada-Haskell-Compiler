@@ -196,7 +196,7 @@ scripts/run_conformance.sh         # Haskell 2010 conformance subset
 scripts/run_separate.sh            # separate-compilation cache proofs
 ```
 
-Conformance (the PRD success metric): `tests/conformance/` holds 51
+Conformance (the PRD success metric): `tests/conformance/` holds 62
 programs (including multi-module cases) pinned to Haskell 2010
 Report sections - lexical structure
 and layout, every expression form, declarations and classes, the

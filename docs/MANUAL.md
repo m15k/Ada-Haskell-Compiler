@@ -341,16 +341,17 @@ in another module but *not exported* must be invisible.
 
 The design has three pieces:
 
-**Whole-program compilation.** AHC does not compile modules
-separately into object files. The driver finds every `import`,
+**Whole-program frontend.** The driver finds every `import`,
 locates each module's file (`A.B.C` → `A/B/C.hs`, searched beside
 your file, then `$AHC_LIB`, then the compiler's `lib/`), orders them
 so dependencies come first (a cycle is an error), and runs each
 through the front half of the pipeline into *one shared Core
 program*. This is exactly the mechanism the Prelude had always used;
-modules generalized it. Separate compilation — interface files,
-linking — was deliberately left out: it multiplies complexity and
-buys nothing for a compiler of this scale.
+modules generalized it. Interface files were deliberately left out:
+the whole-program frontend is what gives Report-exact program-wide
+instance coherence for free. (Code *generation* is a different
+story — since the separate-compilation milestone each module emits
+its own C file and cached object; chapter 9.)
 
 **A registry of interfaces.** As each module is renamed, it deposits
 its *exports* — the names its export list admits, with their ids —
@@ -368,11 +369,30 @@ cannot accidentally shadow the Prelude's `reverse` for *other*
 modules — they resolve against the snapshot, not against a shared
 mutable table.
 
+**Restricting the Prelude.** The snapshot fallback is exactly the
+Report's *implicit* `import Prelude` — and Report 5.6.1 says an
+*explicit* `import Prelude ...` replaces it. AHC implements this:
+`import Prelude hiding (lookup)` frees the name for your own
+definition, `import Prelude (print, map)` narrows the Prelude to a
+list, `import Prelude ()` empties it, and `import qualified
+Prelude` forces qualification. Mechanically the explicit import
+just becomes an ordinary import view filtered from the Base
+snapshot (the same machinery as any `hiding`/only-list), and the
+renamer's final snapshot fallback switches off. Two details are
+easy to get wrong and are pinned by conformance tests: `hiding`
+filters the import's *qualified* names too (`Prelude.map` is out of
+scope under `hiding (map)` — GHC agrees), and builtin *syntax* —
+`()`, `[]`, `:`, tuples — can never be hidden, because it is
+grammar, not a Prelude export.
+
 A pleasing historical note: the parser had supported the *entire*
 module-header grammar — export lists, `qualified`, `as`, `hiding` —
 since the first month of the project, unused, because "parse the
 whole Haskell 2010 surface" was a phase-one goal. When modules were
-finally implemented, the parser needed zero changes.
+finally implemented, the parser needed zero changes; when the
+Prelude-restriction corner was finally implemented (the last item
+of the polish plan), the *import machinery* needed zero changes —
+only where the fallback applies.
 
 ---
 

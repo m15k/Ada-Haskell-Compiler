@@ -116,11 +116,17 @@ inlining barred under lambdas - sumfold 1.58x->2.10x, sort
 1.19x->1.91x, map 1.11x->1.28x, fib/bignum flat. Case-of-case was
 NOT shipped: nothing in the measured profile justified it.)
 
-### M75 - module-system corners
+### M75 - module-system corners (DONE - plan complete)
 The two EXCLUSIONS stragglers: restricting the implicit Prelude
 import (`import Prelude hiding (...)`, `import Prelude ()`), and
 same-named type synonyms in two modules (the flat Env.Synonyms map
 is keyed by bare name - give it per-module keys).
+(Shipped: Prelude restriction per Report 5.6.1, all four forms,
+qualified-view filtering, builtin syntax unhideable; 3 conformance
++ 3 both-reject differential tests. Synonym/constructor collisions
+stay clean compile errors - per-module keys would re-plumb the
+kinds-level expansion tables for a corner qualified imports rarely
+hit; documented honestly in EXCLUSIONS row 5.)
 
 ## Sequencing
 

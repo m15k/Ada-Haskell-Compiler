@@ -141,6 +141,26 @@ package body AHC.Rename is
 
       Modular : constant Boolean := Reg /= null;
 
+      --  An explicit `import Prelude ...` suppresses the implicit
+      --  whole-Prelude fallback (Report 5.6.1): resolution then goes
+      --  through the import's filtered view like any other module.
+      Prelude_Explicit : Boolean := False;
+
+      --  Builtin SYNTAX - the unit type/constructor, the list
+      --  constructors, tuples - is always in scope (GHC cannot hide
+      --  it either: it is grammar, not a Prelude export), so those
+      --  names keep the Base fallback even under an explicit
+      --  Prelude import. Lists and tuples mostly resolve through
+      --  dedicated paths; these are the names that reach the maps.
+      Unit_Name : constant Names.Real_Name_Id := Table.Intern ("()");
+      Nil_Name  : constant Names.Real_Name_Id := Table.Intern ("[]");
+      Cons_Name : constant Names.Real_Name_Id := Table.Intern (":");
+
+      function Is_Builtin_Syntax (N : Names.Name_Id) return Boolean
+      is (N = Names.Name_Id (Unit_Name)
+          or else N = Names.Name_Id (Nil_Name)
+          or else N = Names.Name_Id (Cons_Name));
+
       --  The import view matching qualifier Q (alias first), 0 if
       --  none.
       function Find_View (Q : Names.Name_Id) return Natural is
@@ -197,7 +217,8 @@ package body AHC.Rename is
          --  Qualified through an import name or alias: only that
          --  module's exports (Report 5.3) - mirrors the value path.
          if Q.Qualifier /= Names.No_Name
-           and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+           and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
+                     or else Prelude_Explicit)
            and then Q.Qualifier /= Arena.Module_Name
          then
             declare
@@ -232,9 +253,14 @@ package body AHC.Rename is
                   end if;
                end if;
             end loop;
-            C := Reg.Base.TyCons.Find (Q.Name);
-            if Builtins.TyCon_Maps.Has_Element (C) then
-               return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
+            if not Prelude_Explicit
+              or else Is_Builtin_Syntax (Q.Name)
+            then
+               C := Reg.Base.TyCons.Find (Q.Name);
+               if Builtins.TyCon_Maps.Has_Element (C) then
+                  return Core.TyCon_Id
+                    (Builtins.TyCon_Maps.Element (C));
+               end if;
             end if;
             return Core.No_TyCon;
          end;
@@ -271,6 +297,11 @@ package body AHC.Rename is
                   end if;
                end if;
             end loop;
+            if Prelude_Explicit
+              and then not Is_Builtin_Syntax (Name)
+            then
+               return 0;
+            end if;
             C := Reg.Base.DataCons.Find (Name);
             if Builtins.DataCon_Maps.Has_Element (C) then
                return Core.DataCon_Id
@@ -309,9 +340,12 @@ package body AHC.Rename is
                   end if;
                end if;
             end loop;
-            C := Reg.Base.Classes.Find (Name);
-            if Builtins.Class_Maps.Has_Element (C) then
-               return Core.Class_Id (Builtins.Class_Maps.Element (C));
+            if not Prelude_Explicit then
+               C := Reg.Base.Classes.Find (Name);
+               if Builtins.Class_Maps.Has_Element (C) then
+                  return Core.Class_Id
+                    (Builtins.Class_Maps.Element (C));
+               end if;
             end if;
             return Core.No_Class;
          end;
@@ -324,7 +358,8 @@ package body AHC.Rename is
             return Env.Synonyms.Contains (Q.Name);
          end if;
          if Q.Qualifier /= Names.No_Name
-           and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+           and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
+                     or else Prelude_Explicit)
            and then Q.Qualifier /= Arena.Module_Name
          then
             declare
@@ -336,7 +371,8 @@ package body AHC.Rename is
             end;
          end if;
          if Own.Synonyms.Contains (Q.Name)
-           or else Reg.Base.Synonyms.Contains (Q.Name)
+           or else (not Prelude_Explicit
+                    and then Reg.Base.Synonyms.Contains (Q.Name))
          then
             return True;
          end if;
@@ -393,7 +429,8 @@ package body AHC.Rename is
          if Modular then
             --  Qualified through an import name or alias.
             if Q.Qualifier /= Names.No_Name
-              and then Q.Qualifier /= Names.Name_Id (Prelude_Name)
+              and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
+                        or else Prelude_Explicit)
               and then Q.Qualifier /= Arena.Module_Name
             then
                declare
@@ -462,16 +499,18 @@ package body AHC.Rename is
                   end if;
                end;
             end if;
-            --  Base: builtins + Prelude.
-            declare
-               C : constant Builtins.Var_Maps.Cursor :=
-                 Reg.Base.Values.Find (Q.Name);
-            begin
-               if Builtins.Var_Maps.Has_Element (C) then
-                  return (Kind => Var_Res,
-                          Var => Builtins.Var_Maps.Element (C));
-               end if;
-            end;
+            --  Base: builtins + Prelude (implicit import only).
+            if not Prelude_Explicit then
+               declare
+                  C : constant Builtins.Var_Maps.Cursor :=
+                    Reg.Base.Values.Find (Q.Name);
+               begin
+                  if Builtins.Var_Maps.Has_Element (C) then
+                     return (Kind => Var_Res,
+                             Var => Builtins.Var_Maps.Element (C));
+                  end if;
+               end;
+            end if;
             Bag.Add (Diagnostics.Error,
                      Diagnostics.Rename_Out_Of_Scope,
                      Span,
@@ -1595,6 +1634,7 @@ package body AHC.Rename is
                View.Alias := Imp.Alias;
                View.Qualified := Imp.Qualified;
                if Imp.Module = Names.Name_Id (Prelude_Name) then
+                  Prelude_Explicit := True;
                   Filter (Reg.Base);
                elsif MI = 0 then
                   Bag.Add (Diagnostics.Error,

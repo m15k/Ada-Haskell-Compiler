@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+Module-system corners (M75 - the polish plan's last item):
+
+- **Restricting the implicit Prelude import** (Report 5.6.1): an
+  explicit `import Prelude ...` now replaces the implicit one.
+  `hiding` frees names for local definitions, only-lists narrow,
+  `import Prelude ()` empties, `qualified` forces qualification.
+  The explicit import reuses the ordinary import-view filter over
+  the Base snapshot; the renamer's snapshot fallback switches off
+  when one is present. Pinned by conformance (ext_prelude_*.hs -
+  suite now 62) and both-reject differentials (bad_prelude_*.hs):
+  hiding filters the QUALIFIED view too, and builtin syntax
+  (`()`, `[]`, `:`, tuples) can never be hidden - it is grammar.
+- **Same-named synonyms/constructors across modules**: both
+  namespaces are program-global; a collision is a clean
+  compile-time error ("defined more than once") where GHC would
+  disambiguate by module. Documented in EXCLUSIONS row 5 - the
+  honest remaining flatness, never silent misresolution.
+
 Measurement-driven optimizer round (M74):
 
 - **Benchmark harness** scripts/run_bench.sh: five workloads in
