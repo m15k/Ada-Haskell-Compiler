@@ -1,6 +1,6 @@
 name = "ahc"
 description = "Ada Haskell Compiler: a Haskell 2010 compiler written in Ada 2022"
-version = "1.1.0"
+version = "1.2.0"
 
 authors = ["Montez"]
 maintainers = ["Montez <montezf@gmail.com>"]

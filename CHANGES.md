@@ -1,6 +1,18 @@
 # AHC Changelog
 
-## Unreleased
+## v1.2 (2026-07-23)
+
+The polish-and-depth release: every milestone of docs/polish-plan.md
+(M64-M75) shipped. Correctness debt first (cross-module diagnostic
+spans, a join-point sharing fix found while testing fail-at-Maybe),
+then GHC-compat breadth (Applicative, Enum at Char/Double, deriving
+Enum/Bounded/Ix/Read for enumerations, properFraction + RealFloat),
+the architectural payoffs (polymorphic Ratio a and Complex a,
+Data.Set), the contracts extension (Ada's Pre/Post as pragmas -
+refinements govern values, contracts govern functions, closing the
+Ada story), and finally a measured optimizer round (up to 2.1x) and
+the module-system corners. Conformance suite: 51 -> 62 programs,
+all byte-identical to GHC 9.4.8. Nothing planned remains unbuilt.
 
 Module-system corners (M75 - the polish plan's last item):
 
