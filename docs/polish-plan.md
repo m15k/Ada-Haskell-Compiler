@@ -72,7 +72,7 @@ keysSet. Small, immediate library value.
 
 ## Track D - the contracts extension (Ada Pre/Post as pragmas)
 
-### M72 - design note (DONE - docs/contracts-design-note.md, incl. the M73a-c implementation plan); M73 - implementation
+### M72 - design note (DONE); M73 - implementation (DONE - Track D complete)
 Bring Ada's function-level contracts over as pragmas, completing
 the refinement story. See docs/contracts-design-note.md (M72
 writes it; the position in brief):

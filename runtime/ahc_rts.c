@@ -881,6 +881,20 @@ static void put_list(AhcNode *s, FILE *out) {
   }
 }
 
+/* Function contracts (docs/contracts-design-note.md): force the
+ * claim; report and die when it is False; otherwise the wrapped
+ * value. Fires when the contracted result is demanded. */
+static AhcNode *p_check_claim(AhcNode *b, AhcNode *msg, AhcNode *v) {
+  if (ahc_eval(b)->u.con.contag == FALSE_TAG) {
+    fflush(stdout);
+    fputs("ahc: ", stderr);
+    put_list(msg, stderr);
+    fputc('\n', stderr);
+    exit(1);
+  }
+  return v;
+}
+
 static AhcNode *io_put_str(AhcNode **env, AhcNode *w) {
   (void)w;
   put_list(env[0], stdout);
@@ -1482,6 +1496,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_show_string, *ahc_prim_shows_list,
   *ahc_prim_showsprec_int, *ahc_prim_showsprec_d,
   *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
+  *ahc_prim_check_claim,
   *ahc_prim_check_range_d,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
@@ -1532,6 +1547,7 @@ void ahc_rts_init(void) {
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);
   ahc_prim_check_pred = mk_prim2(p_check_pred);
+  ahc_prim_check_claim = mk_prim3(p_check_claim);
   ahc_prim_wrap_mod = mk_prim2(p_wrap_mod);
   ahc_prim_band = mk_prim2(p_band);
   ahc_prim_bor = mk_prim2(p_bor);

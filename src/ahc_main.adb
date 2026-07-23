@@ -19,6 +19,7 @@ with Ada.Environment_Variables;
 
 with AHC.Builtins;
 with AHC.CodeGen;
+with AHC.Contracts;
 with AHC.Core.Printer;
 with AHC.Desugar;
 with AHC.Diagnostics;
@@ -169,6 +170,12 @@ procedure AHC_Main is
       Group_Origins, Inst_Origins :
         AHC.Diagnostics.Origin_Vectors.Vector;
 
+      --  Function contracts (PRE/POST pragmas): collected per
+      --  module, signatures injected after the frontend, wrapping
+      --  done by AHC.Refine.
+      All_Contracts : AHC.Contracts.Contract_Vectors.Vector;
+      Contract_Map  : AHC.Contracts.Contract_Maps.Map;
+
       procedure Print_Diags is
       begin
          for I in 1 .. Bag.Count loop
@@ -263,8 +270,19 @@ procedure AHC_Main is
          L.Name := Mod_Name;
          L.Path := Ada.Strings.Unbounded.To_Unbounded_String (File);
          L.Ref := new AHC.Syntax.Module_Arena;
-         AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream);
-         AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
+         declare
+            L_Pragmas : AHC.Lexer.Span_Vectors.Vector;
+         begin
+            AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream, L_Pragmas);
+            AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
+            if not Bag.Has_Errors then
+               --  PRE/POST contract pragmas become hidden top-level
+               --  bindings in this module's arena.
+               AHC.Contracts.Collect
+                 (L.Text, L_Pragmas, Table, Bag, L.Ref.all,
+                  All_Contracts);
+            end if;
+         end;
          if Bag.Has_Errors then
             Bag.Print_All (L.Text);
             Failed := True;
@@ -339,9 +357,18 @@ procedure AHC_Main is
          Root.Text := Text;
          Root.Path := Ada.Strings.Unbounded.To_Unbounded_String (Path);
          Root.Ref := new AHC.Syntax.Module_Arena;
-         AHC.Lexer.Scan (Text, Table, Bag, Root_Stream);
-         AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
-                                  Root.Ref.all);
+         declare
+            R_Pragmas : AHC.Lexer.Span_Vectors.Vector;
+         begin
+            AHC.Lexer.Scan (Text, Table, Bag, Root_Stream, R_Pragmas);
+            AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
+                                     Root.Ref.all);
+            if not Bag.Has_Errors then
+               AHC.Contracts.Collect
+                 (Text, R_Pragmas, Table, Bag, Root.Ref.all,
+                  All_Contracts);
+            end if;
+         end;
          Root.Name :=
            (if Root.Ref.Module_Name = AHC.Names.No_Name
             then AHC.Names.Name_Id (Table.Intern ("Main"))
@@ -537,6 +564,139 @@ procedure AHC_Main is
          end loop;
       end;
 
+      --  Contracts: each contract binding's signature is DERIVED
+      --  from the contracted function's own - its tyvars and
+      --  context, its argument spine, then Bool (POST inserts the
+      --  result type). The typechecker then checks the parsed
+      --  contract lambda against it like any signatured binding.
+      if not Bag.Has_Errors then
+         for C of All_Contracts loop
+            declare
+               use type AHC.Core.Scheme_Id;
+               use type AHC.Core.Type_Kind;
+               use AHC.Contracts;
+               Fn_C : constant AHC.Builtins.Var_Maps.Cursor :=
+                 Env.Values.Find (C.Fn_Name);
+               Bd_C : constant AHC.Builtins.Var_Maps.Cursor :=
+                 Env.Values.Find (C.Bind_Name);
+               Fn_Text : constant String :=
+                 Table.Text (AHC.Names.Real_Name_Id (C.Fn_Name));
+            begin
+               if not AHC.Builtins.Var_Maps.Has_Element (Fn_C) then
+                  Bag.Add (AHC.Diagnostics.Error,
+                           AHC.Diagnostics.Rename_Out_Of_Scope,
+                           C.Span,
+                           "contract for unknown function '"
+                           & Fn_Text & "'");
+               elsif AHC.Builtins.Var_Maps.Has_Element (Bd_C) then
+                  declare
+                     FnV : constant AHC.Core.Real_Var_Id :=
+                       AHC.Builtins.Var_Maps.Element (Fn_C);
+                     BdV : constant AHC.Core.Real_Var_Id :=
+                       AHC.Builtins.Var_Maps.Element (Bd_C);
+                     Sig_C : constant AHC.Kinds.Sig_Maps.Cursor :=
+                       Sigs.Find (FnV);
+                  begin
+                     if not AHC.Kinds.Sig_Maps.Has_Element (Sig_C)
+                       or else AHC.Kinds.Sig_Maps.Element (Sig_C) =
+                                 AHC.Core.No_Scheme
+                     then
+                        Bag.Add
+                          (AHC.Diagnostics.Error,
+                           AHC.Diagnostics.Type_Signature_Too_General,
+                           C.Span,
+                           "contract requires a type signature for '"
+                           & Fn_Text & "'");
+                     else
+                        declare
+                           Sch : constant AHC.Core.Scheme :=
+                             M.Node (AHC.Core.Real_Scheme_Id
+                               (AHC.Kinds.Sig_Maps.Element (Sig_C)));
+                           Args : AHC.Core.Type_Id_Vectors.Vector;
+                           R : AHC.Core.Real_Type_Id :=
+                             AHC.Core.Real_Type_Id (Sch.S_Body);
+                           Body_T : AHC.Core.Real_Type_Id;
+                        begin
+                           while M.Node (R).Kind = AHC.Core.TFun_T
+                           loop
+                              Args.Append
+                                (AHC.Core.Type_Id
+                                   (M.Node (R).From));
+                              R := M.Node (R).To;
+                           end loop;
+                           if C.Kind = Pre_C
+                             and then Args.Is_Empty
+                           then
+                              Bag.Add
+                                (AHC.Diagnostics.Error,
+                                 AHC.Diagnostics.Parse_Error,
+                                 C.Span,
+                                 "PRE contract on a value binding"
+                                 & " ('" & Fn_Text
+                                 & "' takes no arguments)");
+                           else
+                              Body_T := M.Add
+                                (AHC.Core.Type_Node'
+                                   (Kind => AHC.Core.TCon_T,
+                                    Con => AHC.Core.Real_TyCon_Id
+                                      (Env.Bool_TC),
+                                    Refine =>
+                                      AHC.Core.No_Refinement));
+                              if C.Kind = Post_C then
+                                 Body_T := M.Add
+                                   (AHC.Core.Type_Node'
+                                      (Kind => AHC.Core.TFun_T,
+                                       From => R,
+                                       To => Body_T));
+                              end if;
+                              for I in reverse 1 .. Args.Last_Index
+                              loop
+                                 Body_T := M.Add
+                                   (AHC.Core.Type_Node'
+                                      (Kind => AHC.Core.TFun_T,
+                                       From =>
+                                         AHC.Core.Real_Type_Id
+                                           (Args (I)),
+                                       To => Body_T));
+                              end loop;
+                              Sigs.Include
+                                (BdV,
+                                 AHC.Core.Scheme_Id
+                                   (M.Add (AHC.Core.Scheme'
+                                      (Tvs => Sch.Tvs,
+                                       Context => Sch.Context,
+                                       S_Body =>
+                                         AHC.Core.Type_Id
+                                           (Body_T)))));
+                              declare
+                                 CB : Contract_Binds;
+                                 Cur : constant
+                                   Contract_Maps.Cursor :=
+                                     Contract_Map.Find (FnV);
+                              begin
+                                 if Contract_Maps.Has_Element (Cur)
+                                 then
+                                    CB := Contract_Maps.Element
+                                      (Cur);
+                                 end if;
+                                 if C.Kind = Pre_C then
+                                    CB.Pre_V :=
+                                      AHC.Core.Var_Id (BdV);
+                                 else
+                                    CB.Post_V :=
+                                      AHC.Core.Var_Id (BdV);
+                                 end if;
+                                 Contract_Map.Include (FnV, CB);
+                              end;
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end if;
+
       if not Bag.Has_Errors then
          if Mode = 't' then
             AHC.Typechecker.Check_Module
@@ -619,7 +779,9 @@ procedure AHC_Main is
                   end Img2;
                begin
                   AHC.Refine.Insert_Checks
-                    (Table, M, Sigs, Prims, Checks_Enabled => Refined);
+                    (Table, M, Sigs, Prims,
+                     Checks_Enabled => Refined,
+                     Contracts => Contract_Map);
                   AHC.Prelude_Core.Install_Bodies (Table, M, Env, Prims);
                   if Optimize then
                      declare
@@ -731,7 +893,9 @@ procedure AHC_Main is
                declare
                   Prims : AHC.Prelude_Core.Prim_Maps.Map;
                begin
-                  AHC.Refine.Insert_Checks (Table, M, Sigs, Prims);
+                  AHC.Refine.Insert_Checks
+                    (Table, M, Sigs, Prims,
+                     Contracts => Contract_Map);
                end;
             end if;
             Put (AHC.Core.Printer.Dump

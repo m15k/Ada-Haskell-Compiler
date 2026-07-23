@@ -1104,6 +1104,62 @@ rewrite every use of a refined-field constructor, which covers
 partial application (`map Port ports`) and record update for free,
 while field *reads* trust the invariant established at construction.
 
+### Function contracts: Ada's Pre and Post
+
+Refinements constrain *values*; the second half of the Ada
+extension constrains *functions*. A refinement can say "this Int is
+in 1..65535" but never "the result lies between the first two
+arguments" — that is a relation across a call, Ada's `Pre`/`Post`
+territory, and it arrives as pragmas
+(`docs/contracts-design-note.md`, `examples/contracts.hs`):
+
+    {-# PRE  clamp \lo hi x -> lo <= hi             #-}
+    {-# POST clamp \lo hi x r -> lo <= r && r <= hi #-}
+    clamp :: Int -> Int -> Int -> Int
+
+The implementation is pleasingly small because it hides inside
+machinery you have already read about. The lexer skips pragmas as
+comments (the layout engine never sees them) but records where they
+were; each PRE/POST is then re-lexed and *re-parsed as an ordinary
+top-level binding* — `$pre$clamp = \lo hi x -> lo <= hi` — spliced
+into the module by synthesizing two tokens (`$pre$clamp`, `=`) in
+front of the pragma's own expression tokens. From that moment the
+contract IS ordinary Haskell: the renamer scopes it, the
+typechecker checks it against a signature *derived* from clamp's
+own (its type variables, its class context, its argument spine,
+then `Bool`), and a type error in a contract points into the
+pragma, because the fragment is lexed over a copy of the file with
+everything else blanked out — every span is a real position.
+
+At the wrapping stage (the same `AHC.Refine` pass that inserts
+refinement checks) a contracted function becomes
+
+    f = \x1..xn -> claim (pre x1..xn) "precondition of 'f' violated"
+                     (let r = BODY x1..xn
+                      in claim (post x1..xn r) "postcondition..." r)
+
+`claim` forces its Boolean when the RESULT is demanded — the only
+honest notion of "on entry" laziness allows. Nothing is checked for
+a call whose result is never used; the result is let-shared, so the
+postcondition inspects exactly the value the caller receives; and a
+postcondition that mentions an argument the function itself never
+forced will force it — contracts observe, and that is their one
+semantic footprint. Purity pays a dividend here: Ada needs `'Old`
+to see pre-call values through mutation, while a Haskell
+postcondition just names the arguments — they cannot have changed.
+
+Contracts on polymorphic functions work because everything rides
+the dictionary machinery: `{-# POST maxOf \x y r -> r >= x #-}` on
+`maxOf :: Ord a => ...` produces a contract with the same `Ord a`
+context, and the wrapper threads the same dictionary parameters to
+the body, the pre and the post. `--unchecked` strips every claim —
+Ada's assertion policy, shared with ranges and `satisfying` — and
+GHC ignores the pragmas entirely (a stderr warning), so a
+contract-carrying program is still ordinary portable Haskell that
+simply runs unchecked elsewhere. The conformance suite exploits
+exactly that: a program whose contracts hold is byte-identical
+under both compilers.
+
 ---
 
 ## 13. The optimizer

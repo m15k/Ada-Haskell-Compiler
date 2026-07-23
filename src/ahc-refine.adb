@@ -9,12 +9,15 @@ package body AHC.Refine is
       M              : in out Core.Core_Module;
       Sigs           : Kinds.Sig_Maps.Map;
       Prims          : in out Prelude_Core.Prim_Maps.Map;
-      Checks_Enabled : Boolean := True)
+      Checks_Enabled : Boolean := True;
+      Contracts      : AHC.Contracts.Contract_Maps.Map :=
+        AHC.Contracts.Contract_Maps.Empty_Map)
    is
       Check_Prim : Var_Id := No_Var;   --  minted on first use
       Pred_Prim  : Var_Id := No_Var;
       Mod_Prim   : Var_Id := No_Var;
       FRange_Prim : Var_Id := No_Var;
+      Claim_Prim : Var_Id := No_Var;
 
       function Mint_Prim
         (Name, Symbol : String; Cache : in out Var_Id)
@@ -298,6 +301,196 @@ package body AHC.Refine is
             end if;
          end;
       end loop;
+
+      --  Function contracts (docs/contracts-design-note.md): each
+      --  contracted binding f = RHS becomes
+      --    f = \x1..xn -> claim (preF x1..xn) preMsg
+      --                     (let r = RHS x1..xn
+      --                      in claim (postF x1..xn r) postMsg r)
+      --  Claims fire at demand time (forcing the result forces pre,
+      --  then post); the result is let-shared so the value the
+      --  postcondition inspects is the value the caller receives.
+      --  Contracts wrap OUTSIDE the refinement wrappers above.
+      --  Every embedded reference is a fresh Var node.
+      if Checks_Enabled and then not Contracts.Is_Empty then
+         declare
+            function ClPrim return Real_Var_Id
+            is (Mint_Prim ("$checkClaim", "ahc_prim_check_claim",
+                           Claim_Prim));
+
+            Span0 : constant Diagnostics.Source_Span :=
+              (Start => 1, Stop => 1);
+
+            function CV (V : Var_Id) return Real_Expr_Id
+            is (M.Add (Expr_Node'(Kind => Var_C, Span => Span0,
+                                  V => Real_Var_Id (V))));
+
+            function CAp (F, A : Real_Expr_Id) return Real_Expr_Id
+            is (M.Add (Expr_Node'(Kind => App_C, Span => Span0,
+                                  Fun => F, Arg => A)));
+
+            function CStr (S : String) return Real_Expr_Id
+            is (M.Add (Expr_Node'
+                  (Kind => Lit_C, Span => Span0,
+                   Lit => (Kind => L_String,
+                           Text => Names.Name_Id
+                             (Table.Intern (S))))));
+
+            function Claim
+              (B : Real_Expr_Id; Msg : String; V : Real_Expr_Id)
+               return Real_Expr_Id
+            is (CAp (CAp (CAp (CV (Var_Id (ClPrim)), B),
+                          CStr (Msg)), V));
+
+            procedure Wrap_Contract
+              (FV : Real_Var_Id;
+               CB : AHC.Contracts.Contract_Binds)
+            is
+               Sig_C : constant Kinds.Sig_Maps.Cursor :=
+                 Sigs.Find (FV);
+               Fn_Text : constant String :=
+                 Table.Text
+                   (Names.Real_Name_Id (M.Info (FV).Name));
+
+               function Build (Old : Real_Expr_Id)
+                 return Real_Expr_Id
+               is
+                  --  Refine runs AFTER dictionary elaboration: a
+                  --  constrained function's rhs is dict-lambda
+                  --  wrapped, and so are the elaborated contract
+                  --  globals - thread the same dictionary
+                  --  parameters through all three.
+                  Sch : constant Scheme :=
+                    M.Node (Real_Scheme_Id
+                      (Kinds.Sig_Maps.Element (Sig_C)));
+                  Arity : Natural := 0;
+                  Ds, Xs : Var_Id_Vectors.Vector;
+                  R_V : constant Real_Var_Id :=
+                    M.Mint_Var ((Name => Table.Intern ("$r"),
+                                 Span => Span0, others => <>));
+                  Applied : Real_Expr_Id;
+                  Inner : Real_Expr_Id;
+
+                  function Applied_To_Ctx
+                    (F : Real_Expr_Id) return Real_Expr_Id
+                  is
+                     Acc : Real_Expr_Id := F;
+                  begin
+                     for D of Ds loop
+                        Acc := CAp (Acc, CV (D));
+                     end loop;
+                     for X of Xs loop
+                        Acc := CAp (Acc, CV (X));
+                     end loop;
+                     return Acc;
+                  end Applied_To_Ctx;
+               begin
+                  declare
+                     T : Real_Type_Id :=
+                       Real_Type_Id (Sch.S_Body);
+                  begin
+                     while M.Node (T).Kind = TFun_T loop
+                        Arity := Arity + 1;
+                        T := M.Node (T).To;
+                     end loop;
+                  end;
+                  for I in 1 .. Sch.Context.Last_Index loop
+                     Ds.Append (Var_Id
+                       (M.Mint_Var
+                          ((Name => Table.Intern ("$cd"),
+                            Span => Span0, others => <>))));
+                  end loop;
+                  for I in 1 .. Arity loop
+                     Xs.Append (Var_Id
+                       (M.Mint_Var
+                          ((Name => Table.Intern ("$c"),
+                            Span => Span0, others => <>))));
+                  end loop;
+
+                  Applied := Applied_To_Ctx (Old);
+
+                  if CB.Post_V /= No_Var then
+                     declare
+                        Post_Call : constant Real_Expr_Id :=
+                          CAp (Applied_To_Ctx (CV (CB.Post_V)),
+                               CV (Var_Id (R_V)));
+                        Binds : Bind_Vectors.Vector;
+                     begin
+                        Binds.Append
+                          (Bind_Pair'(Binder => R_V,
+                                      Rhs => Applied));
+                        Inner := M.Add (Expr_Node'
+                          (Kind => Let_C, Span => Span0,
+                           Is_Rec => False, Binds => Binds,
+                           Let_Body =>
+                             Claim (Post_Call,
+                                    "postcondition of '"
+                                    & Fn_Text & "' violated",
+                                    CV (Var_Id (R_V)))));
+                     end;
+                  else
+                     Inner := Applied;
+                  end if;
+
+                  if CB.Pre_V /= No_Var then
+                     Inner :=
+                       Claim (Applied_To_Ctx (CV (CB.Pre_V)),
+                              "precondition of '"
+                              & Fn_Text & "' violated",
+                              Inner);
+                  end if;
+
+                  for I in reverse 1 .. Xs.Last_Index loop
+                     Inner := M.Add (Expr_Node'
+                       (Kind => Lam_C, Span => Span0,
+                        Binder => Real_Var_Id (Xs (I)),
+                        Lam_Body => Inner));
+                  end loop;
+                  for I in reverse 1 .. Ds.Last_Index loop
+                     Inner := M.Add (Expr_Node'
+                       (Kind => Lam_C, Span => Span0,
+                        Binder => Real_Var_Id (Ds (I)),
+                        Lam_Body => Inner));
+                  end loop;
+                  return Inner;
+               end Build;
+            begin
+               if not Kinds.Sig_Maps.Has_Element (Sig_C) then
+                  return;
+               end if;
+               for GI in 1 .. M.Top_Binds.Last_Index loop
+                  declare
+                     G : Top_Bind := M.Top_Binds (GI);
+                     Changed : Boolean := False;
+                  begin
+                     for BI in 1 .. G.Binds.Last_Index loop
+                        if G.Binds (BI).Binder = FV then
+                           G.Binds.Replace_Element
+                             (BI, Bind_Pair'
+                                (Binder => FV,
+                                 Rhs => Build
+                                   (G.Binds (BI).Rhs)));
+                           Changed := True;
+                        end if;
+                     end loop;
+                     if Changed then
+                        M.Top_Binds.Replace_Element (GI, G);
+                     end if;
+                  end;
+               end loop;
+            end Wrap_Contract;
+
+            Cur : AHC.Contracts.Contract_Maps.Cursor :=
+              Contracts.First;
+         begin
+            while AHC.Contracts.Contract_Maps.Has_Element (Cur) loop
+               Wrap_Contract
+                 (AHC.Contracts.Contract_Maps.Key (Cur),
+                  AHC.Contracts.Contract_Maps.Element (Cur));
+               AHC.Contracts.Contract_Maps.Next (Cur);
+            end loop;
+         end;
+      end if;
 
       --  Constructor-site checks: every occurrence of a data
       --  constructor whose fields carry refinements is eta-wrapped so

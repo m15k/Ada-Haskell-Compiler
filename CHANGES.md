@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Function contracts (M72-M73, docs/contracts-design-note.md):
+
+- **Ada's Pre/Post as pragmas**: {-# PRE f expr #-} /
+  {-# POST f expr #-}. Each becomes a hidden top-level binding
+  parsed from the pragma's own tokens (spans point into the
+  pragma, so contract type errors land exactly there), typechecked
+  against a signature DERIVED from f's own - tyvars, class
+  context, argument spine, Bool. AHC.Refine wraps the function:
+  forcing the result forces the precondition, then the body, then
+  the postcondition against the let-shared result. Undemanded
+  calls check nothing (demand time, like every refinement check);
+  polymorphic functions get polymorphic contracts with the
+  dictionaries threaded through; --unchecked strips all claims
+  (Ada's assertion policy); one new runtime prim (check_claim).
+- Compile-time errors: unknown function, duplicate PRE/POST,
+  missing type signature, PRE on a value binding, and ordinary
+  type errors at pragma spans.
+- GHC ignores the pragmas (stderr warning only), so contracted
+  source stays portable: ext_contracts.hs runs byte-identical
+  under both compilers (suite now 59); tests/exec/contracts.hs
+  pins the violation messages and demand-time semantics;
+  examples/contracts.hs is the worked tour (clamp, a
+  self-specifying integer sqrt, sorted-precondition binary search,
+  polymorphic maxOf, laziness demo).
+
 Track C - the architectural payoffs (M70-M71):
 
 - **Polymorphic Ratio a and Complex a** (M70): data Ratio a with

@@ -10,6 +10,7 @@
 --  hide the rest of the file.
 
 with Ada.Containers;
+with Ada.Containers.Vectors;
 
 with AHC.Diagnostics;
 with AHC.Names;
@@ -21,11 +22,26 @@ package AHC.Lexer is
    use type Ada.Containers.Count_Type;
    use type Tokens.Token_Kind;
 
+   --  Pragma comments ({-# ... #-}) are skipped like any block
+   --  comment - the layout engine never sees them - but their spans
+   --  are recorded so AHC.Contracts can re-lex the interesting ones.
+   package Span_Vectors is new Ada.Containers.Vectors
+     (Positive, Diagnostics.Source_Span, "=" => Diagnostics."=");
+
    procedure Scan
      (Text   : Source_Text.Source;
       Table  : in out Names.Name_Table;
       Bag    : in out Diagnostics.Diagnostic_Bag;
       Result : out Tokens.Token_Vectors.Vector)
+     with Post => Result.Length >= 1
+                  and then Result.Last_Element.Kind = Tokens.End_Of_File;
+
+   procedure Scan
+     (Text    : Source_Text.Source;
+      Table   : in out Names.Name_Table;
+      Bag     : in out Diagnostics.Diagnostic_Bag;
+      Result  : out Tokens.Token_Vectors.Vector;
+      Pragmas : out Span_Vectors.Vector)
      with Post => Result.Length >= 1
                   and then Result.Last_Element.Kind = Tokens.End_Of_File;
 

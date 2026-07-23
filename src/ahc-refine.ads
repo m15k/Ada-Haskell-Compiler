@@ -28,6 +28,7 @@
 --  policy from the design note), the pass is a no-op and refined
 --  programs run at full speed on the unchecked base types.
 
+with AHC.Contracts;
 with AHC.Core;
 with AHC.Kinds;
 with AHC.Names;
@@ -35,11 +36,15 @@ with AHC.Prelude_Core;
 
 package AHC.Refine is
 
+   --  Contracts: PRE/POST claim wrapping per
+   --  docs/contracts-design-note.md; stripped with Checks_Enabled.
    procedure Insert_Checks
      (Table          : in out Names.Name_Table;
       M              : in out Core.Core_Module;
       Sigs           : Kinds.Sig_Maps.Map;
       Prims          : in out Prelude_Core.Prim_Maps.Map;
-      Checks_Enabled : Boolean := True);
+      Checks_Enabled : Boolean := True;
+      Contracts      : AHC.Contracts.Contract_Maps.Map :=
+        AHC.Contracts.Contract_Maps.Empty_Map);
 
 end AHC.Refine;

@@ -1,6 +1,8 @@
 # Design note: Function Contracts (Ada Pre/Post as pragmas)
 
-**Status:** DESIGN (M72). Implementation plan at the end (M73a-c).
+**Status:** IMPLEMENTED (M73). See examples/contracts.hs for the
+worked tour; tests/exec/contracts.hs and ext_contracts.hs pin the
+semantics.
 
 AHC already has one Ada-inspired verification extension: refinement
 types (`docs/refinement-types-design-note.md`) attach checkable

@@ -11,3 +11,4 @@ examples/lisp/minilisp.c
 .DS_Store
 examples/lisp/lisp.c
 examples/lisp/minilisp.build/
+examples/contracts

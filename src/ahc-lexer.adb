@@ -105,6 +105,18 @@ package body AHC.Lexer is
       Bag    : in out Diagnostics.Diagnostic_Bag;
       Result : out Tokens.Token_Vectors.Vector)
    is
+      Ignore : Span_Vectors.Vector;
+   begin
+      Scan (Text, Table, Bag, Result, Ignore);
+   end Scan;
+
+   procedure Scan
+     (Text    : Source_Text.Source;
+      Table   : in out Names.Name_Table;
+      Bag     : in out Diagnostics.Diagnostic_Bag;
+      Result  : out Tokens.Token_Vectors.Vector;
+      Pragmas : out Span_Vectors.Vector)
+   is
       Len : constant Natural := Text.Length;
 
       Pos       : Positive := 1;   --  next unconsumed offset
@@ -207,9 +219,12 @@ package body AHC.Lexer is
       end Skip_Line_Comment;
 
       --  At "{-". Nested; the contents are not tokenized, so "-}" inside
-      --  string syntax still closes (Report 2.3).
+      --  string syntax still closes (Report 2.3). Pragma comments
+      --  ({-# ... #-}) additionally record their span for
+      --  AHC.Contracts; the layout engine never sees any of this.
       procedure Skip_Block_Comment is
          Start : constant Positive := Pos;
+         Is_Pragma : constant Boolean := Peek (2) = '#';
          Depth : Natural := 1;
       begin
          Pos := Pos + 2;
@@ -228,6 +243,12 @@ package body AHC.Lexer is
                Pos := Pos + 1;
             end if;
          end loop;
+         if Is_Pragma then
+            Pragmas.Append
+              (Diagnostics.Source_Span'
+                 (Start => Source_Text.Byte_Offset (Start),
+                  Stop  => Source_Text.Byte_Offset (Pos)));
+         end if;
       end Skip_Block_Comment;
 
       ------------------------------------------------------------------

@@ -81,6 +81,22 @@ at signature and annotation boundaries, and `ahc emit --unchecked`
 mirroring Ada's release-mode contract policy - modular wrapping is
 arithmetic semantics, not a check, so it is always applied.
 
+Function contracts complete the Ada extension (M73,
+docs/contracts-design-note.md, examples/contracts.hs): Ada's
+Pre/Post as pragmas -
+
+    {-# PRE  clamp \lo hi x -> lo <= hi             #-}
+    {-# POST clamp \lo hi x r -> lo <= r && r <= hi #-}
+
+Predicates are ordinary typechecked Haskell (checked against a
+signature derived from the function's own, class context included;
+contract type errors land on the pragma), and the checks fire at
+demand time - forcing the result checks pre, body, then post
+against the shared result; an undemanded call checks nothing.
+Purity removes Ada's 'Old; --unchecked strips claims; GHC ignores
+the pragmas, so contracted programs remain portable Haskell (the
+conformance suite runs one byte-identical under both compilers).
+
 Show is Report-complete where it counts: showsPrec/showList are real
 methods, strings print as escaped string literals ("show \"ab\"" and
 friends match GHC exactly), negative arguments parenthesize, and
