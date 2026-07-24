@@ -171,6 +171,70 @@ package body AHC.CodeGen is
          end;
       end Int_Text;
 
+      --  Exact rational literals: the :% constructor's tag when
+      --  Data.Ratio is in the program, -1 otherwise (float literals
+      --  then fall back to plain double nodes - the pre-Ratio
+      --  world, byte-identical because both paths round correctly).
+      Ratio_Tag : Integer := -1;
+
+      --  Split a float lexeme ddd[.ddd][e[+|-]ddd] into exact
+      --  decimal numerator/denominator text (den = a power of 10).
+      procedure Rat_Parts
+        (T : Names.Name_Id; Num, Den : out Unbounded_String)
+      is
+         S : constant String := Table.Text (Names.Real_Name_Id (T));
+         Digits_S : Unbounded_String;
+         Frac : Natural := 0;
+         E10 : Integer := 0;
+         I : Positive := S'First;
+         In_Frac : Boolean := False;
+      begin
+         while I <= S'Last and then S (I) not in 'e' | 'E' loop
+            if S (I) = '.' then
+               In_Frac := True;
+            else
+               Append (Digits_S, S (I));
+               if In_Frac then
+                  Frac := Frac + 1;
+               end if;
+            end if;
+            I := I + 1;
+         end loop;
+         if I <= S'Last then          --  exponent part
+            declare
+               J : Positive := I + 1;
+               Neg : Boolean := False;
+               V : Integer := 0;
+            begin
+               if J <= S'Last and then S (J) in '+' | '-' then
+                  Neg := S (J) = '-';
+                  J := J + 1;
+               end if;
+               while J <= S'Last loop
+                  V := V * 10 + (Character'Pos (S (J)) - 48);
+                  J := J + 1;
+               end loop;
+               E10 := (if Neg then -V else V);
+            end;
+         end if;
+         E10 := E10 - Frac;
+         declare
+            DS : constant String := To_String (Digits_S);
+            F : Positive := DS'First;
+         begin
+            while F < DS'Last and then DS (F) = '0' loop
+               F := F + 1;
+            end loop;
+            Num := To_Unbounded_String (DS (F .. DS'Last));
+         end;
+         Den := To_Unbounded_String ("1");
+         if E10 >= 0 then
+            Append (Num, [1 .. E10 => '0']);
+         else
+            Append (Den, [1 .. -E10 => '0']);
+         end if;
+      end Rat_Parts;
+
       ------------------------------------------------------------------
       --  Free local variables (bound-set threading)
       ------------------------------------------------------------------
@@ -429,6 +493,17 @@ package body AHC.CodeGen is
                           & "L)";
                      end;
                   when L_Float =>
+                     if Ratio_Tag >= 0 then
+                        declare
+                           Num, Den : Unbounded_String;
+                        begin
+                           Rat_Parts (N.Lit.Text, Num, Den);
+                           return "ahc_mk_ratlit("
+                             & Img (Ratio_Tag) & ", """
+                             & To_String (Num) & """, """
+                             & To_String (Den) & """)";
+                        end;
+                     end if;
                      return "ahc_mk_double("
                        & Table.Text (Names.Real_Name_Id (N.Lit.Text))
                        & ")";
@@ -768,6 +843,22 @@ package body AHC.CodeGen is
          if Builtins.Var_Maps.Has_Element (C) then
             Main_Var := Var_Id (Builtins.Var_Maps.Element (C));
          end if;
+      end;
+
+      --  Exact rational literals need :%'s runtime tag; absent
+      --  Data.Ratio, Ratio_Tag stays -1 and float literals emit
+      --  plain double nodes as before.
+      declare
+         Colon_Pct : constant Names.Name_Id :=
+           Names.Name_Id (Table.Intern (":%"));
+      begin
+         for DI in 1 .. M.Last_DataCon loop
+            if M.Info (Core.Real_DataCon_Id (DI)).Name = Colon_Pct
+            then
+               Ratio_Tag :=
+                 Integer (M.Info (Core.Real_DataCon_Id (DI)).Tag);
+            end if;
+         end loop;
       end;
 
       --  Shared header: extern CAF globals + unit init prototypes.

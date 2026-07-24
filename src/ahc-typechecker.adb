@@ -281,6 +281,53 @@ package body AHC.Typechecker is
             return;
          end if;
 
+         --  The wired Rational placeholder behaves as a nullary
+         --  synonym the moment a library defines `type Rational`
+         --  (Data.Ratio's `Ratio Integer`): expand it here so the
+         --  wired fromRational scheme meets the source type. The
+         --  cached Core rhs is filled by AHC.Kinds when the
+         --  defining module's kind pass runs; before that the
+         --  placeholder stays opaque, exactly as wired.
+         if NA.Kind = TCon_T
+           and then NA.Con = Env.Rational_TC
+           and then (NB.Kind /= TCon_T
+                     or else NB.Con /= Env.Rational_TC)
+         then
+            declare
+               C : constant Builtins.Syn_Maps.Cursor :=
+                 Env.Synonyms.Find (Table.Intern ("Rational"));
+            begin
+               if Builtins.Syn_Maps.Has_Element (C)
+                 and then Builtins.Syn_Maps.Element (C).Core_Rhs
+                          /= Core.No_Type
+               then
+                  Unify (Real_Type_Id
+                    (Builtins.Syn_Maps.Element (C).Core_Rhs),
+                    ZB, Span);
+                  return;
+               end if;
+            end;
+         end if;
+         if NB.Kind = TCon_T
+           and then NB.Con = Env.Rational_TC
+           and then (NA.Kind /= TCon_T
+                     or else NA.Con /= Env.Rational_TC)
+         then
+            declare
+               C : constant Builtins.Syn_Maps.Cursor :=
+                 Env.Synonyms.Find (Table.Intern ("Rational"));
+            begin
+               if Builtins.Syn_Maps.Has_Element (C)
+                 and then Builtins.Syn_Maps.Element (C).Core_Rhs
+                          /= Core.No_Type
+               then
+                  Unify (ZA, Real_Type_Id
+                    (Builtins.Syn_Maps.Element (C).Core_Rhs), Span);
+                  return;
+               end if;
+            end;
+         end if;
+
          case NA.Kind is
             when TCon_T =>
                if not Same_Con_Erased (NA, NB) then

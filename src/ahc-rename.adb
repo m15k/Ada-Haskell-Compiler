@@ -1171,6 +1171,44 @@ package body AHC.Rename is
                  Env.Classes.Find (DC.Name);
             begin
                if Builtins.Class_Maps.Has_Element (C) then
+                  --  Enum/Bounded/Ix/Read derive only for
+                  --  ENUMERATIONS here; a non-nullary constructor
+                  --  is a compile-time rejection (GHC rejects most
+                  --  of these shapes too; the ones it accepts -
+                  --  single-constructor Bounded/Ix - are honestly
+                  --  unimplemented, and a loud error beats the
+                  --  runtime stub it used to be).
+                  declare
+                     DN : constant String := Text (DC.Name);
+                  begin
+                     if DN in "Enum" | "Bounded" | "Ix" | "Read" then
+                        for CI of N.D_Cons loop
+                           declare
+                              CN : constant Con_Node :=
+                                Arena.Node (CI);
+                              Nullary : Boolean := True;
+                           begin
+                              case CN.Shape is
+                                 when Prefix_Con | Infix_Con =>
+                                    Nullary := CN.Args.Is_Empty;
+                                 when Record_Con =>
+                                    Nullary := CN.Fields.Is_Empty;
+                              end case;
+                              if not Nullary then
+                                 Bag.Add
+                                   (Diagnostics.Error,
+                                    Diagnostics.Rename_Unsupported,
+                                    N.Span,
+                                    "cannot derive " & DN & " for '"
+                                    & Text (N.D_Name)
+                                    & "': all constructors must "
+                                    & "be nullary");
+                                 goto Next_Derive;
+                              end if;
+                           end;
+                        end loop;
+                     end if;
+                  end;
                   declare
                      Cl : constant Core.Real_Class_Id :=
                        Builtins.Class_Maps.Element (C);
@@ -1221,6 +1259,7 @@ package body AHC.Rename is
                            & Text (DC.Name) & "'");
                end if;
             end;
+            <<Next_Derive>>
          end loop;
          pragma Unreferenced (D);
       end Declare_Data;

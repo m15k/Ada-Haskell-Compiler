@@ -274,6 +274,8 @@ package body AHC.Prelude_Core is
         Prim ("primerror", "ahc_prim_error");
       P_Seq : constant Real_Var_Id :=
         Prim ("primseq", "ahc_prim_seq");
+      P_FromRatD : constant Real_Var_Id :=
+        Prim ("primfromRationalD", "ahc_prim_from_rational_d");
 
       ------------------------------------------------------------------
       --  Method-set builders for instance dictionaries
@@ -1425,7 +1427,10 @@ package body AHC.Prelude_Core is
                         Ms.Append (V (P_DivD));
                         Ms.Append
                           (Lam (X, Ap2 (V (P_DivD), One, V (X))));
-                        Ms.Append (Lam (R, V (R)));
+                        --  Exact rational pair (or a legacy double
+                        --  node) -> one correctly rounded Double.
+                        Ms.Append (V (P_FromRatD));
+                        pragma Unreferenced (R);
                      end;
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Show_Cl

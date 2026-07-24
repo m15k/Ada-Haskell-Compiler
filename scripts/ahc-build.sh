@@ -57,7 +57,12 @@ done
 
 # Graph reduction evaluates long thunk chains (a 1M-element foldl)
 # by C recursion; give the main thread a 512MB stack so depth limits
-# match practical programs rather than the 8MB default.
+# match practical programs rather than the 8MB default. The linker
+# spelling is per-OS (Darwin -stack_size; ELF -z stacksize).
+case "$(uname)" in
+  Darwin) stack_ld="-Wl,-stack_size,0x20000000" ;;
+  *)      stack_ld="-Wl,-z,stacksize=0x20000000" ;;
+esac
 # shellcheck disable=SC2086
-clang -O1 -o "$out" -Wl,-stack_size,0x20000000 $objs $gc_ldflags
+clang -O1 -o "$out" $stack_ld $objs $gc_ldflags
 echo "built $out"

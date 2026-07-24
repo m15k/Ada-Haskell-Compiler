@@ -50,3 +50,4 @@ instance Integral a => Num (Ratio a) where
 instance Integral a => Fractional (Ratio a) where
   (a :% b) / (c :% d) = reduceR (a * d) (b * c)
   recip (a :% b) = reduceR b a
+  fromRational (n :% d) = fromInteger n % fromInteger d

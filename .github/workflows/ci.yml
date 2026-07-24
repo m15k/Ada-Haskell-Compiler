@@ -6,33 +6,70 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache GHC (the oracle)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ghcup
+          key: ghcup-9.4.8-${{ runner.os }}
+
+      - name: Install GHC 9.4.8
+        run: |
+          if [ ! -x "$HOME/.ghcup/bin/runghc" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
+              | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 BOOTSTRAP_HASKELL_MINIMAL=1 sh
+            "$HOME/.ghcup/bin/ghcup" install ghc 9.4.8 --set
+          fi
+          "$HOME/.ghcup/bin/runghc" --version
+
       - uses: alire-project/setup-alire@v4
 
-      - name: Build (validation profile)
+      - name: Select GNAT toolchain
+        run: alr -n toolchain --select gnat_native gprbuild
+
+      - name: Build (validation - contracts on)
         run: alr -n build --validation
 
-      - name: Build (release profile)
-        run: alr -n build --release
+      - name: Build (release)
+        run: alr -n build --release && alr -n build --validation
 
-      - name: Build tests
-        working-directory: tests
-        run: alr -n build --validation
+      - name: Unit tests (219)
+        run: |
+          cd tests
+          alr -n build
+          ./bin/ahc_tests
 
-      - name: Run unit tests
-        working-directory: tests
-        run: ./bin/ahc_tests
-
-      - name: Smoke-check driver
-        run: ./bin/ahc --version
-
-      - name: Run golden tests
+      - name: Goldens
         run: scripts/run_golden.sh
+
+      - name: Parse differential
+        run: scripts/run_differential.sh
+
+      - name: Type differential
+        run: scripts/run_differential_types.sh
+
+      - name: Conformance (byte-identical to GHC)
+        run: scripts/run_conformance.sh
+
+      - name: Execution tests
+        run: scripts/run_exec.sh
+
+      - name: Examples (dogfood)
+        run: scripts/run_examples.sh
+
+      - name: Separate-compilation proofs
+        run: scripts/run_separate.sh
+
+      - name: Contract discharge proofs
+        run: scripts/run_discharge.sh
+
+      - name: REPL transcripts
+        run: scripts/run_repl.sh
+
+      - name: Fuzz (50 seeds)
+        run: scripts/run_fuzz.sh 50 1

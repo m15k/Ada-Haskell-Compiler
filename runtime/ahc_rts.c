@@ -387,6 +387,136 @@ static void big_quotrem(AhcNode *a, AhcNode *b,
   *r_node = mk_big(A.sign, r, nr);
 }
 
+/* ----- exact rational literals (Report 6.4) ----------------------
+   A float literal compiles to ahc_mk_ratlit(tag, "num", "den"):
+   an exact numerator/denominator pair carried as a Ratio-shaped
+   CON node (codegen supplies :%'s tag), so `2.5 :: Rational` is
+   exactly 25/10 and Data.Ratio's source fromRational reduces it.
+   Fractional Double's fromRational converts the pair with ONE
+   round-to-nearest-even, so Double literals keep strtod-exact
+   values. (Known limit: literals rounding into the subnormal
+   range may double-round via ldexp - far outside any oracle
+   test.) */
+
+static AhcNode *int_from_dec(const char *sdec) {
+  size_t len = strlen(sdec);
+  if (len < 19) {
+    return ahc_mk_int(strtol(sdec, NULL, 10));
+  }
+  return ahc_mk_big_str(sdec);
+}
+
+AhcNode *ahc_mk_ratlit(long contag, const char *n, const char *d) {
+  AhcNode *r = ahc_mk_con(contag, 2);
+  r->u.con.fields[0] = int_from_dec(n);
+  r->u.con.fields[1] = int_from_dec(d);
+  return r;
+}
+
+static int view_bitlen(BigView V) {
+  int b;
+  limb top;
+  if (V.sign == 0) return 0;
+  b = 32 * (V.n - 1);
+  top = V.d[V.n - 1];
+  while (top) { b++; top >>= 1; }
+  return b;
+}
+
+/* node * 2^shift as a fresh canonical node (shift >= 0). */
+static AhcNode *node_shl(AhcNode *a, int shift) {
+  limb t[2];
+  BigView A = big_view(a, t);
+  int words = shift / 32, bits = shift % 32;
+  int n = A.n + words + 1;
+  limb *d = (limb *)AHC_ALLOC(sizeof(limb) * n);
+  int i;
+  for (i = 0; i < n; i++) d[i] = 0;
+  for (i = 0; i < A.n; i++) {
+    d[i + words] |= (limb)(((unsigned long)A.d[i] << bits)
+                           & 0xFFFFFFFFUL);
+    if (bits)
+      d[i + words + 1] |=
+        (limb)((unsigned long)A.d[i] >> (32 - bits));
+  }
+  return mk_big(A.sign, d, n);
+}
+
+static int fits_double_exact(AhcNode *e, double *out) {
+  if (e->tag == AHC_INT) {
+    long v = e->u.i;
+    if (v >= -(1L << 53) && v <= (1L << 53)) {
+      *out = (double)v;
+      return 1;
+    }
+    return 0;
+  }
+  {
+    limb t[2];
+    BigView V = big_view(e, t);
+    if (view_bitlen(V) <= 53) {
+      double v = 0;
+      int i;
+      for (i = V.n - 1; i >= 0; i--) v = v * 4294967296.0 + V.d[i];
+      *out = V.sign < 0 ? -v : v;
+      return 1;
+    }
+    return 0;
+  }
+}
+
+static double rat_to_double(AhcNode *n, AhcNode *d) {
+  double dn, dd;
+  if (fits_double_exact(n, &dn) && fits_double_exact(d, &dd))
+    return dn / dd;      /* both exact: one IEEE rounding */
+  {
+    limb t1[2], t2[2];
+    BigView N = big_view(n, t1), D = big_view(d, t2);
+    int bn = view_bitlen(N), bd = view_bitlen(D);
+    int shift = 55 - (bn - bd);
+    AhcNode *ns = n, *ds = d, *q, *r;
+    unsigned long qv = 0;
+    int sticky, nb, lo, k;
+    unsigned long mant;
+    if (N.sign == 0) return 0.0;
+    if (shift > 0) ns = node_shl(n, shift);
+    else if (shift < 0) ds = node_shl(d, -shift);
+    big_quotrem(ns, ds, &q, &r);
+    sticky = !(r->tag == AHC_INT && r->u.i == 0);
+    if (q->tag == AHC_INT) qv = (unsigned long)q->u.i;
+    else {
+      limb t3[2];
+      BigView Q = big_view(q, t3);
+      int i;
+      for (i = Q.n - 1; i >= 0; i--) qv = (qv << 32) | Q.d[i];
+    }
+    nb = 0;
+    { unsigned long x = qv; while (x) { nb++; x >>= 1; } }
+    lo = nb - 53;            /* > 0 by construction (>= 54 bits) */
+    mant = qv >> lo;
+    if ((qv >> (lo - 1)) & 1UL) {          /* round bit */
+      if (sticky || (qv & ((1UL << (lo - 1)) - 1UL))
+          || (mant & 1UL))
+        mant++;
+    }
+    k = (nb - 53) - shift;
+    {
+      double v = ldexp((double)mant, k);
+      return N.sign < 0 ? -v : v;
+    }
+  }
+}
+
+static AhcNode *p_from_rational_d(AhcNode *a) {
+  AhcNode *e = ahc_eval(a);
+  if (e->tag == AHC_DOUBLE) return e;   /* legacy literal path */
+  {
+    AhcNode *n = ahc_eval(e->u.con.fields[0]);
+    AhcNode *d = ahc_eval(e->u.con.fields[1]);
+    return ahc_mk_double(rat_to_double(n, d));
+  }
+}
+
 /* Report 6.4.2: div/mod floor toward negative infinity. */
 static void big_divmod_fl(AhcNode *a, AhcNode *b,
                           AhcNode **q_node, AhcNode **r_node) {
@@ -1685,7 +1815,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_enum_from_to_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
-  *ahc_prim_error, *ahc_prim_seq, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_error, *ahc_prim_seq, *ahc_prim_from_rational_d,
+  *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
   *ahc_prim_popcount,
@@ -1757,6 +1888,7 @@ void ahc_rts_init(void) {
   ahc_prim_return_io = mk_prim1(p_return_io);
   ahc_prim_error = mk_prim1(p_error);
   ahc_prim_seq = mk_prim2(p_seq);
+  ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);
