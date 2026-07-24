@@ -1,9 +1,19 @@
 name: CI
 
+# PARKED: GitHub Actions on this private repo is blocked by an
+# account billing/spending-limit setting, so automatic runs would
+# only produce noise. The full suite gates every milestone LOCALLY
+# in the meantime. To activate CI once billing is resolved (or the
+# repo goes public), replace the trigger below with:
+#
+#   on:
+#     push:
+#       branches: [main]
+#     pull_request:
+#
+# and run once via: gh workflow run ci.yml
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   suite:
