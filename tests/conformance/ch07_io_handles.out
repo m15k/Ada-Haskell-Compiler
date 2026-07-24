@@ -1,0 +1,16 @@
+line one
+'l'
+False
+ine two
+x
+appended
+line one
+line two
+x
+appended
+8
+overwritten
+ReadMode
+[ReadMode,WriteMode,AppendMode,ReadWriteMode]
+(True,True)
+(True,False)

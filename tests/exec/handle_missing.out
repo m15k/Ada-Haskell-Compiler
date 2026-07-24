@@ -1,0 +1,2 @@
+start
+ahc: /tmp/ahc_no_such_file_ever.txt: openFile: does not exist

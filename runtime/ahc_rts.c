@@ -1199,6 +1199,175 @@ static AhcNode *p_readfile(AhcNode *path) {
   return ahc_mk_fun(io_readfile, e);
 }
 
+/* ----- file handles: an index registry, not raw FILE pointers -
+   operations on a closed handle die cleanly instead of touching
+   freed memory. Slots 0..2 are the std streams. ---------------- */
+#define AHC_MAX_HANDLES 256
+static FILE *ahc_handles[AHC_MAX_HANDLES];
+
+static FILE *ahc_handle(long i, const char *what) {
+  FILE *f = (i >= 0 && i < AHC_MAX_HANDLES) ? ahc_handles[i] : NULL;
+  if (!f) {
+    fflush(stdout);
+    fprintf(stderr, "ahc: %s: handle is closed\n", what);
+    exit(1);
+  }
+  return f;
+}
+
+static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
+  static const char *modes[4] = {"r", "w", "a", "r+"};
+  StrBuf pb = {0, 0, 0};
+  long m = ahc_eval(env[1])->u.i;
+  FILE *f;
+  long i;
+  (void)w;
+  sb_hs(&pb, env[0]);
+  sb_ch(&pb, 0);
+  if (m < 0 || m > 3) ahc_die("openFile: bad IOMode");
+  f = fopen(pb.p, modes[m]);
+  if (!f) {
+    fflush(stdout);
+    fprintf(stderr, "ahc: %s: openFile: %s\n", pb.p,
+            m == 0 ? "does not exist" : "cannot open");
+    exit(1);
+  }
+  free(pb.p);
+  for (i = 3; i < AHC_MAX_HANDLES && ahc_handles[i]; i++)
+    ;
+  if (i >= AHC_MAX_HANDLES) ahc_die("openFile: too many open handles");
+  ahc_handles[i] = f;
+  return ahc_mk_int(i);
+}
+static AhcNode *p_h_open(AhcNode *path, AhcNode *mode) {
+  AhcNode **e = ahc_env(2);
+  e[0] = path; e[1] = mode;
+  return ahc_mk_fun(io_h_open, e);
+}
+
+static AhcNode *io_h_close(AhcNode **env, AhcNode *w) {
+  long i = ahc_eval(env[0])->u.i;
+  FILE *f = ahc_handle(i, "hClose");
+  (void)w;
+  if (i > 2) {
+    fclose(f);
+    ahc_handles[i] = NULL;
+  } else
+    fflush(f);   /* closing a std stream would break the runtime's
+                    own writers; flush instead (documented) */
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_h_close(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_close, e);
+}
+
+static AhcNode *io_h_put_str(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hPutStr");
+  (void)w;
+  put_list(env[1], f);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_h_put_str(AhcNode *h, AhcNode *s) {
+  AhcNode **e = ahc_env(2);
+  e[0] = h; e[1] = s;
+  return ahc_mk_fun(io_h_put_str, e);
+}
+
+static AhcNode *io_h_get_line(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetLine");
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  int ch;
+  AhcNode *r;
+  (void)w;
+  while ((ch = fgetc(f)) != EOF && ch != '\n') {
+    if (len + 2 > cap) {
+      cap = cap ? cap * 2 : 64;
+      buf = realloc(buf, cap);
+      if (!buf) ahc_die("out of memory");
+    }
+    buf[len++] = (char)ch;
+  }
+  if (ch == EOF && len == 0)
+    ahc_die("hGetLine: end of file");
+  if (buf) buf[len] = 0;
+  r = ahc_mk_string(buf ? buf : "");
+  free(buf);
+  return r;
+}
+static AhcNode *p_h_get_line(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_get_line, e);
+}
+
+static AhcNode *io_h_get_char(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetChar");
+  int ch = fgetc(f);
+  (void)w;
+  if (ch == EOF) ahc_die("hGetChar: end of file");
+  return ahc_mk_char(ch);
+}
+static AhcNode *p_h_get_char(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_get_char, e);
+}
+
+static AhcNode *io_h_get_contents(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetContents");
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  int ch;
+  AhcNode *r;
+  (void)w;
+  while ((ch = fgetc(f)) != EOF) {
+    if (len + 2 > cap) {
+      cap = cap ? cap * 2 : 256;
+      buf = realloc(buf, cap);
+      if (!buf) ahc_die("out of memory");
+    }
+    buf[len++] = (char)ch;
+  }
+  if (buf) buf[len] = 0;
+  r = ahc_mk_string(buf ? buf : "");
+  free(buf);
+  return r;
+}
+static AhcNode *p_h_get_contents(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_get_contents, e);
+}
+
+static AhcNode *io_h_is_eof(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hIsEOF");
+  int ch = fgetc(f);
+  (void)w;
+  if (ch == EOF)
+    return mk_bool(1);
+  ungetc(ch, f);
+  return mk_bool(0);
+}
+static AhcNode *p_h_is_eof(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_is_eof, e);
+}
+
+static AhcNode *io_h_flush(AhcNode **env, AhcNode *w) {
+  fflush(ahc_handle(ahc_eval(env[0])->u.i, "hFlush"));
+  (void)w;
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_h_flush(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_h_flush, e);
+}
+
 static AhcNode *io_getargs(AhcNode **env, AhcNode *w) {
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
   (void)env; (void)w;
@@ -1521,6 +1690,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
   *ahc_prim_popcount,
   *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
+  *ahc_prim_h_open, *ahc_prim_h_close, *ahc_prim_h_put_str,
+  *ahc_prim_h_get_line, *ahc_prim_h_get_char,
+  *ahc_prim_h_get_contents, *ahc_prim_h_is_eof, *ahc_prim_h_flush,
   *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
   *ahc_prim_iseof,
   *ahc_prim_exp_d, *ahc_prim_log_d, *ahc_prim_sqrt_d,
@@ -1598,6 +1770,17 @@ void ahc_rts_init(void) {
   ahc_prim_bshr = mk_prim2(p_bshr);
   ahc_prim_bcompl = mk_prim1(p_bcompl);
   ahc_prim_popcount = mk_prim1(p_popcount);
+  ahc_handles[0] = stdin;
+  ahc_handles[1] = stdout;
+  ahc_handles[2] = stderr;
+  ahc_prim_h_open = mk_prim2(p_h_open);
+  ahc_prim_h_close = mk_prim1(p_h_close);
+  ahc_prim_h_put_str = mk_prim2(p_h_put_str);
+  ahc_prim_h_get_line = mk_prim1(p_h_get_line);
+  ahc_prim_h_get_char = mk_prim1(p_h_get_char);
+  ahc_prim_h_get_contents = mk_prim1(p_h_get_contents);
+  ahc_prim_h_is_eof = mk_prim1(p_h_is_eof);
+  ahc_prim_h_flush = mk_prim1(p_h_flush);
   ahc_prim_getline = ahc_mk_fun(io_getline, NULL);
   ahc_prim_iseof = ahc_mk_fun(io_iseof, NULL);
   ahc_prim_getcontents = ahc_mk_fun(io_getcontents, NULL);

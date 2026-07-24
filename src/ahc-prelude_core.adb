@@ -1232,6 +1232,14 @@ package body AHC.Prelude_Core is
          BP ("isEOF", "ahc_prim_iseof");
          BP ("getContents", "ahc_prim_getcontents");
          BP ("readFile", "ahc_prim_readfile");
+         BP ("primHOpen", "ahc_prim_h_open");
+         BP ("primHClose", "ahc_prim_h_close");
+         BP ("primHPutStr", "ahc_prim_h_put_str");
+         BP ("primHGetLine", "ahc_prim_h_get_line");
+         BP ("primHGetChar", "ahc_prim_h_get_char");
+         BP ("primHGetContents", "ahc_prim_h_get_contents");
+         BP ("primHIsEOF", "ahc_prim_h_is_eof");
+         BP ("primHFlush", "ahc_prim_h_flush");
          BP ("getArgs", "ahc_prim_getargs");
          BP ("getProgName", "ahc_prim_getprogname");
          BP ("exitWithCode", "ahc_prim_exit_with");

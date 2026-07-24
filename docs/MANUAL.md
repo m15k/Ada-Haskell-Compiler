@@ -1378,7 +1378,12 @@ infix layout;
 with the generated C `main` now capturing `argc`/`argv`; `isEOF`
 arrived later, the day the mini-Lisp REPL needed to see end-of-file
 coming - the first library addition driven by a real program rather
-than by the Report); `Data.Map` is a weight-balanced search tree
+than by the Report; file HANDLES arrived later still: `Handle` is
+an abstract source type over an index into a runtime registry of
+`FILE` pointers — never a raw pointer, so a closed handle fails
+cleanly — with `openFile`/`hClose` and the `h*` family as eight
+integer-only prims, and `withFile`, `writeFile`, `appendFile`,
+`hPrint` as ordinary Haskell on top); `Data.Map` is a weight-balanced search tree
 (Adams' algorithm, the same family as GHC's containers) whose
 observable behavior - toList order, Show format, union bias - is
 oracled against the real containers library, written because the

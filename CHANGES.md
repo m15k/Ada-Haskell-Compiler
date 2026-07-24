@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+System.IO file handles (M78):
+
+- **The full practical handle API**: openFile/hClose/withFile,
+  hPutStr/hPutStrLn/hPutChar/hPrint, hGetLine/hGetChar/
+  hGetContents/hIsEOF/hFlush, writeFile/appendFile, and
+  stdin/stdout/stderr as first-class handles. IOMode is an
+  ordinary source enumeration deriving exactly GHC's instances
+  (Eq, Ord, Show, Enum - GHC has no Bounded IOMode, verified the
+  hard way).
+- **The runtime deals only in integers**: a Handle is an index
+  into a small registry of FILE pointers (std streams pre-seeded
+  at 0..2), so an operation on a closed handle dies with a clean
+  message instead of touching freed memory; the Handle type is
+  ABSTRACT in source (constructor unexported), so the only handles
+  in circulation come from openFile. Eight new prims; everything
+  else - withFile, writeFile, hPutStrLn, hPrint - is ordinary
+  Haskell in lib/System/IO.hs.
+- Two documented divergences (EXCLUSIONS): hGetContents is strict
+  (GHC's lazy semi-closed-handle behavior means portable programs
+  must not touch the handle afterward regardless), and hClose on a
+  std stream flushes rather than closes. ch07_io_handles.hs pins
+  the whole surface byte-identical (suite: 67);
+  tests/exec/handle_errors.hs and handle_missing.hs pin the error
+  paths.
+
 Real seq + strictness (M77):
 
 - **`seq` is a primitive**: force to WHNF, yield the second

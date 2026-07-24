@@ -19,7 +19,7 @@ the reason a conformance program does not exist for it.
 | lib | ~~`Data.List.foldl'` is `foldl`~~ WORKS | `seq` is a real primitive (force to WHNF), `($!)` builds on it, and `foldl'` keeps its accumulator evaluated (ch06_02_seq.hs values; tests/exec/seq_strict.hs pins the forcing itself) |
 | lib | `Data.Bits` is monomorphic at `Int` | GHC's is `Bits a`-polymorphic; AHC's is often MORE permissive at defaulting boundaries, GHC-oracle tests annotate |
 | lib | `Data.Ix` uses are not defaultable | AHC's Report-4.3.4 defaulting covers Prelude classes only; annotate `range (3, 7) :: [Int]` |
-| lib | `System.IO` handles | only stdin/stdout are real; no openFile/hClose, `readFile` reads whole files |
+| lib | ~~`System.IO` handles~~ WORK | openFile/hClose/withFile, hPutStr/hPutStrLn/hPutChar/hPrint, hGetLine/hGetChar/hGetContents/hIsEOF/hFlush, writeFile/appendFile, stdin/stdout/stderr, IOMode with GHC's derived instances (ch07_io_handles.hs; error paths in tests/exec/handle_*.hs). Two documented divergences: `hGetContents` is STRICT (GHC's is lazy with semi-closed handles - portable programs must not touch a handle after it anyway), and `hClose` on a std stream flushes instead of closing (closing stdout would break the runtime's own writers) |
 | lib | `Control.Monad.guard` / MonadPlus | no MonadPlus class |
 
 Runtime warnings differ by design: GHC's `-W` diagnostics are not

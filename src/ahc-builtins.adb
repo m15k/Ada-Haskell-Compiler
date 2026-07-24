@@ -1022,6 +1022,32 @@ package body AHC.Builtins is
               ("readFile",
                Mono (FN (String_T2, IO_T (String_T2))));
             Ignore := Def_Global
+              ("primHOpen",
+               Mono (FN (String_T2, TC (Env.Int_TC),
+                         IO_T (TC (Env.Int_TC)))));
+            Ignore := Def_Global
+              ("primHClose",
+               Mono (FN (TC (Env.Int_TC), IO_T (TC (Env.Unit_TC)))));
+            Ignore := Def_Global
+              ("primHPutStr",
+               Mono (FN (TC (Env.Int_TC), String_T2,
+                         IO_T (TC (Env.Unit_TC)))));
+            Ignore := Def_Global
+              ("primHGetLine",
+               Mono (FN (TC (Env.Int_TC), IO_T (String_T2))));
+            Ignore := Def_Global
+              ("primHGetChar",
+               Mono (FN (TC (Env.Int_TC), IO_T (TC (Env.Char_TC)))));
+            Ignore := Def_Global
+              ("primHGetContents",
+               Mono (FN (TC (Env.Int_TC), IO_T (String_T2))));
+            Ignore := Def_Global
+              ("primHIsEOF",
+               Mono (FN (TC (Env.Int_TC), IO_T (TC (Env.Bool_TC)))));
+            Ignore := Def_Global
+              ("primHFlush",
+               Mono (FN (TC (Env.Int_TC), IO_T (TC (Env.Unit_TC)))));
+            Ignore := Def_Global
               ("getArgs", Mono (IO_T (LST (String_T2))));
             Ignore := Def_Global
               ("getProgName", Mono (IO_T (String_T2)));
