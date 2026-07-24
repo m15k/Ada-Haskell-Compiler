@@ -898,6 +898,11 @@ package body AHC.Builtins is
                Poly2 (A, B, FN (FN (TV (A), LST (TV (B))),
                                 LST (TV (A)), LST (TV (B))))));
             Ignore := Def_Global
+              ("seq", Poly2 (A, B, FN (TV (A), TV (B), TV (B))));
+            Ignore := Def_Global
+              ("$!", Poly2 (A, B, FN (FN (TV (A), TV (B)),
+                                      TV (A), TV (B))));
+            Ignore := Def_Global
               ("foldr", Poly2 (A, B,
                                FN (FN (TV (A), FN (TV (B), TV (B))),
                                    TV (B), FN (LST (TV (A)), TV (B)))));

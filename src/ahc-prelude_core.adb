@@ -264,6 +264,8 @@ package body AHC.Prelude_Core is
         Prim ("primreturnIO", "ahc_prim_return_io");
       P_Error : constant Real_Var_Id :=
         Prim ("primerror", "ahc_prim_error");
+      P_Seq : constant Real_Var_Id :=
+        Prim ("primseq", "ahc_prim_seq");
 
       ------------------------------------------------------------------
       --  Method-set builders for instance dictionaries
@@ -1122,6 +1124,16 @@ package body AHC.Prelude_Core is
       begin
          Bind_Name ("$",
            Lam (F, Lam (X, Ap (V (F), V (X)))));
+      end;
+      Bind_Name ("seq", V (P_Seq));
+      declare
+         F : constant Real_Var_Id := Fresh ("f");
+         X : constant Real_Var_Id := Fresh ("x");
+      begin
+         --  f $! x forces x before the call (Report 6.2).
+         Bind_Name ("$!",
+           Lam (F, Lam (X,
+             Ap2 (V (P_Seq), V (X), Ap (V (F), V (X))))));
       end;
       declare
          P : constant Real_Var_Id := Fresh ("p");

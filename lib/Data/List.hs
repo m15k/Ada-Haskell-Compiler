@@ -221,7 +221,8 @@ pickMin cmp a b = if cmp a b == GT then b else a
 --  Accumulator fold; observable behavior matches foldl (AHC has no
 --  seq), with the large runtime stack absorbing chain depth.
 foldl' :: (b -> a -> b) -> b -> [a] -> b
-foldl' f z xs = foldl f z xs
+foldl' _ z [] = z
+foldl' f z (x : xs) = let z' = f z x in z' `seq` foldl' f z' xs
 
 genericLength :: Num n => [a] -> n
 genericLength [] = 0

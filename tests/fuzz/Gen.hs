@@ -170,11 +170,16 @@ leaf env t = freq
 -- productions available at every type
 common :: Int -> Env -> Ty -> [(Int, R String)]
 common sz env t =
-  [ (2, ifE), (2, letE), (2, caseE) ]
+  [ (2, ifE), (2, letE), (2, caseE), (1, seqE) ]
   ++ [ (2, appE f) | f@(Fun _ _ r) <- efuns env, r == t ]
   ++ [ (1, projE) ]
   where
     h = sz `div` 2
+    seqE = do st <- scalarTy
+              a  <- genE (sz `div` 3) env st
+              b  <- genE h env t
+              return ("(seq (" ++ a ++ " :: " ++ rTy st ++ ") "
+                      ++ b ++ ")")
     ifE = do c <- genE (sz `div` 3) env TBool
              a <- genE h env t
              b <- genE h env t
@@ -284,6 +289,11 @@ node sz env t = freq (common sz env t ++ own)
                          ++ rTy et ++ "]))"))
         , (1, do l <- sub (TList TInt)
                  return ("(sum " ++ l ++ ")"))
+        , (1, do op <- pick ["(+)", "(-)", "max", "min"]
+                 z  <- genE s3 env TInt
+                 l  <- sub (TList TInt)
+                 return ("(foldl' " ++ op ++ " " ++ z ++ " "
+                         ++ l ++ ")"))
         , (1, do f  <- pick ["maximum", "minimum"]
                  ne <- nonEmpty TInt
                  return ("(" ++ f ++ " " ++ ne ++ ")"))
@@ -631,7 +641,7 @@ program seed = do
      , "import Data.Char (chr, ord, toUpper, toLower, isDigit,"
      , "                  isUpper, digitToInt)"
      , "import Data.List (sort, nub, tails, intercalate, partition,"
-     , "                  isPrefixOf)"
+     , "                  isPrefixOf, foldl')"
      , "import Data.Maybe (isJust, isNothing, fromMaybe, catMaybes,"
      , "                   mapMaybe, listToMaybe)"
      , ""

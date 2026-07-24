@@ -858,8 +858,17 @@ static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
   return acc;
 }
 
+/* seq: force the first argument to WHNF, yield the second
+   untouched (Report 6.2). The one primitive that makes strictness
+   expressible in source - foldl' and ($!) are built on it. */
+static AhcNode *p_seq(AhcNode *a, AhcNode *b) {
+  ahc_eval(a);
+  return b;
+}
+
 static AhcNode *p_error(AhcNode *a) {
   AhcNode *cell = ahc_eval(a);
+  fflush(stdout);   /* output already produced must precede the die */
   fputs("ahc: error: ", stderr);
   while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
     fputc((int)ahc_eval(cell->u.con.fields[0])->u.c, stderr);
@@ -1361,7 +1370,10 @@ static void fmt_double(char *buf, size_t n, double v) {
     snprintf(buf, n, v < 0 ? "-Infinity" : "Infinity");
     return;
   }
-  if (v == 0.0) { snprintf(buf, n, "0.0"); return; }
+  if (v == 0.0) {   /* -0.0 == 0.0, but GHC shows the sign */
+    snprintf(buf, n, signbit(v) ? "-0.0" : "0.0");
+    return;
+  }
   for (prec = 0; prec < 17; prec++) {
     snprintf(sci, sizeof sci, "%.*e", prec, v);
     if (strtod(sci, NULL) == v) break;
@@ -1406,7 +1418,8 @@ static AhcNode *p_showsprec_d(AhcNode *d, AhcNode *x) {
   double v = ahc_eval(x)->u.d;
   char num[48], out[52];
   fmt_double(num, sizeof num, v);
-  if (dv > 6 && v < 0) snprintf(out, sizeof out, "(%s)", num);
+  if (dv > 6 && num[0] == '-')   /* covers -0.0 and -Infinity */
+    snprintf(out, sizeof out, "(%s)", num);
   else snprintf(out, sizeof out, "%s", num);
   return ahc_mk_string(out);
 }
@@ -1503,7 +1516,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_enum_from_to_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
-  *ahc_prim_error, *ahc_prim_ord, *ahc_prim_chr,
+  *ahc_prim_error, *ahc_prim_seq, *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
   *ahc_prim_popcount,
@@ -1571,6 +1584,7 @@ void ahc_rts_init(void) {
   ahc_prim_then_io = mk_prim2(p_then_io);
   ahc_prim_return_io = mk_prim1(p_return_io);
   ahc_prim_error = mk_prim1(p_error);
+  ahc_prim_seq = mk_prim2(p_seq);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);

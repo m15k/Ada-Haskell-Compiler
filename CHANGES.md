@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+Real seq + strictness (M77):
+
+- **`seq` is a primitive**: force to WHNF, yield the second
+  argument (p_seq in the runtime; wired global with scheme
+  `a -> b -> b`; the Report fixity `infixr 0` was already in the
+  table waiting). `($!)` is built on it in the wired Prelude.
+- **`Data.List.foldl'` is honest**: the accumulator is forced at
+  every step (`let z' = f z x in z' `seq` ...`) instead of being a
+  renamed `foldl` - the EXCLUSIONS row is gone. WHNF semantics
+  pinned: `seq [undefined] x` forces the spine's first constructor
+  only.
+- Verified three ways: ch06_02_seq.hs (GHC-oracle values),
+  tests/exec/seq_strict.hs (the forcing itself: output order and
+  the forced error - p_error now flushes stdout before dying so
+  effects precede the die message), and the fuzzer's menu grew seq
+  and foldl' productions.
+- **The extended fuzz campaign found bug three (seed 17): negative
+  zero**. `-0.0 == 0.0` is True, so fmt_double's equality-based
+  zero fast path printed "0.0" for negative zero; showsPrec's
+  parenthesization tested `v < 0`, also blind to -0.0. Show now
+  honors the sign bit, and parenthesization keys off the formatted
+  leading '-' (covering -0.0 and -Infinity, excluding NaN, exactly
+  GHC's behavior). Pinned as ch06_04_negative_zero.hs (suite: 66).
+- Measured honestly (scripts/run_bench.sh): foldl' is about
+  strictness, not speed - on a 2M-element sum that fits in memory
+  the strict fold pays ~30% for the per-element force
+  (b_strictfold 2.46s vs b_sumfold 1.86s, optimized); its win is
+  the space guarantee, not wall time. Both benches stay in the
+  suite so the trade-off remains visible.
+
 Differential fuzzer (M76):
 
 - **scripts/run_fuzz.sh + tests/fuzz/Gen.hs**: a seeded generator

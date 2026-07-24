@@ -758,6 +758,19 @@ properly with its own growable evaluation stack machine; AHC's
 one-linker-flag version covers practical programs and is honest
 about being a shortcut.
 
+**Opting out: `seq`.** The Report's one escape hatch from laziness
+is `seq :: a -> b -> b` — force the first argument to weak head
+normal form, yield the second. In the runtime it is exactly that
+(`ahc_eval(a); return b;`), and everything else is source built on
+it: `f $! x` forces the argument before the call, and
+`Data.List.foldl'` keeps its accumulator evaluated
+(`let z' = f z x in z' `seq` ...`), so the million-thunk chain
+above never forms — the fold runs in constant space and the
+benchmark suite measures the difference (`b_strictfold` vs
+`b_sumfold`). WHNF matters: `seq [undefined] x` forces only the
+list's first constructor, never its elements — forcing is one
+layer, not deep evaluation.
+
 ### Where laziness shaped other features
 
 Once you know evaluation happens at *demand*, several AHC design
