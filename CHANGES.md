@@ -1,6 +1,23 @@
 # AHC Changelog
 
-## Unreleased
+## v1.3 (2026-07-24)
+
+The verification-and-tooling release: the five-item post-v1.2
+roadmap, complete. A differential fuzzer that generates random
+well-typed programs and byte-compares AHC against GHC per seed
+(M76); real `seq`, `($!)` and an honest `foldl'` (M77); the full
+System.IO file-handle API (M78); `ahc repl`, compile-and-run over
+the object cache with no second evaluator (M79-M80); and
+compile-time contract discharge - what the compiler can prove,
+the runtime need not check (M81). The new tooling immediately paid
+its way: the fuzzer and the REPL's first sessions found FIVE real
+compiler bugs the hand-written suite had never touched (a
+layout-vs-lookahead corner, Integer->Double rounding drift,
+negative-zero show, wired-body theft by name shadowing, and
+implicit-Prelude qualified resolution) - every one fixed and
+pinned. Conformance suite: 62 -> 69 programs, all byte-identical
+to GHC 9.4.8; eleven test harnesses; 300-seed fuzz campaigns
+green.
 
 Compile-time contract discharge (M81 - the roadmap's last item):
 

@@ -34,14 +34,24 @@ that violated contracts actually raise `Assert_Failure`.
 
 All four phases are complete: AHC compiles and runs Haskell programs
 against a Prelude written in Haskell and compiled by AHC itself, and
-adds an Ada-style refinement-types extension. v1.2 closes the polish
+adds an Ada-style refinement-types extension. v1.2 closed the polish
 plan (docs/polish-plan.md, M64-M75): cross-module diagnostic spans,
 Applicative, Enum at Char/Double, deriving Enum/Bounded/Ix/Read for
 enumerations, properFraction/RealFloat, polymorphic `Ratio a` and
 `Complex a`, Data.Set, function contracts (Ada Pre/Post as pragmas),
 a measured optimizer round (up to 2.1x on the benchmark suite,
 `scripts/run_bench.sh`), and Report 5.6.1 Prelude-restriction
-imports. Nothing planned remains unbuilt.
+imports. v1.3 is the verification-and-tooling release (M76-M81): a
+differential fuzzer that byte-compares randomly generated
+well-typed programs against GHC per seed, real `seq`/`($!)` and an
+honest `foldl'`, the System.IO file-handle API, `ahc repl`
+(compile-and-run over the object cache - no second evaluator), and
+compile-time contract discharge (provably-true claims vanish from
+the generated code; provably-false ones warn at compile time). The
+fuzzer and the REPL's first sessions found five real compiler bugs
+the hand-written suite had missed - all fixed and pinned. 69
+conformance programs byte-identical to GHC 9.4.8, eleven test
+harnesses. Nothing planned remains unbuilt.
 
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable
