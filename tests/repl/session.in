@@ -1,0 +1,13 @@
+import Data.List (sort, nub)
+import Data.Map (fromList, toList)
+sort (nub "abracadabra")
+data Suit = Clubs | Diamonds | Hearts | Spades deriving (Eq, Ord, Show, Enum, Bounded)
+[minBound .. maxBound :: Suit]
+best :: Suit -> Suit -> Suit; best a b = max a b
+best Hearts Diamonds
+toList (fromList [(2 :: Int, "two"), (1, "one")])
+let x = 5 in x + 1
+let y = 40
+y + 2
+:t y
+:q

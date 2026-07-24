@@ -1,0 +1,13 @@
+:l tests/repl/fixture.hs
+area 6 7
+putStrLn (grid 2)
+Repl.main
+extra :: Int; extra = 99
+extra
+:r
+extra
+area 2 2
+:clear
+area 1 1
+:h
+:q

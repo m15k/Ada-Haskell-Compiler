@@ -450,6 +450,28 @@ package body AHC.Rename is
                   return (Kind => Unresolved);
                end;
             end if;
+            --  Prelude-qualified through the IMPLICIT import: only
+            --  the Prelude itself - never the module's own binding
+            --  of the same bare name (Prelude.filter must not find
+            --  a local filter).
+            if Q.Qualifier = Names.Name_Id (Prelude_Name)
+              and then Q.Qualifier /= Arena.Module_Name
+            then
+               declare
+                  C : constant Builtins.Var_Maps.Cursor :=
+                    Reg.Base.Values.Find (Q.Name);
+               begin
+                  if Builtins.Var_Maps.Has_Element (C) then
+                     return (Kind => Var_Res,
+                             Var => Builtins.Var_Maps.Element (C));
+                  end if;
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Out_Of_Scope, Span,
+                           "'Prelude' does not export '"
+                           & Text (Q.Name) & "'");
+                  return (Kind => Unresolved);
+               end;
+            end if;
             --  Own module first.
             declare
                C : constant Builtins.Var_Maps.Cursor :=

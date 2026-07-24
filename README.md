@@ -46,6 +46,7 @@ imports. Nothing planned remains unbuilt.
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable
 ./Foo
+./bin/ahc repl                # interactive (docs/repl-design-note.md)
 ```
 
 Backend: `ahc emit` generates C over the AHC runtime

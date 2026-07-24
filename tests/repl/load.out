@@ -1,0 +1,26 @@
+ahc repl - :h for help, :q to quit
+ahc> loaded: tests/repl/fixture.hs
+ahc> 42
+ahc> **
+**
+ahc> ***
+***
+***
+ahc> ahc> 99
+ahc> loaded: tests/repl/fixture.hs
+ahc> /tmp/ahc-repl-test-load/Probe.hs:3:6: error: variable not in scope: extra
+ahc> 4
+ahc> ahc> /tmp/ahc-repl-test-load/Probe.hs:3:6: error: variable not in scope: area
+ahc> commands:
+  :help :h        this text
+  :quit :q        leave the repl
+  :type E, :t E   show E's inferred type
+  :load P, :l P   load file P (resets the session)
+  :reload :r      reload the last :load
+  :clear          empty the session
+anything else: an import, a declaration, or an
+expression. several declarations fit one line with
+';' (f :: Int -> Int; f x = x + 1). a loaded main
+runs as the expression Repl.main. IO results are
+not printed; 'it' is not kept between entries.
+ahc> 

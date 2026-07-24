@@ -31,6 +31,7 @@ with AHC.Modules;
 with AHC.Optimizer;
 with AHC.Lexer;
 with AHC.Names;
+with AHC.Repl;
 with AHC.Parser;
 with AHC.Prelude_Core;
 with AHC.Refine;
@@ -54,6 +55,7 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc check FILE.hs");
       Put_Line (Target, "       ahc emit FILE.hs OUT [--unchecked]"
                         & "   (writes OUT.c)");
+      Put_Line (Target, "       ahc repl");
    end Print_Usage;
 
    procedure Usage_Error (Message : String) is
@@ -782,7 +784,8 @@ procedure AHC_Main is
                     (Table, M, Sigs, Prims,
                      Checks_Enabled => Refined,
                      Contracts => Contract_Map);
-                  AHC.Prelude_Core.Install_Bodies (Table, M, Env, Prims);
+                  AHC.Prelude_Core.Install_Bodies
+                    (Table, M, Env, Prims, Base => Reg.Base.Values);
                   if Optimize then
                      declare
                         Rounds : Natural;
@@ -967,6 +970,12 @@ begin
             Run_Middle (Argument (2), 'c');
          else
             Usage_Error ("expected: ahc core FILE.hs");
+         end if;
+      elsif Command = "repl" then
+         if Argument_Count = 1 then
+            AHC.Repl.Run;
+         else
+            Usage_Error ("expected: ahc repl");
          end if;
       elsif Command = "check" then
          if Argument_Count = 2 then

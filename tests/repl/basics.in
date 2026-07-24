@@ -1,0 +1,13 @@
+2 + 2
+(2.5 * 4.0, product [1 .. 10])
+square :: Int -> Int; square x = x * x
+square 12
+:t square
+:t map square
+putStrLn "an IO action"
+mapM_ print [1, 2, 3]
+nosuchthing
+square 5
+square :: Int; square = 1
+square 5
+:q

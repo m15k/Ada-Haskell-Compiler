@@ -33,10 +33,18 @@ package AHC.Prelude_Core is
       Hash => Rename.Var_Hash, Equivalent_Keys => Core."=",
       "=" => Names."=");
 
+   --  Base carries the pre-user-module snapshot of the value
+   --  namespace: wired bodies must attach to the WIRED vars even
+   --  when a later module re-defines the same bare name in the
+   --  mutable flat Env (found by the REPL's first session: import
+   --  Data.Map, then nub - Data.Map's filter stole the wired
+   --  filter's body slot and Data.List died on a missing global).
+   --  An empty Base falls back to Env.
    procedure Install_Bodies
      (Table : in out Names.Name_Table;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Prims : in out Prim_Maps.Map);
+      Prims : in out Prim_Maps.Map;
+      Base  : Builtins.Var_Maps.Map := Builtins.Var_Maps.Empty_Map);
 
 end AHC.Prelude_Core;

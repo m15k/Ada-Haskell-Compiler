@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+The REPL (M79 design note, M80 implementation):
+
+- **`ahc repl`**: compile-and-run over the M63 object cache
+  (docs/repl-design-note.md). The REPL adds NO second evaluator -
+  every entry becomes a real program built by the real pipeline
+  and run by the real runtime, so every conformance guarantee
+  carries over. Session state is two generated modules: Repl
+  (accumulated imports + declarations, validated and rolled back
+  on error - a bad entry never poisons the session) and Main
+  (`it = <expr>` plus a runner chosen by the inferred type: IO
+  actions run, everything else prints). Line classification uses
+  the real parser, not a regex. Commands: :type, :load (GHCi's
+  reset-on-load), :reload, :clear, :help, :quit. Pinned
+  transcripts in tests/repl/ via scripts/run_repl.sh.
+- **The REPL's first session found compiler bug four**: with
+  Data.Map imported, `nub` died on a missing global.
+  Install_Bodies attached wired Prelude bodies by bare-name
+  lookup in the MUTABLE flat env, which any module re-defining
+  the name (Data.Map's filter) had clobbered - the wired var was
+  left bodiless. Wired bodies now resolve through the Base
+  snapshot. The same session's pinning exposed bug five:
+  `Prelude.filter` with a local `filter` defined resolved to the
+  LOCAL one (the implicit-Prelude qualified path consulted the
+  own-module map first); it now goes straight to the Base
+  snapshot. Both pinned in ch05_wired_shadowing.hs (suite: 68).
+
 System.IO file handles (M78):
 
 - **The full practical handle API**: openFile/hClose/withFile,

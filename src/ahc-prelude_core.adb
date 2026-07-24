@@ -8,7 +8,8 @@ package body AHC.Prelude_Core is
      (Table : in out Names.Name_Table;
       M     : in out Core.Core_Module;
       Env   : in out Builtins.Global_Env;
-      Prims : in out Prim_Maps.Map)
+      Prims : in out Prim_Maps.Map;
+      Base  : Builtins.Var_Maps.Map := Builtins.Var_Maps.Empty_Map)
    is
       Span : constant Diagnostics.Source_Span := (Start => 1, Stop => 1);
 
@@ -56,9 +57,16 @@ package body AHC.Prelude_Core is
       end Prim;
 
       function Lookup (Name : String) return Var_Id is
+         N : constant Names.Real_Name_Id := Table.Intern (Name);
+         B : constant Builtins.Var_Maps.Cursor := Base.Find (N);
          C : constant Builtins.Var_Maps.Cursor :=
-           Env.Values.Find (Table.Intern (Name));
+           Env.Values.Find (N);
       begin
+         --  The Base snapshot first: the wired var, not whatever
+         --  module most recently claimed the bare name.
+         if Builtins.Var_Maps.Has_Element (B) then
+            return Var_Id (Builtins.Var_Maps.Element (B));
+         end if;
          if Builtins.Var_Maps.Has_Element (C) then
             return Var_Id (Builtins.Var_Maps.Element (C));
          end if;

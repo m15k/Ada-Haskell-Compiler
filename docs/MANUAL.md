@@ -1304,6 +1304,7 @@ and failed the truth.*
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
 | `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically) |
+| `scripts/run_repl.sh` | does the REPL behave? (pinned `tests/repl/*.in` transcripts through `ahc repl` — prompts, results, error-and-recovery, `:load` semantics — in a fixed scratch dir so diagnostic paths stay deterministic) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the

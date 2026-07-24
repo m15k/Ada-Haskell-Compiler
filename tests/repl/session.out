@@ -1,0 +1,9 @@
+ahc repl - :h for help, :q to quit
+ahc> ahc> ahc> "abcdr"
+ahc> ahc> [Clubs,Diamonds,Hearts,Spades]
+ahc> ahc> Hearts
+ahc> [(1,"one"),(2,"two")]
+ahc> 6
+ahc> ahc> 42
+ahc> y :: Integer
+ahc> 

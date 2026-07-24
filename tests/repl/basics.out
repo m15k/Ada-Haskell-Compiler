@@ -1,0 +1,15 @@
+ahc repl - :h for help, :q to quit
+ahc> 4
+ahc> (10.0,3628800)
+ahc> ahc> 144
+ahc> square :: Int -> Int
+ahc> map square :: [Int] -> [Int]
+ahc> an IO action
+ahc> 1
+2
+3
+ahc> /tmp/ahc-repl-test-basics/Probe.hs:3:6: error: variable not in scope: nosuchthing
+ahc> 25
+ahc> /tmp/ahc-repl-test-basics/Repl.hs:3:16: error: 'square' is defined more than once
+ahc> 25
+ahc> 
