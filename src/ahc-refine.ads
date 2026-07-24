@@ -29,6 +29,7 @@
 --  programs run at full speed on the unchecked base types.
 
 with AHC.Contracts;
+with AHC.Diagnostics;
 with AHC.Core;
 with AHC.Kinds;
 with AHC.Names;
@@ -38,11 +39,15 @@ package AHC.Refine is
 
    --  Contracts: PRE/POST claim wrapping per
    --  docs/contracts-design-note.md; stripped with Checks_Enabled.
+   --  Bag receives contract-discharge warnings (a predicate that
+   --  can never hold). Claims proved True at compile time
+   --  (AHC.Discharge) are dropped before the wrapper is built.
    procedure Insert_Checks
      (Table          : in out Names.Name_Table;
       M              : in out Core.Core_Module;
       Sigs           : Kinds.Sig_Maps.Map;
       Prims          : in out Prelude_Core.Prim_Maps.Map;
+      Bag            : in out Diagnostics.Diagnostic_Bag;
       Checks_Enabled : Boolean := True;
       Contracts      : AHC.Contracts.Contract_Maps.Map :=
         AHC.Contracts.Contract_Maps.Empty_Map);

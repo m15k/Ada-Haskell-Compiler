@@ -1,4 +1,4 @@
-with AHC.Diagnostics;
+with AHC.Discharge;
 
 package body AHC.Refine is
 
@@ -9,6 +9,7 @@ package body AHC.Refine is
       M              : in out Core.Core_Module;
       Sigs           : Kinds.Sig_Maps.Map;
       Prims          : in out Prelude_Core.Prim_Maps.Map;
+      Bag            : in out Diagnostics.Diagnostic_Bag;
       Checks_Enabled : Boolean := True;
       Contracts      : AHC.Contracts.Contract_Maps.Map :=
         AHC.Contracts.Contract_Maps.Empty_Map)
@@ -484,9 +485,48 @@ package body AHC.Refine is
               Contracts.First;
          begin
             while AHC.Contracts.Contract_Maps.Has_Element (Cur) loop
-               Wrap_Contract
-                 (AHC.Contracts.Contract_Maps.Key (Cur),
-                  AHC.Contracts.Contract_Maps.Element (Cur));
+               declare
+                  use type AHC.Discharge.Verdict;
+                  CB : AHC.Contracts.Contract_Binds :=
+                    AHC.Contracts.Contract_Maps.Element (Cur);
+
+                  --  Compile-time discharge: a claim proved True on
+                  --  every call is dropped; one proved False can
+                  --  never hold and earns a warning (the runtime
+                  --  check stays, so the program still fails with
+                  --  the standard message when demanded).
+                  procedure Consider
+                    (V : in out Core.Var_Id; What : String)
+                  is
+                  begin
+                     if V = Core.No_Var then
+                        return;
+                     end if;
+                     case AHC.Discharge.Try_Claim
+                            (Table, M, Prims, Core.Real_Var_Id (V))
+                     is
+                        when AHC.Discharge.Proved_True =>
+                           V := Core.No_Var;
+                        when AHC.Discharge.Proved_False =>
+                           Bag.Add
+                             (Diagnostics.Warning,
+                              Diagnostics.Match_Warning,
+                              M.Info (Core.Real_Var_Id (V)).Span,
+                              What & " can never hold");
+                        when AHC.Discharge.Unknown =>
+                           null;
+                     end case;
+                  end Consider;
+               begin
+                  Consider (CB.Pre_V, "this precondition");
+                  Consider (CB.Post_V, "this postcondition");
+                  if CB.Pre_V /= No_Var
+                    or else CB.Post_V /= No_Var
+                  then
+                     Wrap_Contract
+                       (AHC.Contracts.Contract_Maps.Key (Cur), CB);
+                  end if;
+               end;
                AHC.Contracts.Contract_Maps.Next (Cur);
             end loop;
          end;

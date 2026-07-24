@@ -203,7 +203,38 @@ contract contexts inherited from the function's signature. Each is
 a documented line in EXCLUSIONS-style honesty, none is
 architectural.
 
-## 5. What this completes
+## 5. Compile-time discharge (M81)
+
+A contract whose predicate reduces to True with its parameters
+OPAQUE holds on every call - checking it at runtime buys nothing.
+`AHC.Discharge` is a fuel-bounded constant evaluator over
+elaborated Core (closures and environments over the existing
+arena, eager arguments, lazy branches, two-pass letrec for the
+dictionary globals, method-selector projection through known
+dictionaries, and literal folding for the Int primitives): each
+claim's body is evaluated once at compile time, and
+
+- **Proved True**: the claim is dropped before the wrapper is
+  built - both dropped means no wrapper at all, zero overhead;
+- **Proved False**: the contract can NEVER hold, which is a
+  compile-time warning ("this precondition can never hold"); the
+  runtime check stays, so a demanded call still fails with the
+  standard message;
+- **Unknown**: the runtime check stays. Opaque parameters poison
+  every path that consumes them, so an argument-dependent
+  predicate (`\lo hi x -> lo <= hi`) can never be discharged by
+  mistake - unsoundness is impossible by construction, only
+  incompleteness.
+
+`scripts/run_discharge.sh` pins all three behaviors against the
+generated C (claims present or absent by grep), and
+ext_contracts_discharge.hs pins that discharge never changes
+observable behavior - GHC ignores the pragmas, so the oracle
+comparison covers the discharged program for free. The same
+policy as Ada: what the compiler can prove, the runtime need not
+check.
+
+## 6. What this completes
 
 With contracts, the Ada-extension story closes symmetrically:
 refinement types carry Ada's subtype constraints to Haskell values;

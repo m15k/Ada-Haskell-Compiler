@@ -780,12 +780,15 @@ procedure AHC_Main is
                      return (if T'Length = 1 then "0" & T else T);
                   end Img2;
                begin
-                  AHC.Refine.Insert_Checks
-                    (Table, M, Sigs, Prims,
-                     Checks_Enabled => Refined,
-                     Contracts => Contract_Map);
+                  --  Wired bodies first: contract discharge (inside
+                  --  Insert_Checks) evaluates through the wired
+                  --  dictionaries, so they must exist by then.
                   AHC.Prelude_Core.Install_Bodies
                     (Table, M, Env, Prims, Base => Reg.Base.Values);
+                  AHC.Refine.Insert_Checks
+                    (Table, M, Sigs, Prims, Bag,
+                     Checks_Enabled => Refined,
+                     Contracts => Contract_Map);
                   if Optimize then
                      declare
                         Rounds : Natural;
@@ -897,7 +900,7 @@ procedure AHC_Main is
                   Prims : AHC.Prelude_Core.Prim_Maps.Map;
                begin
                   AHC.Refine.Insert_Checks
-                    (Table, M, Sigs, Prims,
+                    (Table, M, Sigs, Prims, Bag,
                      Contracts => Contract_Map);
                end;
             end if;

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Compile-time contract discharge (M81 - the roadmap's last item):
+
+- **What the compiler can prove, the runtime need not check** -
+  Ada's policy, transplanted. AHC.Discharge is a fuel-bounded
+  constant evaluator over elaborated Core (closures over the
+  existing arena, eager arguments, lazy branches, two-pass letrec
+  for dictionary globals, selector projection through known
+  dictionaries, Int primitive folding). Every contract claim is
+  evaluated once at compile time with its parameters OPAQUE:
+  proved True -> the claim is dropped before the wrapper is built
+  (both dropped means no wrapper, zero overhead); proved False ->
+  "this precondition can never hold" warning, check kept; Unknown
+  -> check kept. Opaque parameters poison every consuming path, so
+  argument-dependent predicates can never discharge by mistake -
+  incompleteness is possible, unsoundness is not.
+- Install_Bodies now runs BEFORE Insert_Checks (the evaluator
+  reduces through the wired dictionaries, which must exist).
+- Proved three ways: scripts/run_discharge.sh greps the generated
+  C (trivially-true claims absent, argument-dependent present,
+  provably-false warns and stays); ext_contracts_discharge.hs
+  pins unchanged observable behavior under the GHC oracle
+  (suite: 69); tests/exec/contract_never.hs pins that a
+  never-holding contract still fails at demand time with the
+  standard message.
+
 The REPL (M79 design note, M80 implementation):
 
 - **`ahc repl`**: compile-and-run over the M63 object cache
