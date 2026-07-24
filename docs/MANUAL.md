@@ -67,7 +67,10 @@ producing it in a slightly more digested one:
 Each stage lives in one Ada package (`src/ahc-lexer.adb`,
 `src/ahc-parser.adb`, and so on), and each is testable on its own —
 `ahc lex`, `ahc parse`, `ahc core`, `ahc check`, `ahc emit` let you
-stop the pipeline at any point and look at what it produced.
+stop the pipeline at any point and look at what it produced - and
+`ahc repl` runs the whole thing interactively, compile-and-run over
+the object cache with no second evaluator
+(`docs/repl-design-note.md`).
 
 **The decision** to use many small stages instead of a few big ones
 was made at the very start and never regretted. Small stages mean
@@ -1193,6 +1196,25 @@ simply runs unchecked elsewhere. The conformance suite exploits
 exactly that: a program whose contracts hold is byte-identical
 under both compilers.
 
+The story closes with the other half of Ada's policy: **what the
+compiler can prove, the runtime need not check**. Before the
+wrapper is built, each claim's body is evaluated once at compile
+time by a fuel-bounded constant evaluator (`AHC.Discharge`) with
+the function's parameters *opaque*. A claim that reduces to True
+regardless of its arguments — `\x -> True`, but also
+`2 + 2 == 4` and `even 4 && 10 > 3`, evaluated straight through
+the dictionary machinery — is discharged: the claim vanishes from
+the generated code, and a function whose pre AND post both
+discharge gets no wrapper at all. A claim that reduces to False
+can never hold, which earns a compile-time warning (the runtime
+check stays, so a demanded call still fails with the standard
+message). Everything else keeps its check. Opaqueness makes
+unsoundness impossible by construction: an argument-dependent
+predicate like `lo <= hi` gets stuck the moment it consumes an
+opaque parameter, so the discharge can only ever be incomplete,
+never wrong. `scripts/run_discharge.sh` pins all three behaviors
+against the generated C.
+
 ---
 
 ## 13. The optimizer
@@ -1250,7 +1272,7 @@ interleaved wall time, opt vs `--no-opt`): 2.10x on a strict fold,
 `Data.Map` build-and-fold, and ~1.0x on call-dominated (`fib`) and
 bignum-primitive-dominated workloads, whose time is spent where the
 simplifier doesn't reach. The strongest evidence it changes nothing
-is that all 59 GHC-oracle conformance programs are byte-identical
+is that all 69 GHC-oracle conformance programs are byte-identical
 with it on.
 
 ---
@@ -1264,7 +1286,7 @@ compiler author writes have a blind spot: the author's
 misunderstanding of Haskell goes into the test's expected output
 too. AHC's answer, and the single most valuable methodology decision
 of the project: **GHC is the oracle**. The conformance suite
-(`tests/conformance/`, 51 programs pinned to Report sections)
+(`tests/conformance/`, 69 programs pinned to Report sections)
 stores as its expected output *whatever GHC 9.4.8 prints* for the
 same source, and AHC must reproduce it **byte for byte** —
 `scripts/run_conformance.sh --oracle` regenerates the expectations
@@ -1438,6 +1460,24 @@ scan now stops at the first token a pattern cannot contain
 (`let`, `case`, `if`, lambda, ...), so lookahead can no longer
 open a layout context at all — the answer is known before the
 hazard is reachable.
+
+**The stolen body.** The REPL's first real session typed
+`import Data.Map` then `nub "abracadabra"` and died on a missing
+global named `filter`. The wired Prelude attaches its bodies by
+looking names up in the *live* flat environment — which
+Data.Map's own `filter` had overwritten by the time the
+attachment ran, so the wired variable that every other module's
+references pointed at was left without a body. Nothing
+hand-written had ever imported a shadowing module and exercised
+the shadowed name's Prelude version in the same program. Fixing
+it (resolve wired names through the immutable Base snapshot)
+immediately exposed a sibling: `Prelude.filter` with a local
+`filter` in scope resolved to the LOCAL one, because the
+implicit-Prelude qualified path also consulted the mutable
+own-module map first. Rule: a name-keyed table over a mutable
+namespace is a time bomb — attach identities to snapshots taken
+at the moment the identity was minted, never to whatever the
+name means later.
 
 **The stack-overflow-after-success.** `print (sum [1 .. 1000000])`
 printed the correct answer and *then* segfaulted — a
@@ -1659,7 +1699,7 @@ Where to look for anything, in pipeline order:
 | `runtime/ahc_rts.{h,c}` | nodes, eval, GC hookup, all primitives, bignum |
 | `prelude/Prelude.hs` | the self-compiled Prelude |
 | `lib/**` | the standard library (chapter 15) |
-| `tests/`, `scripts/` | the five harnesses (chapter 14) |
+| `tests/`, `scripts/` | the eleven harnesses (chapter 14) |
 | `docs/refinement-types-design-note.md` | the extension's original design + as-built record |
 | `docs/stdlib-plan.md` | the library plan + status |
 | `CHANGES.md` | the release history |

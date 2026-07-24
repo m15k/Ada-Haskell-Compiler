@@ -63,10 +63,14 @@ Backend: `ahc emit` generates C over the AHC runtime
 (`runtime/ahc_rts.{h,c}`) - call-by-need graph reduction with
 update-in-place thunks, curried closures, generic constructor workers,
 dictionary field selectors, and IO as world-passing actions - linked
-against the Boehm-Demers-Weiser GC (plain malloc fallback). Covered at
-runtime today: Int arithmetic/comparison, Bool/Char/String/list Show,
-user ADTs with derived Eq/Ord (generic structural prims), user classes
-with default methods, lazy infinite structures, do-notation IO.
+against the Boehm-Demers-Weiser GC (plain malloc fallback). The
+runtime covers the full language as shipped: all numeric types
+including arbitrary-precision Integer, user ADTs with the derive
+family, user classes and dictionaries, lazy infinite structures,
+`seq`/`($!)`, do-notation IO with stdin/stdout and file handles,
+command-line arguments, and the refinement/contract check
+primitives (compiled out under --unchecked; provably-true contract
+claims never reach the runtime at all).
 
 Standard library: `prelude/Prelude.hs` is compiled through the full
 pipeline ahead of every user module - list/tuple/Maybe/Either

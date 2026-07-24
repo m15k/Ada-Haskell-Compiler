@@ -1,6 +1,7 @@
 # Plan: Polish and Depth (v1.2)
 
-**Status:** PROPOSED. v1.1 closed the architecture: all four PRD
+**Status:** COMPLETE - every milestone below shipped; v1.2 was
+tagged on this plan. v1.1 closed the architecture: all four PRD
 phases, the refinement extension, the full stdlib, exhaustiveness
 warnings, the numeric tower as classes, and separate compilation.
 Nothing structural remains; what follows is chosen polish, ordered
