@@ -6,7 +6,12 @@ postconditions, and type invariants verify the compiler's own internal
 consistency in every development build. See `docs/adahc PRD.rtf` for the
 full product requirements, and **`docs/MANUAL.md`** for the complete
 manual - every design decision and the theory behind it, written for a
-reader who is not a compiler engineer.
+reader who is not a compiler engineer. New to the codebase?
+**`docs/STUDY-GUIDE.md`** is the guided path through it: eight
+stations from tokens to graph reduction, each with the source to
+read, the stage dumps to run, and a test question - plus an
+exercise ladder from "add a Prelude function" to "strike an
+EXCLUSIONS row".
 
 ## Building
 
