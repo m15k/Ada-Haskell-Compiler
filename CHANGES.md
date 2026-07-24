@@ -1,5 +1,32 @@
 # AHC Changelog
 
+## Unreleased
+
+CI + correctness mop-up (M82):
+
+- **Non-nullary deriving Enum/Bounded/Ix/Read is rejected at
+  compile time** ("all constructors must be nullary") instead of
+  compiling to runtime error stubs - AHC no longer accepts what
+  GHC rejects here (bad_derive_nonnullary.hs pins the agreement;
+  the single-constructor Bounded/Ix products GHC additionally
+  accepts stay honestly unimplemented).
+- **Float literals are exact decimal ratios** (Report 6.4):
+  codegen emits an exact numerator/denominator pair (Ratio-shaped
+  node) when Data.Ratio is in the program; the wired Rational
+  placeholder expands like a nullary synonym in unification once
+  `type Rational` exists; Data.Ratio gains the real source
+  fromRational, and Fractional Double's fromRational converts the
+  pair with ONE round-to-nearest-even. `0.1 :: Rational` is
+  `1 % 10`; every Double literal keeps its strtod-exact value.
+  The oldest EXCLUSIONS entry is struck
+  (ch06_04_rational_literals.hs, suite: 70).
+- **GitHub Actions CI** (.github/workflows/ci.yml): ubuntu runner
+  with Alire/GNAT and ghcup GHC 9.4.8, both build profiles, 219
+  unit tests, all eleven harnesses, 50 fuzz seeds, on every push
+  and PR. First cross-platform dividend arrived before the first
+  run: the 512MB-stack link flag was Darwin-only syntax;
+  ahc-build.sh now gates it per OS.
+
 ## v1.3 (2026-07-24)
 
 The verification-and-tooling release: the five-item post-v1.2
