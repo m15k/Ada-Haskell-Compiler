@@ -1,5 +1,18 @@
 # AHC Changelog
 
+## Unreleased
+
+The second dogfood program (M85): examples/json - ajson, a JSON
+parser and pretty-printer in the AHC subset, byte-identical
+compiled by AHC or interpreted by GHC across parse/pretty, error
+reporting, and a Data.Map --stats mode (goldens in the examples
+harness). It leans on everything v1.4 built: numbers are
+fromRational of the exact decimal ratio, output goes through the
+Burger-Dybvig show, \uXXXX escapes round-trip as code points with
+ASCII-only IO. First dogfood in the project's history to come up
+byte-identical on the FIRST build - the exactness release doing
+its job.
+
 ## v1.4 (2026-07-25)
 
 The exactness release (M82-M83). Float literals became exact

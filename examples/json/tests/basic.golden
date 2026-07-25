@@ -1,0 +1,30 @@
+{
+  "name": "ahc \u263a test",
+  "version": 1.4,
+  "exact": 0.1,
+  "big": 1.2345678901234568e29,
+  "sci": 2.5e-3,
+  "neg": -42,
+  "esc": "tab\there \"quotes\" back\\slash A",
+  "flags": [
+    true,
+    false,
+    null
+  ],
+  "nested": {
+    "empty_obj": {},
+    "empty_arr": [],
+    "deep": [
+      [
+        1,
+        2
+      ],
+      [
+        3.5,
+        {
+          "k": "v"
+        }
+      ]
+    ]
+  }
+}

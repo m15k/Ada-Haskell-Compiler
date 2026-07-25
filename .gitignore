@@ -13,3 +13,6 @@ examples/lisp/lisp.c
 examples/lisp/minilisp.build/
 examples/contracts
 tests/fuzz-failures/
+examples/json/ajson
+examples/json/ajson.build/
+examples/json/ajson.c
