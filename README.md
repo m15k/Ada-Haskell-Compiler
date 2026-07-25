@@ -56,9 +56,13 @@ compile-time contract discharge (provably-true claims vanish from
 the generated code; provably-false ones warn at compile time). The
 fuzzer and the REPL have since found seven real compiler bugs the
 hand-written suite had missed - all fixed and pinned, several of
-them only reachable at campaign scale (10,000 seeds). 74
-conformance programs byte-identical to GHC 9.4.8, eleven test
-harnesses. Nothing planned remains unbuilt.
+them only reachable at campaign scale (10,000 seeds). v1.4 is the
+exactness release (M82-M83): float literals as exact decimal
+ratios end to end, compile-time rejection of underivable shapes,
+Burger-Dybvig show digits, a floored-mod overflow fix, and the
+hardened deep-campaign fuzzer that found them. 74 conformance
+programs byte-identical to GHC 9.4.8, eleven test harnesses.
+Nothing planned remains unbuilt.
 
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable

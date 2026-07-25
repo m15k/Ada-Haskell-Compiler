@@ -1,6 +1,25 @@
 # AHC Changelog
 
-## Unreleased
+## v1.4 (2026-07-25)
+
+The exactness release (M82-M83). Float literals became exact
+decimal ratios end to end - `0.1 :: Rational` is `1 % 10`, every
+Double literal keeps its strtod-exact value through one correctly
+rounded conversion, and the oldest EXCLUSIONS entry fell.
+Non-nullary deriving is rejected at compile time instead of
+compiling to runtime stubs. Double's show now generates shortest
+round-trip digits by GHC's exact Burger-Dybvig algorithm, not
+printf rounding. The fuzzer's menu grew seven type families and
+its first 10,000-seed campaign ran - after teaching two hard
+lessons (a harness must time-limit every subprocess; a generator
+must emit TRACTABLE programs, not merely terminating ones) it
+found four compiler bugs down to a floored-mod overflow that
+surfaced three layers up as a mis-reduced Rational. All fixed,
+all pinned. Conformance suite: 69 -> 74 programs, byte-identical
+to GHC 9.4.8. A CI workflow exists but is parked pending GitHub
+billing (workflow_dispatch only). docs/fuzzer-guide.md documents
+campaign practice; docs/STUDY-GUIDE.md gives newcomers the
+guided path through the codebase.
 
 Fuzzer menu expansion + the first deep campaign (M83):
 
