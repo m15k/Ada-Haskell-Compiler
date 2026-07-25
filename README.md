@@ -3,10 +3,11 @@
 A ground-up compiler for [Haskell 2010](https://www.haskell.org/onlinereport/haskell2010/)
 written in Ada 2022, built around Design-by-Contract: preconditions,
 postconditions, and type invariants verify the compiler's own internal
-consistency in every development build. See `docs/adahc-PRD.md` for the
-full product requirements (`docs/adahc PRD.rtf` is the original), and **`docs/MANUAL.md`** for the complete
-manual - every design decision and the theory behind it, written for a
-reader who is not a compiler engineer. New to the codebase?
+consistency in every development build. See `docs/adahc-PRD.md` for
+the full product requirements (`docs/adahc PRD.rtf` is the
+original), and **`docs/MANUAL.md`** for the complete manual - every
+design decision and the theory behind it, written for a reader who
+is not a compiler engineer. New to the codebase?
 **`docs/STUDY-GUIDE.md`** is the guided path through it: eight
 stations from tokens to graph reduction, each with the source to
 read, the stage dumps to run, and a test question - plus an
@@ -53,8 +54,9 @@ honest `foldl'`, the System.IO file-handle API, `ahc repl`
 (compile-and-run over the object cache - no second evaluator), and
 compile-time contract discharge (provably-true claims vanish from
 the generated code; provably-false ones warn at compile time). The
-fuzzer and the REPL's first sessions found five real compiler bugs
-the hand-written suite had missed - all fixed and pinned. 69
+fuzzer and the REPL have since found seven real compiler bugs the
+hand-written suite had missed - all fixed and pinned, several of
+them only reachable at campaign scale (10,000 seeds). 74
 conformance programs byte-identical to GHC 9.4.8, eleven test
 harnesses. Nothing planned remains unbuilt.
 
