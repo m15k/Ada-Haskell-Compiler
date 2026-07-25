@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+Fuzzer menu expansion + the first deep campaign (M83):
+
+- **The menu grew** (docs/fuzzer-guide.md documents usage, triage
+  and the menu rule): records (construction, update, selectors), a
+  fielded ADT exercising the pattern matrix and derived Eq/Ord/Show
+  with negative fields, Either, Rational (exact literals, %,
+  numerator/denominator, guarded / and recip, fromRational),
+  exponent-form Double literals, sin/cos/log/exp, and
+  multi-binding let. Every construct was pinned byte-identical on
+  both compilers before entering the menu, per the standing rule.
+- **The harness can no longer be wedged.** Every external step
+  (generate, oracle, build, run) runs under a time limit, with two
+  new outcomes: SLOW-ORACLE (skip - an expensive program) and
+  SLOW-AHC (a finding). This was not theoretical: the first deep
+  campaign was discovered six hours in with three ORACLE processes
+  pegged at 100% CPU, the harness patiently waiting on programs
+  that would never finish. scripts/run_fuzz_par.sh splits a range
+  across parallel jobs over a compiled generator (~20x faster than
+  interpreting it per seed).
+- **The generator now emits TRACTABLE programs**, not merely
+  terminating ones - two disciplines, both learned from that
+  wedge. The recursive call is let-bound and the generator hands
+  out the variable, so k uses share one thunk (inlining "(f xs)"
+  at k sites is k^depth; a 3^n body was the hang). And any
+  construct whose cost depends on a value's MAGNITUDE is clamped:
+  a Double range's step falls below one ULP at large magnitudes
+  (v + 1.5 == v), making the range an infinite list.
+- **Three compiler bugs found, fixed and pinned** (suite: 70 ->
+  74 programs):
+  - **show, shortest-round-trip digits**: four seeds printed a
+    different last digit from GHC on bit-IDENTICAL values. GHC
+    picks digits by Burger-Dybvig; AHC derived them from printf's
+    correctly-rounded decimal, which agrees except on boundary
+    cases where two renderings both round-trip. The runtime now
+    implements GHC's floatToDigits exactly, over the existing
+    bignum limbs (ch11_04_show_double_digits.hs).
+  - **show, denormals**: the new digit generator took the
+    asymmetric boundary case at the minimum exponent. A denormal's
+    neighbours are evenly spaced - only a power-of-two significand
+    ABOVE the minimum exponent is asymmetric - so values below
+    2^-1022 printed one digit too many (ch11_04_show_denormal.hs).
+  - **mod, large positives**: the textbook floored-mod idiom
+    ((x`rem`y)+y)`rem`y OVERFLOWS when both operands are large
+    positives, wrapping negative. 7.4e18 `mod` 8.2e18 surfaced as
+    a wrong gcd and a mis-reduced Rational, layers above the
+    arithmetic (ch06_04_mod_large.hs). div was already correct;
+    add/sub/mul use __builtin_*_overflow.
+
 CI + correctness mop-up (M82):
 
 - **Non-nullary deriving Enum/Bounded/Ix/Read is rejected at

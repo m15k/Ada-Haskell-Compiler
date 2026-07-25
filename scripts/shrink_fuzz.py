@@ -25,14 +25,20 @@ def outcome(text, workdir):
     exe = os.path.join(workdir, "cand")
     with open(prog, "w") as f:
         f.write(text)
-    ghc = subprocess.run([RUNGHC, prog], capture_output=True, timeout=120)
-    if ghc.returncode != 0:
-        return "illtyped"
-    ahc = subprocess.run(["scripts/ahc-build.sh", prog, exe],
-                         capture_output=True, timeout=300)
-    if ahc.returncode != 0:
-        return "reject"
-    run = subprocess.run([exe], capture_output=True, timeout=120)
+    # A candidate may be arbitrarily expensive; a timeout simply
+    # means "not the same divergence", never a crashed shrinker.
+    try:
+        ghc = subprocess.run([RUNGHC, prog], capture_output=True,
+                             timeout=60)
+        if ghc.returncode != 0:
+            return "illtyped"
+        ahc = subprocess.run(["scripts/ahc-build.sh", prog, exe],
+                             capture_output=True, timeout=180)
+        if ahc.returncode != 0:
+            return "reject"
+        run = subprocess.run([exe], capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return "slow"
     if run.returncode != 0 or run.stdout != ghc.stdout:
         return "mismatch"
     return "agree"

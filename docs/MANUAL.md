@@ -1272,7 +1272,7 @@ interleaved wall time, opt vs `--no-opt`): 2.10x on a strict fold,
 `Data.Map` build-and-fold, and ~1.0x on call-dominated (`fib`) and
 bignum-primitive-dominated workloads, whose time is spent where the
 simplifier doesn't reach. The strongest evidence it changes nothing
-is that all 69 GHC-oracle conformance programs are byte-identical
+is that all 74 GHC-oracle conformance programs are byte-identical
 with it on.
 
 ---
@@ -1286,7 +1286,7 @@ compiler author writes have a blind spot: the author's
 misunderstanding of Haskell goes into the test's expected output
 too. AHC's answer, and the single most valuable methodology decision
 of the project: **GHC is the oracle**. The conformance suite
-(`tests/conformance/`, 69 programs pinned to Report sections)
+(`tests/conformance/`, 74 programs pinned to Report sections)
 stores as its expected output *whatever GHC 9.4.8 prints* for the
 same source, and AHC must reproduce it **byte for byte** —
 `scripts/run_conformance.sh --oracle` regenerates the expectations
@@ -1325,7 +1325,7 @@ and failed the truth.*
 | `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
-| `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically) |
+| `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically; deep parallel campaigns via `run_fuzz_par.sh` — usage, triage, and the menu rule in `docs/fuzzer-guide.md`) |
 | `scripts/run_repl.sh` | does the REPL behave? (pinned `tests/repl/*.in` transcripts through `ahc repl` — prompts, results, error-and-recovery, `:load` semantics — in a fixed scratch dir so diagnostic paths stay deterministic) |
 | `scripts/run_discharge.sh` | did compile-time contract discharge do exactly what it may? (trivially-true claims absent from the generated C, argument-dependent claims present, provably-false claims warn and stay) |
 
@@ -1460,6 +1460,26 @@ scan now stops at the first token a pattern cannot contain
 (`let`, `case`, `if`, lambda, ...), so lookahead can no longer
 open a layout context at all — the answer is known before the
 hazard is reachable.
+
+**The six-hour wedge (and what a fuzzer owes its harness).** The
+first deep fuzz campaign — 10,000 seeds, budgeted at an hour — was
+found six hours later with three GHC *oracle* processes pegged at
+100% CPU. Nothing was broken: the harness was patiently waiting on
+programs that would never finish. The generator's totality
+discipline guaranteed structural recursion, so every program
+*terminated* — but it emitted the recursive call inline at each use
+site, so a body containing `min (f xs) (f xs)` costs 2^n, and one
+seed managed 3^n. A second seed found the other flavour: a Double
+range `[v, v+1.5 .. v+4.5]` where `v ≈ 1.16e29`, at which
+magnitude the step falls below one ULP, `v + 1.5 == v`, and the
+range is an infinite list. Both fixes were structural — let-bind
+the recursive call so k uses share one thunk, clamp any construct
+whose cost depends on a *value's* magnitude — but the important
+one was in the harness: every external step now runs under a time
+limit. Rule: **termination is not tractability**, and a test
+harness that can block forever on its own input has no business
+being trusted to run unattended. Give every subprocess a deadline
+before you give it a workload.
 
 **The stolen body.** The REPL's first real session typed
 `import Data.Map` then `nub "abracadabra"` and died on a missing

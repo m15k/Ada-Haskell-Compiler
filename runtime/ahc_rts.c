@@ -483,8 +483,14 @@ static double rat_to_double(AhcNode *n, AhcNode *d) {
     else if (shift < 0) ds = node_shl(d, -shift);
     big_quotrem(ns, ds, &q, &r);
     sticky = !(r->tag == AHC_INT && r->u.i == 0);
-    if (q->tag == AHC_INT) qv = (unsigned long)q->u.i;
-    else {
+    /* MAGNITUDE of q: literal pairs are positive, but a computed
+       Rational's numerator is signed and rides through quotrem
+       (fuzzer find, seed 205 - the sign bits corrupted the
+       mantissa extraction). */
+    if (q->tag == AHC_INT) {
+      long v = q->u.i;
+      qv = (unsigned long)(v < 0 ? -v : v);
+    } else {
       limb t3[2];
       BigView Q = big_view(q, t3);
       int i;
@@ -502,7 +508,7 @@ static double rat_to_double(AhcNode *n, AhcNode *d) {
     k = (nb - 53) - shift;
     {
       double v = ldexp((double)mant, k);
-      return N.sign < 0 ? -v : v;
+      return (N.sign < 0) != (D.sign < 0) ? -v : v;
     }
   }
 }
@@ -740,8 +746,17 @@ static AhcNode *p_mod(AhcNode *a, AhcNode *b) {
   if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
     long x = ea->u.i, y = eb->u.i;
     if (y == 0) ahc_die("divide by zero");
-    if (!(x == LONG_MIN && y == -1))
-      return ahc_mk_int(((x % y) + y) % y);
+    if (!(x == LONG_MIN && y == -1)) {
+      /* Floor-adjust ONLY when the signs differ. The textbook
+         ((x%y)+y)%y overflows when x%y and y are both large and
+         positive - 7.4e18 `mod` 8.2e18 wrapped NEGATIVE (fuzzer
+         find, seed 6215, which surfaced as a wrong gcd and a
+         mis-reduced Rational). With opposite signs
+         |r+y| < max(|r|,|y|), so this addition cannot overflow. */
+      long r = x % y;
+      if (r != 0 && ((r < 0) != (y < 0))) r += y;
+      return ahc_mk_int(r);
+    }
   }
   {
     AhcNode *q, *r;
@@ -1661,6 +1676,163 @@ static AhcNode *p_showsprec_int(AhcNode *d, AhcNode *x) {
 /* GHC's show for Double: shortest digit string that round-trips,
    fixed notation when 0.1 <= |v| < 1e7, scientific (d.ddde<exp>)
    otherwise; "Infinity" / "NaN" for the specials. */
+/* ----- GHC-exact digit generation --------------------------------
+   Burger & Dybvig free-format shortest digits, exactly GHC's
+   floatToDigits at base 10. printf's correctly-rounded N-digit
+   decimal agrees with this except on last-digit boundary cases
+   where two candidates both round-trip - the fuzzer's deep
+   campaign found four of them in 10k seeds (M83). All arithmetic
+   is exact, over the bignum nodes. */
+
+static int node_cmp_pos(AhcNode *a, AhcNode *b) {
+  limb t1[2], t2[2];
+  BigView A = big_view(a, t1), B = big_view(b, t2);
+  if (A.n != B.n) return A.n < B.n ? -1 : 1;
+  return mag_cmp(A.d, A.n, B.d, B.n);
+}
+
+static AhcNode *node_mul_small(AhcNode *a, long k) {
+  return p_mul(a, ahc_mk_int(k));
+}
+
+static AhcNode *node_pow10(int n) {
+  AhcNode *r = ahc_mk_int(1);
+  int i;
+  for (i = 0; i < n; i++) r = node_mul_small(r, 10);
+  return r;
+}
+
+static AhcNode *node_add_pos(AhcNode *a, AhcNode *b) {
+  return p_add(a, b);
+}
+
+/* v: positive, finite. digits[] gets '0'+d chars; returns count;
+   *k_out = decimal exponent (v ~ 0.d1d2... * 10^k). */
+static int bd_digits(double v, char *digits, int *k_out) {
+  unsigned long bits;
+  unsigned long mant;
+  int biased, e, k, nd = 0;
+  AhcNode *f, *r, *sN, *mUp, *mDn;
+  memcpy(&bits, &v, 8);
+  mant = bits & 0xFFFFFFFFFFFFFUL;
+  biased = (int)((bits >> 52) & 0x7FF);
+  if (biased == 0) {              /* denormal */
+    f = ahc_mk_int((long)mant);
+    e = -1074;
+  } else {
+    f = ahc_mk_int((long)(mant | (1UL << 52)));
+    e = biased - 1075;
+  }
+  /* boundaries (Burger-Dybvig, GHC's exact branching; b = 2,
+     p = 53, minExp = -1074) */
+  {
+    int pow2_mant = (biased != 0 && mant == 0);
+    if (e >= 0) {
+      AhcNode *be = ahc_mk_int(1);
+      int i;
+      for (i = 0; i < e; i++) be = node_mul_small(be, 2);
+      if (!pow2_mant) {
+        r = node_mul_small(p_mul(f, be), 2);
+        sN = ahc_mk_int(2);
+        mUp = be; mDn = be;
+      } else {
+        r = node_mul_small(node_mul_small(p_mul(f, be), 2), 2);
+        sN = ahc_mk_int(4);
+        mUp = node_mul_small(be, 2); mDn = be;
+      }
+    } else {
+      /* Asymmetric boundaries ONLY at a binade floor that is not
+         the minimum exponent: there the gap below is half the gap
+         above. A DENORMAL (e == minExp) has evenly spaced
+         neighbours and must take the symmetric case - getting
+         this backwards printed one digit too many for values
+         below 2^-1022 (fuzzer find, seed 5844). */
+      if (e > -1074 && pow2_mant) {
+        AhcNode *bk = ahc_mk_int(1);
+        int i;
+        for (i = 0; i < -e + 1; i++) bk = node_mul_small(bk, 2);
+        r = node_mul_small(f, 4);
+        sN = node_mul_small(bk, 2);
+        mUp = ahc_mk_int(2); mDn = ahc_mk_int(1);
+      } else {
+        AhcNode *bk = ahc_mk_int(1);
+        int i;
+        for (i = 0; i < -e; i++) bk = node_mul_small(bk, 2);
+        r = node_mul_small(f, 2);
+        sN = node_mul_small(bk, 2);
+        mUp = ahc_mk_int(1); mDn = ahc_mk_int(1);
+      }
+    }
+  }
+  /* k estimate + fixup (GHC's integer log estimate) */
+  k = (int)(((long)(52 + e) * 8651L) / 28738L)
+      + (((52 + e) < 0) ? 0 : 0);
+  if ((52 + e) < 0 && ((long)(52 + e) * 8651L) % 28738L != 0)
+    ;   /* C division truncates toward zero; fixup loop corrects */
+  for (;;) {
+    if (k >= 0) {
+      AhcNode *sk = p_mul(sN, node_pow10(k));
+      if (node_cmp_pos(node_add_pos(r, mUp), sk) <= 0) break;
+      k++;
+    } else {
+      AhcNode *lhs =
+        p_mul(node_pow10(-k), node_add_pos(r, mUp));
+      if (node_cmp_pos(lhs, sN) <= 0) break;
+      k++;
+    }
+  }
+  for (;;) {          /* also correct a too-high estimate */
+    if (k > 0) {
+      AhcNode *sk = p_mul(sN, node_pow10(k - 1));
+      if (node_cmp_pos(node_add_pos(r, mUp), sk) > 0) break;
+      k--;
+    } else {
+      AhcNode *lhs =
+        p_mul(node_pow10(-(k - 1)), node_add_pos(r, mUp));
+      if (node_cmp_pos(lhs, sN) > 0) break;
+      k--;
+    }
+  }
+  /* scale */
+  if (k >= 0) sN = p_mul(sN, node_pow10(k));
+  else {
+    AhcNode *bk = node_pow10(-k);
+    r = p_mul(r, bk);
+    mUp = p_mul(mUp, bk);
+    mDn = p_mul(mDn, bk);
+  }
+  /* digit loop */
+  for (;;) {
+    AhcNode *q, *rem;
+    long dn;
+    int low, high;
+    big_quotrem(node_mul_small(r, 10), sN, &q, &rem);
+    dn = ahc_eval(q)->u.i;      /* 0..10, always small */
+    r = rem;
+    mUp = node_mul_small(mUp, 10);
+    mDn = node_mul_small(mDn, 10);
+    low = node_cmp_pos(r, mDn) < 0;
+    high = node_cmp_pos(node_add_pos(r, mUp), sN) > 0;
+    if (!low && !high) {
+      digits[nd++] = (char)('0' + dn);
+      if (nd > 20) break;       /* cannot happen; safety */
+      continue;
+    }
+    if (low && !high) digits[nd++] = (char)('0' + dn);
+    else if (!low && high) digits[nd++] = (char)('0' + dn + 1);
+    else {
+      if (node_cmp_pos(node_mul_small(r, 2), sN) < 0)
+        digits[nd++] = (char)('0' + dn);
+      else
+        digits[nd++] = (char)('0' + dn + 1);
+    }
+    break;
+  }
+  digits[nd] = 0;
+  *k_out = k;
+  return nd;
+}
+
 static void fmt_double(char *buf, size_t n, double v) {
   char sci[64], digits[32];
   int prec, e10, nd, i, j;
@@ -1673,18 +1845,12 @@ static void fmt_double(char *buf, size_t n, double v) {
     snprintf(buf, n, signbit(v) ? "-0.0" : "0.0");
     return;
   }
-  for (prec = 0; prec < 17; prec++) {
-    snprintf(sci, sizeof sci, "%.*e", prec, v);
-    if (strtod(sci, NULL) == v) break;
+  (void)sci; (void)prec;
+  {
+    int k;
+    nd = bd_digits(v < 0 ? -v : v, digits, &k);
+    e10 = k - 1;    /* 0.d1.. * 10^k  ==  d1.d2.. * 10^(k-1) */
   }
-  /* sci is [-]d[.ddd]e±XX; pull out the digits and exponent. */
-  i = 0; j = 0;
-  if (sci[i] == '-') i++;
-  for (; sci[i] && sci[i] != 'e'; i++)
-    if (sci[i] != '.') digits[j++] = sci[i];
-  digits[j] = 0;
-  nd = j;
-  e10 = (int)strtol(sci + i + 1, NULL, 10);
   j = 0;
   if (v < 0) buf[j++] = '-';
   if (e10 >= 0 && e10 < 7) {

@@ -66,7 +66,8 @@ chance k n = do i <- rnd n
 -- ===== the type universe ==========================================
 
 data Ty = TInt | TInteger | TDouble | TBool | TChar | TEnum
-        | TList Ty | TMaybe Ty | TPair Ty Ty
+        | TShape | TRec | TRational
+        | TList Ty | TMaybe Ty | TPair Ty Ty | TEither Ty Ty
   deriving (Eq, Show)
 
 rTy :: Ty -> String
@@ -76,10 +77,14 @@ rTy TDouble       = "Double"
 rTy TBool         = "Bool"
 rTy TChar         = "Char"
 rTy TEnum         = "E0"
+rTy TShape        = "S0"
+rTy TRec          = "R0"
+rTy TRational     = "Rational"
 rTy (TList TChar) = "String"
 rTy (TList t)     = "[" ++ rTy t ++ "]"
 rTy (TMaybe t)    = "(Maybe " ++ rTy t ++ ")"
 rTy (TPair a b)   = "(" ++ rTy a ++ ", " ++ rTy b ++ ")"
+rTy (TEither a b) = "(Either " ++ rTy a ++ " " ++ rTy b ++ ")"
 
 scalars :: [Ty]
 scalars = [TInt, TInteger, TDouble, TBool, TChar, TEnum]
@@ -93,7 +98,11 @@ anyTy = freq
   , (3, TList <$> scalarTy)
   , (2, TMaybe <$> scalarTy)
   , (2, TPair <$> scalarTy <*> scalarTy)
-  , (1, TList <$> (TPair <$> scalarTy <*> scalarTy)) ]
+  , (1, TList <$> (TPair <$> scalarTy <*> scalarTy))
+  , (2, pure TShape)
+  , (2, pure TRec)
+  , (2, pure TRational)
+  , (1, TEither <$> scalarTy <*> scalarTy) ]
 
 enumCons :: [String]
 enumCons = ["K0", "K1", "K2", "K3"]
@@ -110,9 +119,14 @@ data Fun = Fun String [Ty] Ty
 
 data Env = Env { evars :: [(String, Ty)]
                , efuns :: [Fun]
-               , erec  :: Maybe (String, String, Ty) }
-               -- erec: (f, xs, result) - the one legal recursive
-               -- call "(f xs)", structural on the match's own tail
+               , erec  :: Maybe (String, Ty) }
+               -- erec: (name, type) of the LET-BOUND recursive
+               -- call. Binding it once and exposing the variable
+               -- makes repeated uses SHARE one thunk: the body
+               -- stays linear where inlining "(f xs)" at k sites
+               -- would be k^depth. Structural termination is not
+               -- enough - a 3^n body once pinned three oracle
+               -- processes at 100% CPU for six hours (M83).
 
 addV :: (String, Ty) -> Env -> Env
 addV p e = e { evars = p : evars e }
@@ -122,8 +136,8 @@ varOf env t = [n | (n, t') <- evars env, t' == t]
 
 recOf :: Env -> Ty -> [String]
 recOf env t = case erec env of
-  Just (f, xs, r) | r == t -> ["(" ++ f ++ " " ++ xs ++ ")"]
-  _                        -> []
+  Just (v, r) | r == t -> [v]
+  _                    -> []
 
 -- ===== literals ===================================================
 
@@ -135,13 +149,38 @@ lit TInteger = freq
            d0 <- rnd 9
            ds <- mapM (const (rnd 10)) [1 .. 14 + k]
            return (concatMap show (d0 + 1 : ds))) ]
-lit TDouble = do a <- rnd 100
-                 b <- rnd 100
-                 return (show a ++ "." ++ (if b < 10 then "0" else "")
-                         ++ show b)
+lit TDouble = freq
+  [ (3, do a <- rnd 100
+           b <- rnd 100
+           return (show a ++ "." ++ (if b < 10 then "0" else "")
+                   ++ show b))
+  , (1, do a <- rnd 100          -- exponent form (M82 exact path)
+           b <- rnd 100
+           e <- rnd 13
+           return (show a ++ "." ++ (if b < 10 then "0" else "")
+                   ++ show b ++ "e" ++ (if even e then "-" else "")
+                   ++ show (e `div` 2 + 1))) ]
 lit TBool = pick ["True", "False"]
 lit TChar = fmap show (pick safeChars)
 lit TEnum = pick enumCons
+lit TShape = freq
+  [ (1, return "SP")
+  , (2, do e <- lit TInt
+           return ("(SC " ++ e ++ ")"))
+  , (2, do e <- lit TInt
+           c <- lit TChar
+           return ("(SR " ++ e ++ " " ++ c ++ ")")) ]
+lit TRec = do a <- lit TInt
+              b <- lit TChar
+              c <- lit TBool
+              return ("(MkR0 { r0a = " ++ a ++ ", r0b = " ++ b
+                      ++ ", r0c = " ++ c ++ " })")
+lit TRational = lit TDouble        -- decimal text; exact by M82
+lit (TEither a b) = freq
+  [ (1, do e <- lit a
+           return ("(Left " ++ e ++ ")"))
+  , (1, do e <- lit b
+           return ("(Right " ++ e ++ ")")) ]
 lit (TMaybe t) = freq
   [ (1, return "Nothing")
   , (2, do e <- lit t
@@ -185,12 +224,23 @@ common sz env t =
              b <- genE h env t
              return ("(if " ++ c ++ " then " ++ a
                      ++ " else " ++ b ++ ")")
-    letE = do v  <- fresh
-              vt <- scalarTy
-              r  <- genE h env vt
-              b  <- genE h (addV (v, vt) env) t
-              return ("(let " ++ v ++ " = " ++ r
-                      ++ " in " ++ b ++ ")")
+    letE = freq
+      [ (3, do v  <- fresh
+               vt <- scalarTy
+               r  <- genE h env vt
+               b  <- genE h (addV (v, vt) env) t
+               return ("(let " ++ v ++ " = " ++ r
+                       ++ " in " ++ b ++ ")"))
+      , (1, do v1 <- fresh
+               t1 <- scalarTy
+               r1 <- genE (sz `div` 3) env t1
+               v2 <- fresh
+               t2 <- scalarTy
+               r2 <- genE (sz `div` 3) (addV (v1, t1) env) t2
+               b  <- genE h (addV (v2, t2)
+                              (addV (v1, t1) env)) t
+               return ("(let " ++ v1 ++ " = " ++ r1 ++ "; " ++ v2
+                       ++ " = " ++ r2 ++ " in " ++ b ++ ")")) ]
     caseE = freq
       [ (2, do st <- scalarTy
                s  <- genE h env (TMaybe st)
@@ -230,7 +280,30 @@ common sz env t =
                           then intercalate " ; " alts
                           else intercalate " ; " (take 2 alts)
                                ++ " ; _ -> " ++ d
-               return ("(case " ++ s ++ " of { " ++ body ++ " })")) ]
+               return ("(case " ++ s ++ " of { " ++ body ++ " })"))
+      , (2, do s  <- genE h env TShape
+               e0 <- genE (sz `div` 3) env t
+               v1 <- fresh
+               e1 <- genE (sz `div` 3) (addV (v1, TInt) env) t
+               v2 <- fresh
+               v3 <- fresh
+               e2 <- genE (sz `div` 3)
+                       (addV (v2, TInt) (addV (v3, TChar) env)) t
+               return ("(case " ++ s ++ " of { SP -> " ++ e0
+                       ++ " ; SC " ++ v1 ++ " -> " ++ e1
+                       ++ " ; SR " ++ v2 ++ " " ++ v3 ++ " -> "
+                       ++ e2 ++ " })"))
+      , (1, do a  <- scalarTy
+               b  <- scalarTy
+               s  <- genE h env (TEither a b)
+               v1 <- fresh
+               e1 <- genE h (addV (v1, a) env) t
+               v2 <- fresh
+               e2 <- genE h (addV (v2, b) env) t
+               return ("(case (" ++ s ++ " :: " ++ rTy (TEither a b)
+                       ++ ") of { Left " ++ v1 ++ " -> " ++ e1
+                       ++ " ; Right " ++ v2 ++ " -> " ++ e2
+                       ++ " })")) ]
     appE (Fun n args _) = do
       as <- mapM (genE (max 0 (sz `div` (1 + length args))) env) args
       return ("(" ++ n ++ " " ++ unwords as ++ ")")
@@ -299,6 +372,8 @@ node sz env t = freq (common sz env t ++ own)
                  return ("(" ++ f ++ " " ++ ne ++ ")"))
         , (1, do c <- sub TChar
                  return ("(ord " ++ c ++ ")"))
+        , (1, do r <- sub TRec
+                 return ("(r0a " ++ r ++ ")"))
         , (1, do e <- freq [(2, sub TEnum), (1, sub TBool)]
                  return ("(fromEnum " ++ e ++ ")"))
         , (1, do l <- rnd 60
@@ -322,7 +397,11 @@ node sz env t = freq (common sz env t ++ own)
                  b <- sub TInteger
                  return ("(" ++ f ++ " " ++ a ++ " " ++ b ++ ")"))
         , (1, do e <- sub TInt
-                 return ("(toInteger (" ++ e ++ " :: Int))")) ]
+                 return ("(toInteger (" ++ e ++ " :: Int))"))
+        , (1, do f <- pick ["numerator", "denominator"]
+                 r <- sub TRational
+                 return ("(" ++ f ++ " (" ++ r
+                         ++ " :: Rational))")) ]
       TDouble ->
         [ (3, bin TDouble "+"), (2, bin TDouble "-")
         , (2, bin TDouble "*")
@@ -334,6 +413,16 @@ node sz env t = freq (common sz env t ++ own)
                          ++ " else " ++ d ++ ")))"))
         , (1, do a <- sub TDouble
                  return ("(sqrt (abs " ++ a ++ "))"))
+        , (1, do f <- pick ["sin", "cos"]
+                 a <- sub TDouble
+                 return ("(" ++ f ++ " " ++ a ++ ")"))
+        , (1, do a <- sub TDouble
+                 return ("(log ((abs " ++ a ++ ") + 1.0))"))
+        , (1, do a <- genE s3 env TDouble
+                 return ("(exp (min 20.0 " ++ a ++ "))"))
+        , (1, do r <- sub TRational
+                 return ("(fromRational (" ++ r
+                         ++ " :: Rational))"))
         , (1, unary TDouble ["abs", "negate"])
         , (1, do f <- pick ["min", "max"]
                  a <- sub TDouble
@@ -347,7 +436,12 @@ node sz env t = freq (common sz env t ++ own)
         [ (4, do ct <- freq [ (4, scalarTy)
                             , (2, TList <$> scalarTy)
                             , (1, TMaybe <$> scalarTy)
-                            , (1, TPair <$> scalarTy <*> scalarTy) ]
+                            , (1, TPair <$> scalarTy <*> scalarTy)
+                            , (2, pure TShape)
+                            , (1, pure TRec)
+                            , (2, pure TRational)
+                            , (1, TEither <$> scalarTy
+                                          <*> scalarTy) ]
                  op <- pick ["==", "/=", "<", "<=", ">", ">="]
                  a  <- sub ct
                  b  <- sub ct
@@ -372,7 +466,11 @@ node sz env t = freq (common sz env t ++ own)
         , (1, do f  <- pick ["isJust", "isNothing"]
                  st <- scalarTy
                  m  <- sub (TMaybe st)
-                 return ("(" ++ f ++ " " ++ m ++ ")"))
+                 --  Erasure point: isJust drops the element type,
+                 --  so a chain like isJust (listToMaybe (sort []))
+                 --  is ambiguous without this annotation.
+                 return ("(" ++ f ++ " (" ++ m ++ " :: (Maybe "
+                         ++ rTy st ++ ")))"))
         , (1, do f <- pick ["all", "any"]
                  p <- pick ["even", "odd"]
                  l <- sub (TList TInt)
@@ -407,6 +505,55 @@ node sz env t = freq (common sz env t ++ own)
                  a <- sub TEnum
                  b <- sub TEnum
                  return ("(" ++ f ++ " " ++ a ++ " " ++ b ++ ")")) ]
+      TShape ->
+        [ (3, do e <- sub TInt
+                 return ("(SC " ++ e ++ ")"))
+        , (2, do e <- sub TInt
+                 c <- sub TChar
+                 return ("(SR " ++ e ++ " " ++ c ++ ")"))
+        , (1, return "SP")
+        , (1, do f <- pick ["min", "max"]
+                 a <- sub TShape
+                 b <- sub TShape
+                 return ("(" ++ f ++ " " ++ a ++ " " ++ b ++ ")")) ]
+      TRec ->
+        [ (3, do a <- sub TInt
+                 b <- sub TChar
+                 c <- sub TBool
+                 return ("(MkR0 { r0a = " ++ a ++ ", r0b = " ++ b
+                         ++ ", r0c = " ++ c ++ " })"))
+        , (2, do r <- sub TRec
+                 a <- sub TInt
+                 return ("((" ++ r ++ ") { r0a = " ++ a ++ " })"))
+        , (1, do r <- sub TRec
+                 b <- sub TChar
+                 c <- sub TBool
+                 return ("((" ++ r ++ ") { r0b = " ++ b
+                         ++ ", r0c = " ++ c ++ " })")) ]
+      TRational ->
+        [ (3, bin TRational "+"), (2, bin TRational "-")
+        , (2, bin TRational "*")
+        , (2, do a <- sub TInteger
+                 b <- sub TInteger
+                 return ("((" ++ a ++ ") % (max 1 (abs ("
+                         ++ b ++ "))))"))
+        , (1, do a <- sub TRational
+                 b <- sub TRational
+                 d <- fresh
+                 return ("(" ++ a ++ " / (let " ++ d ++ " = " ++ b
+                         ++ " in (if (" ++ d ++ " == 0) then 1"
+                         ++ " else " ++ d ++ ")))"))
+        , (1, do a <- sub TRational
+                 v <- fresh
+                 return ("(let " ++ v ++ " = " ++ a
+                         ++ " in (if (" ++ v ++ " == 0) then 1"
+                         ++ " else (recip " ++ v ++ ")))"))
+        , (1, unary TRational ["abs", "negate", "signum"]) ]
+      TEither a b ->
+        [ (2, do e <- sub a
+                 return ("(Left " ++ e ++ ")"))
+        , (2, do e <- sub b
+                 return ("(Right " ++ e ++ ")")) ]
       TList TChar ->
         [ (3, do st <- anyTy
                  e  <- genE h env st
@@ -519,12 +666,17 @@ node sz env t = freq (common sz env t ++ own)
       , (1, do a <- genE s3 env (TList TInt)
                b <- genE s3 env (TList TInt)
                return ("(zipWith (+) " ++ a ++ " " ++ b ++ ")")) ]
+    -- The base is CLAMPED: at a magnitude where the step falls
+    -- below one ULP, v + step == v, the limit test never fails,
+    -- and the range is an infinite list of one value - a program
+    -- that hangs both compilers (M83 campaign, seed 2788).
     rangeProds TDouble =
       [ (1, do v    <- fresh
                a    <- genE s3 env TDouble
                step <- pick ["0.25", "0.5", "1.5", "2.0"]
                span_ <- pick ["1.0", "3.0", "4.5"]
-               return ("(let " ++ v ++ " = " ++ a ++ " in [" ++ v
+               return ("(let " ++ v ++ " = (min 1000.0 (abs ("
+                       ++ a ++ "))) in [" ++ v
                        ++ ", (" ++ v ++ " + " ++ step ++ ") .. ("
                        ++ v ++ " + " ++ span_ ++ ")])")) ]
     rangeProds _ = []
@@ -569,11 +721,14 @@ genDef prior i = freq
       b0 <- genE 5 env0 rt
       v1 <- fresh
       v2 <- fresh
+      vr <- fresh
       let envC = addV (v1, et) (addV (v2, TList et) env0)
-      bc <- genE 8 (envC { erec = Just (fn, v2, rt) }) rt
+      bc <- genE 8 (envC { erec = Just (vr, rt) }) rt
       return (Def [ fn ++ " :: [" ++ rTy et ++ "] -> " ++ rTy rt
                   , fn ++ " [] = " ++ b0
-                  , fn ++ " (" ++ v1 ++ " : " ++ v2 ++ ") = " ++ bc ]
+                  , fn ++ " (" ++ v1 ++ " : " ++ v2 ++ ") = (let "
+                    ++ vr ++ " = " ++ fn ++ " " ++ v2 ++ " in "
+                    ++ bc ++ ")" ]
                   (Fun fn [TList et] rt))
     withWhere = do
       a1 <- scalarTy
@@ -644,9 +799,14 @@ program seed = do
      , "                  isPrefixOf, foldl')"
      , "import Data.Maybe (isJust, isNothing, fromMaybe, catMaybes,"
      , "                   mapMaybe, listToMaybe)"
+     , "import Data.Ratio ((%), numerator, denominator)"
      , ""
      , "data E0 = K0 | K1 | K2 | K3"
      , "  deriving (Eq, Ord, Show, Enum, Bounded)"
+     , "data S0 = SP | SC Int | SR Int Char"
+     , "  deriving (Eq, Ord, Show)"
+     , "data R0 = MkR0 { r0a :: Int, r0b :: Char, r0c :: Bool }"
+     , "  deriving (Eq, Ord, Show)"
      , "" ]
      ++ concatMap (\d -> dText d ++ [""]) defs
      ++ [ "main :: IO ()", "main = do" ]
