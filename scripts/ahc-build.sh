@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Compile a Haskell module to a native executable:
 #   scripts/ahc-build.sh FILE.hs [OUT]
+# or, with --lib, to a static library plus a C header for its
+# foreign exports:
+#   scripts/ahc-build.sh --lib FILE.hs OUT.a
+#   (header: OUT.a.build/ahc_exports.h; call ahc_lib_init() first,
+#    from the one thread that will use the library)
 #
 # Separate compilation: `ahc emit` writes OUT.build/ containing one C
 # file per module (with STABLE symbols - a unit's text depends only on
@@ -10,12 +15,15 @@
 # cached the same way. Then everything links.
 set -eu
 cd "$(dirname "$0")/.."
+lib=false
+if [ "${1:-}" = "--lib" ]; then lib=true; shift; fi
 src="$1"
 out="${2:-${1%.hs}}"
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
 # AHC_UNCHECKED=1 compiles refinement checks out (release policy).
 # AHC_NOOPT=1 skips the Core simplifier.
-./bin/ahc emit "$src" "$out" ${AHC_UNCHECKED:+--unchecked} ${AHC_NOOPT:+--no-opt} >/dev/null
+./bin/ahc emit "$src" "$out" ${AHC_UNCHECKED:+--unchecked} ${AHC_NOOPT:+--no-opt} \
+  $($lib && echo --lib) >/dev/null
 
 builddir="$out.build"
 cache="$builddir/cache"
@@ -68,6 +76,18 @@ for c in "$builddir"/*.c; do
   fi
   objs="$objs $o"
 done
+
+if $lib; then
+  # A static archive (runtime object included) plus the generated
+  # export header. The host program controls the stack; deep lazy
+  # structures may need it raised.
+  rm -f "$out"
+  # shellcheck disable=SC2086
+  ar rcs "$out" $objs
+  echo "built $out (header: $builddir/ahc_exports.h;" \
+       "link with: $gc_ldflags $user_ldflags)"
+  exit 0
+fi
 
 # Graph reduction evaluates long thunk chains (a 1M-element foldl)
 # by C recursion; give the main thread a 512MB stack so depth limits

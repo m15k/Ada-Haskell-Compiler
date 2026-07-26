@@ -43,9 +43,13 @@ package AHC.CodeGen is
    --  Owners has one entry per M.Top_Binds group naming its unit;
    --  F_Owners likewise one entry per M.Foreigns import. Units lists
    --  unit names in initialization (dependency) order; the LAST unit
-   --  is the root and receives main(). Header is the shared prog.h
-   --  content (extern globals + init prototypes); Files holds one C
-   --  file per unit, in Units order.
+   --  is the root and receives main() - or, in Lib_Mode, a
+   --  C-callable ahc_lib_init() that runs the RTS and unit inits.
+   --  Foreign exports become C-ABI entry functions in the root unit;
+   --  Exports_H is the generated ahc_exports.h content declaring
+   --  them. Header is the shared prog.h content (extern globals +
+   --  init prototypes); Files holds one C file per unit, in Units
+   --  order.
    procedure Emit_Units
      (Table    : in out Names.Name_Table;
       M        : Core.Core_Module;
@@ -54,7 +58,9 @@ package AHC.CodeGen is
       Owners   : UStr_Vectors.Vector;
       F_Owners : UStr_Vectors.Vector;
       Units    : UStr_Vectors.Vector;
+      Lib_Mode : Boolean;
       Header   : out Ada.Strings.Unbounded.Unbounded_String;
+      Exports_H : out Ada.Strings.Unbounded.Unbounded_String;
       Files    : out Unit_File_Vectors.Vector);
 
 end AHC.CodeGen;

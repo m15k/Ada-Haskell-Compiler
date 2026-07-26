@@ -1482,11 +1482,40 @@ package body AHC.Desugar is
       procedure Ds_Foreign (D : Real_Decl_Id; N : Decl_Node) is
          V : constant Core.Var_Id := Res.Decl_Var (Positive (D));
 
+         --  The C symbol must be a plain C identifier - and not a C
+         --  keyword, or the generated prototype/entry function would
+         --  not compile (exporting Haskell's `double` is the classic
+         --  trip-wire).
+         function Valid_C_Name (S : String) return Boolean is
+         begin
+            if S'Length = 0
+              or else S (S'First) not in 'A' .. 'Z' | 'a' .. 'z' | '_'
+            then
+               return False;
+            end if;
+            for C of S loop
+               if C not in 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_'
+               then
+                  return False;
+               end if;
+            end loop;
+            return S not in
+              "auto" | "break" | "case" | "char" | "const"
+              | "continue" | "default" | "do" | "double" | "else"
+              | "enum" | "extern" | "float" | "for" | "goto" | "if"
+              | "inline" | "int" | "long" | "register" | "restrict"
+              | "return" | "short" | "signed" | "sizeof" | "static"
+              | "struct" | "switch" | "typedef" | "union"
+              | "unsigned" | "void" | "volatile" | "while";
+         end Valid_C_Name;
+
          procedure Err (Msg : String) is
          begin
             Bag.Add (Diagnostics.Error, Diagnostics.Rename_Unsupported,
                      N.Span,
-                     "foreign import '"
+                     "foreign "
+                     & (if N.F_Export then "export" else "import")
+                     & " '"
                      & Table.Text (Names.Real_Name_Id (N.F_Name))
                      & "': " & Msg);
          end Err;
@@ -1579,8 +1608,19 @@ package body AHC.Desugar is
                F : Core.Foreign_Import;
                T : Core.Type_Id := Sch.S_Body;
             begin
+               if not Valid_C_Name
+                        (Table.Text (Names.Real_Name_Id (N.F_CName)))
+               then
+                  Err ("'"
+                       & Table.Text (Names.Real_Name_Id (N.F_CName))
+                       & "' is not a usable C identifier (name the "
+                       & "C symbol explicitly: foreign "
+                       & (if N.F_Export then "export" else "import")
+                       & " ccall ""c_name"" ...)");
+                  return;
+               end if;
                if not Sch.Context.Is_Empty then
-                  Err ("a foreign import may not have a class "
+                  Err ("a foreign declaration may not have a class "
                        & "context");
                   return;
                end if;
@@ -1641,7 +1681,11 @@ package body AHC.Desugar is
                   end if;
                   F.Res := K;
                end;
-               M.Foreigns.Append (F);
+               if N.F_Export then
+                  M.Foreign_Exports.Append (F);
+               else
+                  M.Foreigns.Append (F);
+               end if;
             end;
          end;
       end Ds_Foreign;

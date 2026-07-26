@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+The FFI goes bidirectional (M93): `foreign export ccall` and
+library mode. An export names one of the module's own bindings; its
+type rides the same signature channel (installed when the binding
+has none, superseded by the binding's own signature otherwise, so
+the C prototype always reflects the real type). Codegen emits a
+C-ABI entry function per export in the root unit - marshal C
+arguments to nodes, build the spine, `ahc_eval` or the new
+`ahc_run_io`, unbox - and generates ahc_exports.h with
+extern-"C"-guarded prototypes. Exported String results come back as
+malloc'd `char *` the caller frees; a bignum-promoted Int result
+dies cleanly. C names are validated in the frontend (exporting
+Haskell's `double` without a "c_name" impent is an AHC diagnostic,
+not a clang error).
+
+`ahc emit --lib` plus `ahc-build.sh --lib OUT.a` produce a static
+archive (runtime included) whose root unit carries
+`ahc_lib_init(void)` - RTS init plus every unit initializer in
+dependency order - instead of main(). The embedding contract: call
+ahc_lib_init once, then call exports from that same thread. New
+round-trip harness scripts/run_export.sh builds tests/export's
+library, compiles a C main against the generated header, and diffs
+the output; golden negatives cover export-of-undefined and
+C-keyword names.
+
 The FFI arrives (M89-M92): `foreign import ccall` end to end -
 Report chapter 8's import half, restricted to the ccall convention
 and plain symbol impents. A foreign declaration is a bodiless

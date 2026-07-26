@@ -17,7 +17,9 @@ package body AHC.CodeGen is
       Owners   : UStr_Vectors.Vector;
       F_Owners : UStr_Vectors.Vector;
       Units    : UStr_Vectors.Vector;
+      Lib_Mode : Boolean;
       Header   : out Ada.Strings.Unbounded.Unbounded_String;
+      Exports_H : out Ada.Strings.Unbounded.Unbounded_String;
       Files    : out Unit_File_Vectors.Vector)
    is
       Fns  : Unbounded_String;   --  lifted function bodies
@@ -950,6 +952,91 @@ package body AHC.CodeGen is
          end if;
       end Emit_Foreign;
 
+      ------------------------------------------------------------------
+      --  Foreign exports: a real C-ABI entry function per export,
+      --  emitted into the root unit (its file already sees every
+      --  global through ahc_prog.h). Marshal C args to nodes, build
+      --  the application spine, eval (or run the IO action), unbox.
+      ------------------------------------------------------------------
+
+      --  Result type as seen by the C caller: an exported String
+      --  comes back as a malloc'd char* the caller frees.
+      function C_Ret_Type (K : Marshal_Kind) return String
+      is (if K = M_String then "char *" else C_Type (K));
+
+      function Export_Proto (F : Foreign_Import) return String is
+         R : Unbounded_String;
+         NArgs : constant Natural := Natural (F.Args.Length);
+      begin
+         Append (R, C_Ret_Type (F.Res) & " "
+                 & Table.Text (Names.Real_Name_Id (F.C_Name)) & "(");
+         if NArgs = 0 then
+            Append (R, "void");
+         else
+            for I in 1 .. NArgs loop
+               if I > 1 then
+                  Append (R, ", ");
+               end if;
+               Append (R, C_Type (F.Args (I)) & " a" & Img (I - 1));
+            end loop;
+         end if;
+         Append (R, ")");
+         return To_String (R);
+      end Export_Proto;
+
+      procedure Emit_Export (F : Foreign_Import) is
+         NArgs : constant Natural := Natural (F.Args.Length);
+         LF : Character renames ASCII.LF;
+      begin
+         Append (Fns, Export_Proto (F) & " {" & LF);
+         Append (Fns, "  AhcNode *r = "
+                 & Var_Ref (F.Binder, Scope_Maps.Empty_Map) & ";"
+                 & LF);
+         for I in 1 .. NArgs loop
+            declare
+               A : constant String := "a" & Img (I - 1);
+            begin
+               Append (Fns, "  r = ahc_apply(r, "
+                       & (case F.Args (I) is
+                            when M_Int    => "ahc_mk_int(" & A & ")",
+                            when M_Double =>
+                              "ahc_mk_double(" & A & ")",
+                            when M_Char   => "ahc_mk_char(" & A & ")",
+                            when M_Bool   =>
+                              "ahc_mk_con(" & A & " ? 2 : 1, 0)",
+                            when M_String =>
+                              "ahc_mk_string(" & A & ")",
+                            when M_Ptr    => "ahc_mk_ptr(" & A & ")",
+                            when M_Unit   => "ahc_mk_con(1, 0)")
+                       & ");" & LF);
+            end;
+         end loop;
+         if F.Res_IO then
+            Append (Fns, "  r = ahc_run_io(r);" & LF);
+         else
+            Append (Fns, "  r = ahc_eval(r);" & LF);
+         end if;
+         case F.Res is
+            when M_Unit =>
+               Append (Fns, "  (void)r;" & LF);
+            when M_Int =>
+               Append (Fns, "  if (r->tag != AHC_INT) ahc_die(""FFI: "
+                       & "Int result out of range"");" & LF
+                       & "  return r->u.i;" & LF);
+            when M_Double =>
+               Append (Fns, "  return r->u.d;" & LF);
+            when M_Char =>
+               Append (Fns, "  return r->u.c;" & LF);
+            when M_Bool =>
+               Append (Fns, "  return r->u.con.contag == 2;" & LF);
+            when M_String =>
+               Append (Fns, "  return ahc_marshal_cstring(r);" & LF);
+            when M_Ptr =>
+               Append (Fns, "  return r->u.p;" & LF);
+         end case;
+         Append (Fns, "}" & LF & LF);
+      end Emit_Export;
+
       Main_Var : Var_Id := No_Var;
 
    begin
@@ -1124,6 +1211,12 @@ package body AHC.CodeGen is
                end if;
             end loop;
 
+            if UI = Units.Last_Index then
+               for F of M.Foreign_Exports loop
+                  Emit_Export (F);
+               end loop;
+            end if;
+
             F.Name := Units (UI);
             F.Text := To_Unbounded_String
               ("#include ""ahc_prog.h""" & ASCII.LF & ASCII.LF);
@@ -1136,34 +1229,72 @@ package body AHC.CodeGen is
             Append (F.Text, "}" & ASCII.LF);
 
             if UI = Units.Last_Index then
-               Append (F.Text, ASCII.LF
-                       & "int main(int argc, char **argv) {"
-                       & ASCII.LF
-                       & "  ahc_set_args(argc, argv);" & ASCII.LF
-                       & "  ahc_rts_init();" & ASCII.LF);
-               for U2 of Units loop
-                  Append (F.Text, "  ahc_init_"
-                          & Mangle (To_String (U2)) & "();"
-                          & ASCII.LF);
-               end loop;
-               if Main_Var /= No_Var
-                 and then Has_Body.Contains (Real_Var_Id (Main_Var))
-               then
-                  Append (F.Text, "  ahc_run_main("
-                          & Sym_Of (Real_Var_Id (Main_Var)) & ");"
-                          & ASCII.LF);
+               if Lib_Mode then
+                  Append (F.Text, ASCII.LF
+                          & "void ahc_lib_init(void) {" & ASCII.LF
+                          & "  ahc_rts_init();" & ASCII.LF);
+                  for U2 of Units loop
+                     Append (F.Text, "  ahc_init_"
+                             & Mangle (To_String (U2)) & "();"
+                             & ASCII.LF);
+                  end loop;
+                  Append (F.Text, "}" & ASCII.LF);
                else
-                  Append (F.Text,
-                          "  ahc_die(""no main function"");"
+                  Append (F.Text, ASCII.LF
+                          & "int main(int argc, char **argv) {"
+                          & ASCII.LF
+                          & "  ahc_set_args(argc, argv);" & ASCII.LF
+                          & "  ahc_rts_init();" & ASCII.LF);
+                  for U2 of Units loop
+                     Append (F.Text, "  ahc_init_"
+                             & Mangle (To_String (U2)) & "();"
+                             & ASCII.LF);
+                  end loop;
+                  if Main_Var /= No_Var
+                    and then Has_Body.Contains
+                               (Real_Var_Id (Main_Var))
+                  then
+                     Append (F.Text, "  ahc_run_main("
+                             & Sym_Of (Real_Var_Id (Main_Var))
+                             & ");" & ASCII.LF);
+                  else
+                     Append (F.Text,
+                             "  ahc_die(""no main function"");"
+                             & ASCII.LF);
+                  end if;
+                  Append (F.Text, "  return 0;" & ASCII.LF & "}"
                           & ASCII.LF);
                end if;
-               Append (F.Text, "  return 0;" & ASCII.LF & "}"
-                       & ASCII.LF);
             end if;
 
             Files.Append (F);
          end;
       end loop;
+
+      --  ahc_exports.h: the C-visible surface of this program.
+      Exports_H := To_Unbounded_String
+        ("/* Generated by ahc emit: C entry points for foreign"
+         & " exports. */" & ASCII.LF
+         & "#ifndef AHC_EXPORTS_H" & ASCII.LF
+         & "#define AHC_EXPORTS_H" & ASCII.LF
+         & "#ifdef __cplusplus" & ASCII.LF
+         & "extern ""C"" {" & ASCII.LF
+         & "#endif" & ASCII.LF & ASCII.LF);
+      if Lib_Mode then
+         Append (Exports_H,
+                 "/* Call once, from the one thread that will use"
+                 & " the library. */" & ASCII.LF
+                 & "void ahc_lib_init(void);" & ASCII.LF
+                 & ASCII.LF);
+      end if;
+      for F of M.Foreign_Exports loop
+         Append (Exports_H, Export_Proto (F) & ";" & ASCII.LF);
+      end loop;
+      Append (Exports_H, ASCII.LF
+              & "#ifdef __cplusplus" & ASCII.LF
+              & "}" & ASCII.LF
+              & "#endif" & ASCII.LF
+              & "#endif" & ASCII.LF);
    end Emit_Units;
 
 end AHC.CodeGen;

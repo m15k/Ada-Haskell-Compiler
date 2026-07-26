@@ -381,9 +381,12 @@ package AHC.Core is
    package Top_Bind_Vectors is new Ada.Containers.Vectors
      (Positive, Top_Bind);
 
-   --  A foreign import's marshalling spec, derived from its Haskell
-   --  type during desugaring and consumed by codegen (which emits a
-   --  C wrapper per import). M_Unit is a result kind only.
+   --  A foreign import's (or export's) marshalling spec, derived
+   --  from its Haskell type during desugaring and consumed by
+   --  codegen (which emits a C wrapper per import, and a C-ABI entry
+   --  function per export). M_Unit is a result kind only. For an
+   --  export, Binder is the exported top-level binding and C_Name
+   --  the entry function's symbol.
    type Marshal_Kind is
      (M_Int, M_Double, M_Char, M_Bool, M_Unit, M_String, M_Ptr);
 
@@ -417,6 +420,7 @@ package AHC.Core is
       Top_Binds : Top_Bind_Vectors.Vector;
       Refinements : Refinement_Vectors.Vector;
       Foreigns  : Foreign_Vectors.Vector;
+      Foreign_Exports : Foreign_Vectors.Vector;
       Star_Cache : Kind_Id := No_Kind;
    end record;
 

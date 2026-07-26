@@ -1956,9 +1956,9 @@ package body AHC.Parser is
       end Parse_Binding;
 
       --  foreign import ccall [safe|unsafe] ["cname"] name :: type
+      --  foreign export ccall ["cname"] name :: type
       --  (Report ch. 8, restricted to the ccall convention and plain
-      --  symbol impents; foreign export parses but is rejected until
-      --  export support lands.)
+      --  symbol impents/expents.)
       function Parse_Foreign_Decl
         (Span : Diagnostics.Source_Span) return Real_Decl_Id
       is
@@ -2035,12 +2035,6 @@ package body AHC.Parser is
                   end if;
                end loop;
             end;
-         end if;
-
-         if Is_Export then
-            Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
-                     "foreign export is not yet supported");
-            raise Parse_Failure;
          end if;
 
          return Arena.Add

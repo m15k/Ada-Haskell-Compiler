@@ -1212,12 +1212,13 @@ package body AHC.Kinds is
 
       --  Foreign imports are bodiless, so occurrences typecheck from
       --  Var_Info.Var_Scheme (exactly as wired builtins do); copy the
-      --  just-converted signature scheme onto the binder.
+      --  just-converted signature scheme onto the binder. Exports
+      --  are bodied bindings - their scheme comes from typechecking.
       for D of Arena.Top_Decls loop
          declare
             N : constant Decl_Node := Arena.Node (D);
          begin
-            if N.Kind = Foreign_D then
+            if N.Kind = Foreign_D and then not N.F_Export then
                declare
                   V : constant Core.Var_Id :=
                     Res.Decl_Var (Positive (D));

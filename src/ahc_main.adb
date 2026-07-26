@@ -53,7 +53,8 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc parse FILE.hs");
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
-      Put_Line (Target, "       ahc emit FILE.hs OUT [--unchecked]"
+      Put_Line (Target, "       ahc emit FILE.hs OUT"
+                & " [--unchecked|--no-opt|--lib]"
                         & "   (writes OUT.c)");
       Put_Line (Target, "       ahc repl");
    end Print_Usage;
@@ -122,7 +123,8 @@ procedure AHC_Main is
    --  Mode: 'c' = Core dump, 't' = types, 'b' = build executable.
    procedure Run_Middle
      (Path     : String; Mode : Character; Out_Path : String := "";
-      Refined  : Boolean := True; Optimize : Boolean := True) is
+      Refined  : Boolean := True; Optimize : Boolean := True;
+      Lib      : Boolean := False) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -815,6 +817,7 @@ procedure AHC_Main is
                   F_Owners : AHC.CodeGen.UStr_Vectors.Vector;
                   Units  : AHC.CodeGen.UStr_Vectors.Vector;
                   Header : Unbounded_String;
+                  Exports_H : Unbounded_String;
                   Files  : AHC.CodeGen.Unit_File_Vectors.Vector;
 
                   function Sanitize (S : String) return String is
@@ -928,7 +931,9 @@ procedure AHC_Main is
 
                   AHC.CodeGen.Emit_Units
                     (Table, M, Env, Prims, Owners, F_Owners, Units,
-                     Header, Files);
+                     Lib_Mode => Lib,
+                     Header => Header, Exports_H => Exports_H,
+                     Files => Files);
 
                   Ada.Directories.Create_Path (Build_Dir);
                   declare
@@ -963,6 +968,10 @@ procedure AHC_Main is
                      Create (F, Out_File,
                              Build_Dir & "/link_flags");
                      Put (F, To_String (Link_Flags));
+                     Close (F);
+                     Create (F, Out_File,
+                             Build_Dir & "/ahc_exports.h");
+                     Put (F, To_String (Exports_H));
                      Close (F);
                   end;
                   Put_Line ("wrote " & Build_Dir);
@@ -1065,22 +1074,39 @@ begin
             Usage_Error ("expected: ahc check FILE.hs");
          end if;
       elsif Command = "emit" then
-         if Argument_Count = 3 then
-            Run_Middle (Argument (2), 'b', Argument (3));
-         elsif Argument_Count = 4
-           and then Argument (4) = "--unchecked"
-         then
-            Run_Middle (Argument (2), 'b', Argument (3),
-                        Refined => False);
-         elsif Argument_Count = 4
-           and then Argument (4) = "--no-opt"
-         then
-            Run_Middle (Argument (2), 'b', Argument (3),
-                        Optimize => False);
+         if Argument_Count >= 3 then
+            declare
+               Refined  : Boolean := True;
+               Optimize : Boolean := True;
+               Lib      : Boolean := False;
+               Bad      : Boolean := False;
+            begin
+               for I in 4 .. Argument_Count loop
+                  if Argument (I) = "--unchecked" then
+                     Refined := False;
+                  elsif Argument (I) = "--no-opt" then
+                     Optimize := False;
+                  elsif Argument (I) = "--lib" then
+                     Lib := True;
+                  else
+                     Bad := True;
+                  end if;
+               end loop;
+               if Bad then
+                  Usage_Error
+                    ("expected: ahc emit FILE.hs OUT"
+                     & " [--unchecked|--no-opt|--lib]");
+               else
+                  Run_Middle (Argument (2), 'b', Argument (3),
+                              Refined => Refined,
+                              Optimize => Optimize,
+                              Lib => Lib);
+               end if;
+            end;
          else
             Usage_Error
               ("expected: ahc emit FILE.hs OUT"
-               & " [--unchecked|--no-opt]");
+               & " [--unchecked|--no-opt|--lib]");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

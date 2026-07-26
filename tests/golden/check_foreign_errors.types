@@ -1,4 +1,5 @@
 tests/golden/check_foreign_errors.hs:2:1: error: foreign import 'bad1': argument type is not marshallable across the FFI
 tests/golden/check_foreign_errors.hs:3:1: error: foreign import 'bad2': result type is not marshallable across the FFI
-tests/golden/check_foreign_errors.hs:4:1: error: foreign import 'bad3': a foreign import may not have a class context
+tests/golden/check_foreign_errors.hs:4:1: error: foreign import 'bad3': a foreign declaration may not have a class context
 tests/golden/check_foreign_errors.hs:5:1: error: foreign import 'bad4': argument type is not marshallable across the FFI
+tests/golden/check_foreign_errors.hs:6:1: error: foreign import 'switch': 'switch' is not a usable C identifier (name the C symbol explicitly: foreign import ccall "c_name" ...)

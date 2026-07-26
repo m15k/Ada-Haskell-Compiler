@@ -1,0 +1,1 @@
+tests/golden/check_foreign_export_errors.hs:2:1: error: foreign export of 'missing', which this module does not define

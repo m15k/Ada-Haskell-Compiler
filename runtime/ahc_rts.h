@@ -68,6 +68,7 @@ char *ahc_marshal_cstring(AhcNode *s);
 void ahc_free_cstring(char *s);
 
 void ahc_run_main(AhcNode *main_io);           /* execute IO action   */
+AhcNode *ahc_run_io(AhcNode *io);              /* run IO, return node */
 void ahc_die(const char *msg) __attribute__((noreturn));
 
 /* Wired primitives (globals initialized by ahc_rts_init). */

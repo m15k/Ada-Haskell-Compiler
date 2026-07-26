@@ -899,6 +899,47 @@ object. The Boehm collector is non-moving and conservative:
 `AhcNode` pointers handed to C stay put, and pointers C hands back
 need no pinning ceremony.
 
+### The FFI: foreign export ccall, and AHC as a library
+
+The other direction — C (or anything speaking the C ABI) calling
+compiled Haskell:
+
+    foreign export ccall square :: Int -> Int
+    square x = x * x
+
+    foreign export ccall "hs_fib" fib :: Int -> Int
+
+An export names one of the module's own top-level bindings. If the
+binding has no signature, the export type becomes its signature (so
+the body is checked against it); if it has one, the binding's own
+signature wins and drives the marshalling, which keeps the C
+prototype honest by construction. The same type table applies, with
+one caller-facing difference: an exported `String` result comes
+back as a malloc'd `char *` the C caller frees. The generated entry
+function marshals C arguments to nodes, builds the application
+spine, evaluates (or runs the IO action through the world token),
+and unboxes — a bignum-promoted `Int` result dies cleanly, exactly
+like an argument would. The exported C name must be a plain C
+identifier that isn't a C keyword; exporting Haskell's `double`
+without a `"c_name"` is caught in the frontend, not by clang.
+
+`--lib` turns the whole program into an embeddable library:
+
+    scripts/ahc-build.sh --lib MathLib.hs mathlib.a
+
+produces a static archive (runtime object included) and
+`mathlib.a.build/ahc_exports.h` — prototypes for every export,
+`extern "C"`-guarded for C++, plus `void ahc_lib_init(void)`, which
+replaces `main()`: it runs the RTS init and every unit's
+initializer in dependency order. The embedding contract is one
+honest sentence: **call `ahc_lib_init` once, then call exports from
+that same thread — the runtime is single-threaded and
+non-reentrant.** The host controls the stack in library mode (there
+is no 512 MB link trick), so deeply lazy structures may need the
+host's stack raised. `scripts/run_export.sh` keeps the round trip
+green: it builds `tests/export/MathLib.hs`, compiles a C `main`
+against the header, and diffs the output.
+
 ### The layered Prelude
 
 Where do `map` and `sum` come from? Three layers, and knowing them

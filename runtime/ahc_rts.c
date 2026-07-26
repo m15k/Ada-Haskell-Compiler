@@ -1148,6 +1148,10 @@ static AhcNode *p_return_io(AhcNode *x) {
   return ahc_mk_fun(io_return, e);
 }
 
+AhcNode *ahc_run_io(AhcNode *io) {
+  return ahc_eval(ahc_apply(io, the_world));
+}
+
 void ahc_run_main(AhcNode *main_io) {
   ahc_eval(ahc_apply(main_io, the_world));
 }

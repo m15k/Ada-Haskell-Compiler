@@ -1782,12 +1782,13 @@ package body AHC.Rename is
 
       --  Foreign imports: bodiless globals whose signature is the
       --  declaration's type (the same channel Sig_D uses, so kinds
-      --  and the typechecker need no special cases).
+      --  and the typechecker need no special cases). Exports are
+      --  handled after Declare_Group - they reference bindings.
       for D of Arena.Top_Decls loop
          declare
             N : constant Decl_Node := Arena.Node (D);
          begin
-            if N.Kind = Foreign_D then
+            if N.Kind = Foreign_D and then not N.F_Export then
                declare
                   V : constant Core.Real_Var_Id :=
                     M.Mint_Var ((Name => N.F_Name, Span => N.Span,
@@ -1813,6 +1814,46 @@ package body AHC.Rename is
 
       --  ... then top-level value binders and signatures.
       Declare_Group (Arena.Top_Decls, Global => True);
+
+      --  Foreign exports: resolve to this module's own top-level
+      --  binding. When the binding carries no signature, the export
+      --  type becomes its signature (so the body is checked against
+      --  it); when it does, the binding's own signature wins and the
+      --  marshal spec is derived from it during desugaring.
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind = Foreign_D and then N.F_Export then
+               declare
+                  C : constant Scope_Maps.Cursor :=
+                    Top_Names.Find (N.F_Name);
+               begin
+                  if Scope_Maps.Has_Element (C) then
+                     declare
+                        V : constant Core.Real_Var_Id :=
+                          Scope_Maps.Element (C);
+                     begin
+                        Res.Decl_Var.Replace_Element
+                          (Positive (D), Core.Var_Id (V));
+                        Rename_Type (N.F_Type);
+                        if not Res.Var_Sig.Contains (V) then
+                           Res.Var_Sig.Include (V, N.F_Type);
+                        end if;
+                     end;
+                  else
+                     Bag.Add (Diagnostics.Error,
+                              Diagnostics.Rename_Out_Of_Scope,
+                              N.Span,
+                              "foreign export of '"
+                              & Text (N.F_Name)
+                              & "', which this module does not "
+                              & "define");
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
 
       --  Pass B: resolve all bodies and types.
       for D of Arena.Top_Decls loop
