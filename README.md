@@ -60,9 +60,12 @@ them only reachable at campaign scale (10,000 seeds). v1.4 is the
 exactness release (M82-M83): float literals as exact decimal
 ratios end to end, compile-time rejection of underivable shapes,
 Burger-Dybvig show digits, a floored-mod overflow fix, and the
-hardened deep-campaign fuzzer that found them. 74 conformance
-programs byte-identical to GHC 9.4.8, eleven test harnesses.
-Nothing planned remains unbuilt.
+hardened deep-campaign fuzzer that found them. v1.4.1 and v1.4.2
+are the example patches (M85-M88): five dogfood programs now, from
+a mini-Lisp to a calendar built entirely out of declared
+constraints, 28 example tests. 74 conformance programs
+byte-identical to GHC 9.4.8, eleven test harnesses. Nothing
+planned remains unbuilt.
 
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable

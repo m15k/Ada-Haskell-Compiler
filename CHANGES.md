@@ -1,6 +1,16 @@
 # AHC Changelog
 
-## Unreleased
+## v1.4.2 (2026-07-26)
+
+The value-constraint patch (M87-M88): two example programs, no
+compiler changes. ahccal (examples/cal) - a civil calendar built
+entirely out of declared constraints, the worked tour of refinement
+types and Pre/Post contracts working together, and the first
+example that is AHC-only by construction. fastfibinwest
+(examples/fibs) - a stray broken file turned into a working
+bignum Fibonacci CLI. The examples harness grows from 13 tests to
+28 across five programs, and learns to assert that constraints
+actually fire and that --unchecked changes no answer.
 
 examples/fibs repaired and promoted: fastfibinwest.hs was a stray
 broken file (`Main = do` bound a nonexistent constructor, so both
