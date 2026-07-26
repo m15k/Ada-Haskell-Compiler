@@ -1,6 +1,18 @@
 # AHC Changelog
 
-## Unreleased
+## v1.4.1 (2026-07-25)
+
+The dogfood patch (M85-M86): two new example programs, no
+compiler changes. ajson (examples/json) - a JSON parser and
+pretty-printer with a Data.Map --stats mode, leaning on v1.4's
+exact-literal and Burger-Dybvig show machinery. microhm
+(examples/hm) - a miniature Hindley-Milner inferencer, the
+compiler's typechecker in ~350-line miniature with the real
+Bind_Meta occurs-check obligation restated as a live contract;
+the STUDY-GUIDE's Station 6 companion. BOTH came up
+byte-identical under AHC and GHC on their first builds - the
+first dogfood programs in the project's history to do so. The
+examples harness now runs 13 tests across three programs.
 
 The third dogfood program (M86): examples/hm - microhm, a
 miniature Hindley-Milner inferencer (Algorithm W,
