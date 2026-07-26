@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+The third dogfood program (M86): examples/hm - microhm, a
+miniature Hindley-Milner inferencer (Algorithm W,
+let-polymorphism, occurs check, Data.Map substitution
+composition) - the compiler's typechecker in ~350-line miniature,
+compiled by that machinery, byte-identical under both compilers
+on the first AHC build (the second program in a row). The unifier
+states the REAL typechecker's obligations as contracts: bindVar
+carries the Bind_Meta occurs-check precondition as a {-# PRE #-},
+live and demanded on every unification in the test suite. Doubles
+as the STUDY-GUIDE's Station 6 companion. Exercises previously
+un-dogfooded ground: map-valued Data.Map workloads, deep mutual
+recursion, threaded fresh-name supplies.
+
 The second dogfood program (M85): examples/json - ajson, a JSON
 parser and pretty-printer in the AHC subset, byte-identical
 compiled by AHC or interpreted by GHC across parse/pretty, error

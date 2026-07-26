@@ -36,6 +36,11 @@ if [ "${1:-}" = "--oracle" ]; then
       > "${inp%.in}.golden"
     echo "oracle ${inp%.in}.golden"
   done
+  for inp in examples/hm/tests/*.in; do
+    (cd examples/hm && "$GHC" Main.hs < "tests/$(basename "$inp")") \
+      > "${inp%.in}.golden"
+    echo "oracle ${inp%.in}.golden"
+  done
   exit 0
 fi
 
@@ -83,6 +88,19 @@ for js in examples/json/tests/*.json; do
 done
 for inp in examples/json/tests/*.in; do
   if ./examples/json/ajson < "$inp" \
+       | diff -q - "${inp%.in}.golden" >/dev/null 2>&1; then
+    echo "ok   $inp"
+  else
+    echo "FAIL $inp"
+    fail=1
+  fi
+done
+
+scripts/ahc-build.sh examples/hm/Main.hs examples/hm/microhm \
+  >/dev/null || { echo "FAIL build examples/hm"; exit 2; }
+
+for inp in examples/hm/tests/*.in; do
+  if ./examples/hm/microhm < "$inp" \
        | diff -q - "${inp%.in}.golden" >/dev/null 2>&1; then
     echo "ok   $inp"
   else

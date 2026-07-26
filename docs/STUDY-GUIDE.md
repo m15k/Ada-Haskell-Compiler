@@ -189,7 +189,11 @@ that.
   then read `src/ahc-elaborate.adb` (625 lines): type classes
   become dictionary RECORDS, class methods become field selectors,
   and a constrained function grows extra dictionary parameters.
-- **Do:** `ahc check` on `let`-polymorphism, on a function the MR
+- **Do:** FIRST read `examples/hm/Main.hs` - Algorithm W in a
+  page (a miniature of this station's machinery, compiled by it,
+  with the unifier's obligations stated as contracts); run it on
+  its tests and predict each answer before looking. Then
+  `ahc check` on `let`-polymorphism, on a function the MR
   restricts, on an ambiguous `show . read`. Then the single most
   instructive dump in the project: `ahc core` on
   `f x y = x == y && x < y` — find the ONE dictionary parameter,

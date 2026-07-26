@@ -1,0 +1,7 @@
+\x. x x                    :: type error: occurs check: a ~ a -> b
+if 1 then 2 else 3         :: type error: cannot match Int with Bool
+if true then 1 else false  :: type error: cannot match Int with Bool
+(\x. x) y                  :: type error: unbound variable 'y'
+let f = \x. x x in f       :: type error: occurs check: a ~ a -> b
+\x. (                      :: parse error at column 5: expected a term
+let x = 1 in               :: parse error at column 12: expected a term

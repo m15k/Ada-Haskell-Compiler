@@ -1,0 +1,9 @@
+\x. x                          :: a -> a
+\x y. x                        :: a -> b -> a
+\f g x. f (g x)                :: (a -> b) -> (c -> a) -> c -> b
+\f x. f (f x)                  :: (a -> a) -> a -> a
+42                             :: Int
+true                           :: Bool
+if true then 1 else 2          :: Int
+(\x. x) 5                      :: Int
+\p. if p then false else true  :: Bool -> Bool

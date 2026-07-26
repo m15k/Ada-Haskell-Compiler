@@ -1,0 +1,10 @@
+-- combinators
+\x. x
+\x y. x
+\f g x. f (g x)
+\f x. f (f x)
+42
+true
+if true then 1 else 2
+(\x. x) 5
+\p. if p then false else true

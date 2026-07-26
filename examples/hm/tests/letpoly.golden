@@ -1,0 +1,6 @@
+let id = \x. x in id id                           :: a -> a
+let id = \x. x in if id true then id 1 else id 2  :: Int
+\f. if f true then f 1 else f 2                   :: type error: cannot match Bool with Int
+let const = \x y. x in const                      :: a -> b -> a
+let twice = \f x. f (f x) in twice twice          :: (a -> a) -> a -> a
+let compose = \f g x. f (g x) in compose compose  :: (a -> b -> c) -> a -> (d -> b) -> d -> c
