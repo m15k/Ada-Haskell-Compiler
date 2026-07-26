@@ -1260,6 +1260,8 @@ package body AHC.Prelude_Core is
          BP ("primShiftRI", "ahc_prim_bshr");
          BP ("primComplementI", "ahc_prim_bcompl");
          BP ("primPopCountI", "ahc_prim_popcount");
+         BP ("nullPtr", "ahc_prim_null_ptr");
+         BP ("peekCString", "ahc_prim_peek_cstring");
       end;
 
       --  quot/rem/div/mod are Integral methods now; their prims are

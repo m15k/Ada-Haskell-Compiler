@@ -833,6 +833,72 @@ three small steps: write the C function, declare a typed name for
 it in `AHC.Builtins`, bind name to symbol in `AHC.Prelude_Core`.
 This boundary stayed stable from milestone 17 to the end.
 
+### The FFI: foreign import ccall
+
+The prims boundary is compiler-internal; the **FFI** (Report
+chapter 8) is the same idea opened to user programs:
+
+    foreign import ccall unsafe "labs" c_labs :: Int -> Int
+    foreign import ccall getenv :: String -> IO (Ptr Char)
+
+Each declaration names a C symbol (defaulting to the Haskell name),
+gives it a Haskell type, and becomes an ordinary global — no
+binding generators, no `hsc2hs`, no `Storable` instances. The
+pipeline treats it with three small touches that mirror existing
+machinery: the renamer mints a bodiless global whose signature is
+the declared type (the `Sig_D` channel, so kinds and the
+typechecker need no special cases); the desugarer derives a
+*marshalling spec* from the scheme into `Core_Module.Foreigns`;
+codegen emits, in the owning module's C unit, an extern prototype
+plus a wrapper that evaluates and unboxes each argument, calls the
+C function, and boxes the result. The wrapper node substitutes at
+occurrences exactly like a prim.
+
+The v1 marshallable types, and what they become in C:
+
+| Haskell            | C              | notes                        |
+|--------------------|----------------|------------------------------|
+| `Int`              | `long`         | bignum-range values die clean |
+| `Double`           | `double`       |                              |
+| `Char`             | `long`         | the code point               |
+| `Bool`             | `int`          | 0/1                          |
+| `()`               | `void`         | result position only         |
+| `String`           | `const char *` | copied both ways, O(n)       |
+| `Ptr a`            | `void *`       | phantom `a`; `Eq`/`Ord`      |
+
+`nullPtr :: Ptr a` and `peekCString :: Ptr Char -> IO String` make
+nullable C results (like `getenv`) expressible. Direct `String` and
+`Bool` marshalling is an AHC convenience beyond GHC's FFI (GHC
+requires `withCString`/`CInt` there); `Int`/`Double`/`Char`/`Ptr`
+match GHC's model under `Int = long`.
+
+Two rules keep it honest. **Types must match the C definition**
+under the table above — declaring `int isalpha(int)` as
+`Int -> Int` reads garbage high bits; keep to `long`-, `double`-
+and pointer-shaped C functions until fixed-width `CInt`-style types
+land. **An `Int` that has silently promoted to bignum dies at the
+boundary** (`FFI: Int argument out of range`) rather than
+truncating.
+
+An IO-typed import gets the world-passing shape — the wrapper packs
+its arguments and returns a `FUN` that performs the call only when
+the world token arrives — so effect ordering is exactly `getLine`'s.
+A pure import calls eagerly at saturation; a nullary pure import is
+a CAF, evaluated once.
+
+Linking against more than libc: pass `AHC_CFLAGS`/`AHC_LDFLAGS` to
+`scripts/ahc-build.sh`, or put the flags in the source itself —
+
+    {-# OPTIONS_AHC_LINK -lcurl #-}
+
+`ahc emit` collects those into `OUT.build/link_flags` and the build
+script appends them at link time (GHC just warns on the unknown
+pragma, so the source still oracle-compiles). Compile flags are part
+of the object-cache key, so changing them never reuses a stale
+object. The Boehm collector is non-moving and conservative:
+`AhcNode` pointers handed to C stay put, and pointers C hands back
+need no pinning ceremony.
+
 ### The layered Prelude
 
 Where do `map` and `sum` come from? Three layers, and knowing them

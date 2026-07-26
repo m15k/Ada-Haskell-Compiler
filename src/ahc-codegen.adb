@@ -10,14 +10,15 @@ package body AHC.CodeGen is
    use type Names.Name_Id;
 
    procedure Emit_Units
-     (Table  : in out Names.Name_Table;
-      M      : Core.Core_Module;
-      Env    : Builtins.Global_Env;
-      Prims  : Prelude_Core.Prim_Maps.Map;
-      Owners : UStr_Vectors.Vector;
-      Units  : UStr_Vectors.Vector;
-      Header : out Ada.Strings.Unbounded.Unbounded_String;
-      Files  : out Unit_File_Vectors.Vector)
+     (Table    : in out Names.Name_Table;
+      M        : Core.Core_Module;
+      Env      : Builtins.Global_Env;
+      Prims    : Prelude_Core.Prim_Maps.Map;
+      Owners   : UStr_Vectors.Vector;
+      F_Owners : UStr_Vectors.Vector;
+      Units    : UStr_Vectors.Vector;
+      Header   : out Ada.Strings.Unbounded.Unbounded_String;
+      Files    : out Unit_File_Vectors.Vector)
    is
       Fns  : Unbounded_String;   --  lifted function bodies
       Decl : Unbounded_String;   --  forward decls + CAF globals
@@ -749,6 +750,206 @@ package body AHC.CodeGen is
          end case;
       end Gen_Force;
 
+      ------------------------------------------------------------------
+      --  Foreign imports: one C wrapper (plus node global) per import,
+      --  emitted into the owning unit. The node symbol is stable -
+      --  derived from (unit, source name) only.
+      ------------------------------------------------------------------
+
+      function F_Owner (FI : Positive) return String
+      is (if FI <= F_Owners.Last_Index
+          then To_String (F_Owners (FI)) else "Prelude");
+
+      function FFI_Base (FI : Positive) return String
+      is (Mangle (F_Owner (FI)) & "_"
+          & Mangle (Table.Text
+              (Names.Real_Name_Id
+                 (M.Info (M.Foreigns (FI).Binder).Name))));
+
+      function C_Type (K : Marshal_Kind) return String
+      is (case K is
+            when M_Int    => "long",
+            when M_Double => "double",
+            when M_Char   => "long",
+            when M_Bool   => "int",
+            when M_Unit   => "void",
+            when M_String => "const char *",
+            when M_Ptr    => "void *");
+
+      procedure Emit_Foreign (FI : Positive) is
+         F : Foreign_Import renames M.Foreigns (FI);
+         Base : constant String := FFI_Base (FI);
+         NArgs : constant Natural := Natural (F.Args.Length);
+         CName : constant String :=
+           Table.Text (Names.Real_Name_Id (F.C_Name));
+         LF : Character renames ASCII.LF;
+
+         function Proto return String is
+            R : Unbounded_String;
+         begin
+            Append (R, "extern " & C_Type (F.Res) & " " & CName
+                    & "(");
+            if NArgs = 0 then
+               Append (R, "void");
+            else
+               for I in 1 .. NArgs loop
+                  if I > 1 then
+                     Append (R, ", ");
+                  end if;
+                  Append (R, C_Type (F.Args (I)));
+               end loop;
+            end if;
+            Append (R, ");");
+            return To_String (R);
+         end Proto;
+
+         --  Marshal every argument out of Src[i], call, free any
+         --  temporary strings, box the result.
+         function Call_Text (Src : String) return String is
+            R : Unbounded_String;
+            Call : Unbounded_String;
+         begin
+            for I in 1 .. NArgs loop
+               declare
+                  Ix : constant String := Img (I - 1);
+                  S : constant String := Src & "[" & Ix & "]";
+               begin
+                  case F.Args (I) is
+                     when M_Int =>
+                        Append (R, "  AhcNode *e" & Ix
+                                & " = ahc_eval(" & S & ");" & LF
+                                & "  if (e" & Ix
+                                & "->tag != AHC_INT) ahc_die(""FFI: "
+                                & "Int argument out of range"");" & LF
+                                & "  long x" & Ix & " = e" & Ix
+                                & "->u.i;" & LF);
+                     when M_Double =>
+                        Append (R, "  double x" & Ix
+                                & " = ahc_eval(" & S & ")->u.d;"
+                                & LF);
+                     when M_Char =>
+                        Append (R, "  long x" & Ix
+                                & " = ahc_eval(" & S & ")->u.c;"
+                                & LF);
+                     when M_Bool =>
+                        Append (R, "  int x" & Ix
+                                & " = (ahc_eval(" & S
+                                & ")->u.con.contag == 2);" & LF);
+                     when M_String =>
+                        Append (R, "  char *x" & Ix
+                                & " = ahc_marshal_cstring(" & S
+                                & ");" & LF);
+                     when M_Ptr =>
+                        Append (R, "  void *x" & Ix
+                                & " = ahc_eval(" & S & ")->u.p;"
+                                & LF);
+                     when M_Unit =>
+                        null;   --  rejected during desugaring
+                  end case;
+               end;
+            end loop;
+
+            Append (Call, CName & "(");
+            for I in 1 .. NArgs loop
+               if I > 1 then
+                  Append (Call, ", ");
+               end if;
+               Append (Call, "x" & Img (I - 1));
+            end loop;
+            Append (Call, ")");
+
+            case F.Res is
+               when M_Unit =>
+                  Append (R, "  " & Call & ";" & LF);
+               when M_Int =>
+                  Append (R, "  long rv = " & Call & ";" & LF);
+               when M_Double =>
+                  Append (R, "  double rv = " & Call & ";" & LF);
+               when M_Char =>
+                  Append (R, "  long rv = " & Call & ";" & LF);
+               when M_Bool =>
+                  Append (R, "  int rv = " & Call & ";" & LF);
+               when M_String =>
+                  Append (R, "  const char *rv = " & Call & ";"
+                          & LF);
+               when M_Ptr =>
+                  Append (R, "  void *rv = " & Call & ";" & LF);
+            end case;
+
+            for I in 1 .. NArgs loop
+               if F.Args (I) = M_String then
+                  Append (R, "  ahc_free_cstring(x" & Img (I - 1)
+                          & ");" & LF);
+               end if;
+            end loop;
+
+            case F.Res is
+               when M_Unit =>
+                  Append (R, "  return ahc_mk_con(1, 0);" & LF);
+               when M_Int =>
+                  Append (R, "  return ahc_mk_int(rv);" & LF);
+               when M_Double =>
+                  Append (R, "  return ahc_mk_double(rv);" & LF);
+               when M_Char =>
+                  Append (R, "  return ahc_mk_char(rv);" & LF);
+               when M_Bool =>
+                  Append (R, "  return ahc_mk_con(rv ? 2 : 1, 0);"
+                          & LF);
+               when M_String =>
+                  Append (R, "  if (!rv) ahc_die(""FFI: NULL string "
+                          & "result"");" & LF
+                          & "  return ahc_mk_string(rv);" & LF);
+               when M_Ptr =>
+                  Append (R, "  return ahc_mk_ptr(rv);" & LF);
+            end case;
+            return To_String (R);
+         end Call_Text;
+
+      begin
+         Append (Decl, Proto & LF);
+         Append (Decl, "AhcNode *ffi_" & Base & ";" & LF);
+         if F.Res_IO then
+            --  World-passing shape: the effect runs only when the IO
+            --  action meets the world (the p_readfile pattern).
+            Append (Fns, "static AhcNode *ffiio_" & Base
+                    & "(AhcNode **env, AhcNode *w) {" & LF
+                    & "  (void)w;"
+                    & (if NArgs = 0 then " (void)env;" else "") & LF
+                    & Call_Text ("env") & "}" & LF & LF);
+            if NArgs > 0 then
+               Append (Fns, "static AhcNode *ffiw_" & Base
+                       & "(AhcNode **a) {" & LF
+                       & "  AhcNode **e = ahc_env(" & Img (NArgs)
+                       & ");" & LF);
+               for I in 1 .. NArgs loop
+                  Append (Fns, "  e[" & Img (I - 1) & "] = a["
+                          & Img (I - 1) & "];" & LF);
+               end loop;
+               Append (Fns, "  return ahc_mk_fun(ffiio_" & Base
+                       & ", e);" & LF & "}" & LF & LF);
+               Append (Init, "  ffi_" & Base & " = ahc_mk_primn("
+                       & Img (NArgs) & ", ffiw_" & Base & ");" & LF);
+            else
+               Append (Init, "  ffi_" & Base & " = ahc_mk_fun(ffiio_"
+                       & Base & ", NULL);" & LF);
+            end if;
+         elsif NArgs > 0 then
+            Append (Fns, "static AhcNode *ffiw_" & Base
+                    & "(AhcNode **a) {" & LF
+                    & Call_Text ("a") & "}" & LF & LF);
+            Append (Init, "  ffi_" & Base & " = ahc_mk_primn("
+                    & Img (NArgs) & ", ffiw_" & Base & ");" & LF);
+         else
+            --  Nullary pure import: a CAF thunk, evaluated once.
+            Append (Fns, "static AhcNode *ffit_" & Base
+                    & "(AhcNode **env) {" & LF
+                    & "  (void)env;" & LF
+                    & Call_Text ("a") & "}" & LF & LF);
+            Append (Init, "  ffi_" & Base & " = ahc_mk_thunk(ffit_"
+                    & Base & ", NULL);" & LF);
+         end if;
+      end Emit_Foreign;
+
       Main_Var : Var_Id := No_Var;
 
    begin
@@ -786,6 +987,14 @@ package body AHC.CodeGen is
                end if;
             end loop;
          end;
+      end loop;
+
+      --  Foreign-import binders substitute as their stable node
+      --  symbols at every occurrence.
+      for FI in 1 .. M.Foreigns.Last_Index loop
+         Special.Include
+           (M.Foreigns (FI).Binder,
+            To_Unbounded_String ("ffi_" & FFI_Base (FI)));
       end loop;
 
       --  Register bodied globals and mint their stable symbols.
@@ -870,6 +1079,10 @@ package body AHC.CodeGen is
                     & ";" & ASCII.LF);
          end loop;
       end loop;
+      for FI in 1 .. M.Foreigns.Last_Index loop
+         Append (Header, "extern AhcNode *ffi_" & FFI_Base (FI)
+                 & ";" & ASCII.LF);
+      end loop;
       Append (Header, ASCII.LF);
       for U of Units loop
          Append (Header, "void ahc_init_" & Mangle (To_String (U))
@@ -902,6 +1115,12 @@ package body AHC.CodeGen is
                              & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map)
                              & ";" & ASCII.LF);
                   end loop;
+               end if;
+            end loop;
+
+            for FI in 1 .. M.Foreigns.Last_Index loop
+               if F_Owner (FI) = U then
+                  Emit_Foreign (FI);
                end if;
             end loop;
 

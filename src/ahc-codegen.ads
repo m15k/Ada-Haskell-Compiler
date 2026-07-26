@@ -40,19 +40,21 @@ package AHC.CodeGen is
    package Unit_File_Vectors is new Ada.Containers.Vectors
      (Positive, Unit_File);
 
-   --  Owners has one entry per M.Top_Binds group naming its unit.
-   --  Units lists unit names in initialization (dependency) order;
-   --  the LAST unit is the root and receives main(). Header is the
-   --  shared prog.h content (extern globals + init prototypes);
-   --  Files holds one C file per unit, in Units order.
+   --  Owners has one entry per M.Top_Binds group naming its unit;
+   --  F_Owners likewise one entry per M.Foreigns import. Units lists
+   --  unit names in initialization (dependency) order; the LAST unit
+   --  is the root and receives main(). Header is the shared prog.h
+   --  content (extern globals + init prototypes); Files holds one C
+   --  file per unit, in Units order.
    procedure Emit_Units
-     (Table  : in out Names.Name_Table;
-      M      : Core.Core_Module;
-      Env    : Builtins.Global_Env;
-      Prims  : Prelude_Core.Prim_Maps.Map;
-      Owners : UStr_Vectors.Vector;
-      Units  : UStr_Vectors.Vector;
-      Header : out Ada.Strings.Unbounded.Unbounded_String;
-      Files  : out Unit_File_Vectors.Vector);
+     (Table    : in out Names.Name_Table;
+      M        : Core.Core_Module;
+      Env      : Builtins.Global_Env;
+      Prims    : Prelude_Core.Prim_Maps.Map;
+      Owners   : UStr_Vectors.Vector;
+      F_Owners : UStr_Vectors.Vector;
+      Units    : UStr_Vectors.Vector;
+      Header   : out Ada.Strings.Unbounded.Unbounded_String;
+      Files    : out Unit_File_Vectors.Vector);
 
 end AHC.CodeGen;

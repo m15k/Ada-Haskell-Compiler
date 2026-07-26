@@ -57,6 +57,10 @@ AhcNode *ahc_mk_char(long v) {
   AhcNode *n = alloc_node(); n->tag = AHC_CHAR; n->u.c = v; return n;
 }
 
+AhcNode *ahc_mk_ptr(void *p) {
+  AhcNode *n = alloc_node(); n->tag = AHC_PTR; n->u.p = p; return n;
+}
+
 AhcNode *ahc_mk_con(int contag, int arity) {
   AhcNode *n = alloc_node();
   n->tag = AHC_CON; n->u.con.contag = contag; n->u.con.arity = arity;
@@ -682,6 +686,38 @@ static AhcNode *mk_prim1(Prim1 f) {
   return ahc_mk_fun(prim1_apply, e);
 }
 
+/* General-arity prim: env = [fnbox, aritybox, collected...], like
+   con_collect. When saturated, the args (still unevaluated) are
+   handed to f as an array. */
+static AhcNode *primn_collect(AhcNode **env, AhcNode *arg) {
+  long arity = env[1]->u.i;
+  long have = 0;
+  while (env[2 + have] != NULL) have++;
+  if (have + 1 == arity) {
+    AhcPrimN f = (AhcPrimN)(uintptr_t)env[0]->u.i;
+    AhcNode **args = ahc_env((int)arity);
+    for (long i = 0; i < have; i++) args[i] = env[2 + i];
+    args[have] = arg;
+    return f(args);
+  }
+  AhcNode **e2 = ahc_env((int)(2 + arity));
+  e2[0] = env[0]; e2[1] = env[1];
+  for (long i = 0; i < have; i++) e2[2 + i] = env[2 + i];
+  e2[2 + have] = arg;
+  for (long i = have + 1; i < arity; i++) e2[2 + i] = NULL;
+  return ahc_mk_fun(primn_collect, e2);
+}
+
+AhcNode *ahc_mk_primn(int arity, AhcPrimN f) {
+  AhcNode **e;
+  if (arity < 1) ahc_die("ahc_mk_primn: arity < 1");
+  e = ahc_env(2 + arity);
+  e[0] = ahc_mk_int((long)(uintptr_t)f);
+  e[1] = ahc_mk_int(arity);
+  for (int i = 0; i < arity; i++) e[2 + i] = NULL;
+  return ahc_mk_fun(primn_collect, e);
+}
+
 /* Integer arithmetic: fast long path, promoting to bignum on
    overflow; every prim accepts either representation. */
 
@@ -901,6 +937,9 @@ static int poly_cmp(AhcNode *a, AhcNode *b) {
     }
     return 0;
   }
+  case AHC_PTR:
+    return ((uintptr_t)a->u.p > (uintptr_t)b->u.p) -
+           ((uintptr_t)a->u.p < (uintptr_t)b->u.p);
   default:
     ahc_die("comparing functions");
   }
@@ -1245,6 +1284,17 @@ static AhcNode *sb_take(StrBuf *b) {
   return r;
 }
 
+char *ahc_marshal_cstring(AhcNode *s) {
+  StrBuf b = {0, 0, 0};
+  sb_hs(&b, s);
+  sb_ch(&b, 0);
+  return b.p;
+}
+
+void ahc_free_cstring(char *s) {
+  free(s);
+}
+
 
 static int ahc_argc = 0;
 static char **ahc_argv = NULL;
@@ -1342,6 +1392,21 @@ static AhcNode *p_readfile(AhcNode *path) {
   AhcNode **e = ahc_env(1);
   e[0] = path;
   return ahc_mk_fun(io_readfile, e);
+}
+
+/* peekCString :: Ptr Char -> IO String */
+static AhcNode *io_peek_cstring(AhcNode **env, AhcNode *w) {
+  AhcNode *p = ahc_eval(env[0]);
+  (void)w;
+  if (p->tag != AHC_PTR || p->u.p == NULL)
+    ahc_die("peekCString: NULL pointer");
+  return ahc_mk_string((const char *)p->u.p);
+}
+
+static AhcNode *p_peek_cstring(AhcNode *p) {
+  AhcNode **e = ahc_env(1);
+  e[0] = p;
+  return ahc_mk_fun(io_peek_cstring, e);
 }
 
 /* ----- file handles: an index registry, not raw FILE pointers -
@@ -2010,7 +2075,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_check_range_d,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
-  *ahc_prim_from_integer_d, *ahc_prim_show_d;
+  *ahc_prim_from_integer_d, *ahc_prim_show_d,
+  *ahc_prim_null_ptr, *ahc_prim_peek_cstring;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -2123,4 +2189,6 @@ void ahc_rts_init(void) {
   ahc_prim_signum_d = mk_prim1(p_signum_d);
   ahc_prim_from_integer_d = mk_prim1(p_from_integer_d);
   ahc_prim_show_d = mk_prim1(p_show_d);
+  ahc_prim_null_ptr = ahc_mk_ptr(NULL);
+  ahc_prim_peek_cstring = mk_prim1(p_peek_cstring);
 }

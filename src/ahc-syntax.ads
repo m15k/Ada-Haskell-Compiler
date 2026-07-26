@@ -346,7 +346,7 @@ package AHC.Syntax is
    type Decl_Kind is
      (Sig_D, Fixity_D, Fun_D, Pat_D,
       Data_D, Newtype_D, Type_Syn_D,
-      Class_D, Instance_D, Default_D);
+      Class_D, Instance_D, Default_D, Foreign_D);
 
    type Decl_Node (Kind : Decl_Kind := Pat_D) is record
       Span : Diagnostics.Source_Span;
@@ -389,6 +389,13 @@ package AHC.Syntax is
             I_Decls   : Decl_Id_Vectors.Vector;
          when Default_D =>
             Def_Types : Type_Id_Vectors.Vector;
+         when Foreign_D =>
+            --  foreign import/export ccall "cname" hsName :: ty
+            F_Export : Boolean := False;
+            F_Safe   : Boolean := False;
+            F_CName  : Names.Name_Id := Names.No_Name;
+            F_Name   : Names.Name_Id := Names.No_Name;
+            F_Type   : Real_Type_Id;
       end case;
    end record;
 

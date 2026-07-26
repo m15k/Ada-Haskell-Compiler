@@ -204,6 +204,10 @@ package body AHC.Syntax is
               and then All_Ok (A, N.I_Decls);
          when Default_D =>
             return All_Ok (A, N.Def_Types);
+         when Foreign_D =>
+            return N.F_Name /= Names.No_Name
+              and then N.F_CName /= Names.No_Name
+              and then Ok (A, N.F_Type);
       end case;
    end Well_Formed;
 

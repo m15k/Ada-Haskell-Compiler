@@ -1,0 +1,6 @@
+(module)
+(foreign import ccall unsafe "labs" c_labs (-> (tcon Int) (tcon Int)))
+(foreign import ccall safe "sin" c_sin (-> (tcon Double) (tcon Double)))
+(foreign import ccall unsafe "getenv" getenv (-> (tcon String) (tap (tcon IO) (tap (tcon Ptr) (tcon Char)))))
+(sig ( main ) (tap (tcon IO) (tcon ())))
+(patbind (pvar main) (app (var return) (con ())))

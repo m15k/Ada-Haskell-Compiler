@@ -1955,6 +1955,101 @@ package body AHC.Parser is
          end;
       end Parse_Binding;
 
+      --  foreign import ccall [safe|unsafe] ["cname"] name :: type
+      --  (Report ch. 8, restricted to the ccall convention and plain
+      --  symbol impents; foreign export parses but is rejected until
+      --  export support lands.)
+      function Parse_Foreign_Decl
+        (Span : Diagnostics.Source_Span) return Real_Decl_Id
+      is
+         Ccall_Name  : constant Names.Real_Name_Id :=
+           Table.Intern ("ccall");
+         Export_Name : constant Names.Real_Name_Id :=
+           Table.Intern ("export");
+         Safe_Name   : constant Names.Real_Name_Id :=
+           Table.Intern ("safe");
+         Unsafe_Name : constant Names.Real_Name_Id :=
+           Table.Intern ("unsafe");
+
+         function At_Plain_Varid return Boolean
+         is (At_K (Varid) and then Tok.Qualifier = Names.No_Name);
+
+         Is_Export : Boolean := False;
+         Is_Safe   : Boolean := False;
+         C_Name    : Names.Name_Id := Names.No_Name;
+         Hs_Name   : Names.Name_Id := Names.No_Name;
+      begin
+         Advance;  --  foreign
+         if At_K (Kw_Import) then
+            Advance;
+         elsif At_Plain_Varid and then Tok.Name = Export_Name then
+            Is_Export := True;
+            Advance;
+         else
+            Fail ("expected 'import' or 'export' after 'foreign'");
+         end if;
+
+         if At_Plain_Varid and then Tok.Name = Ccall_Name then
+            Advance;
+         else
+            Fail ("only the ccall calling convention is supported");
+         end if;
+
+         if At_Plain_Varid
+           and then (Tok.Name = Safe_Name
+                     or else Tok.Name = Unsafe_Name)
+         then
+            Is_Safe := Tok.Name = Safe_Name;
+            Advance;
+         end if;
+
+         if At_K (String_Lit) then
+            C_Name := Tok.String_Value;
+            Advance;
+         end if;
+
+         if not At_Plain_Varid then
+            Fail ("expected the Haskell name of the foreign "
+                  & "declaration");
+         end if;
+         Hs_Name := Names.Name_Id (Tok.Name);
+         Advance;
+         Expect (Colon_Colon, "'::'");
+
+         if C_Name = Names.No_Name then
+            --  No impent (or ""): the C symbol is the Haskell name.
+            C_Name := Hs_Name;
+         else
+            declare
+               Text : constant String :=
+                 Table.Text (Names.Real_Name_Id (C_Name));
+            begin
+               for Ch of Text loop
+                  if Ch = ' ' or else Ch = '&' then
+                     Bag.Add (Diagnostics.Error,
+                              Diagnostics.Parse_Error, Span,
+                              "unsupported foreign entity '" & Text
+                              & "' (only a plain C symbol name is "
+                              & "supported)");
+                     raise Parse_Failure;
+                  end if;
+               end loop;
+            end;
+         end if;
+
+         if Is_Export then
+            Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
+                     "foreign export is not yet supported");
+            raise Parse_Failure;
+         end if;
+
+         return Arena.Add
+           (Decl_Node'(Kind => Foreign_D, Span => Span,
+                       F_Export => Is_Export, F_Safe => Is_Safe,
+                       F_CName => C_Name, F_Name => Hs_Name,
+                       F_Type => Parse_Type));
+      end Parse_Foreign_Decl;
+
       function Parse_Decl return Real_Decl_Id is
          Span : constant Diagnostics.Source_Span := Tok.Span;
       begin
@@ -1973,6 +2068,8 @@ package body AHC.Parser is
                return Parse_Instance_Decl (Span);
             when Kw_Default =>
                return Parse_Default_Decl (Span);
+            when Kw_Foreign =>
+               return Parse_Foreign_Decl (Span);
             when Varid =>
                if Peek (1).Kind in Comma | Colon_Colon then
                   return Parse_Sig_Decl (Span);

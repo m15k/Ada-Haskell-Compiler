@@ -1210,6 +1210,32 @@ package body AHC.Kinds is
          end loop;
       end;
 
+      --  Foreign imports are bodiless, so occurrences typecheck from
+      --  Var_Info.Var_Scheme (exactly as wired builtins do); copy the
+      --  just-converted signature scheme onto the binder.
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind = Foreign_D then
+               declare
+                  V : constant Core.Var_Id :=
+                    Res.Decl_Var (Positive (D));
+                  use Sig_Maps;
+                  C : Cursor;
+               begin
+                  if Core."/=" (V, Core.No_Var) then
+                     C := Sigs.Find (Core.Real_Var_Id (V));
+                     if Has_Element (C) then
+                        M.Vars (Core.Real_Var_Id (V)).Var_Scheme :=
+                          Element (C);
+                     end if;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
       --  Expression and pattern type annotations.
       for I in 1 .. Natural (Arena.Last_Expr) loop
          declare

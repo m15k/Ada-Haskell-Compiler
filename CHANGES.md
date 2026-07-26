@@ -1,5 +1,39 @@
 # AHC Changelog
 
+## Unreleased
+
+The FFI arrives (M89-M92): `foreign import ccall` end to end -
+Report chapter 8's import half, restricted to the ccall convention
+and plain symbol impents. A foreign declaration is a bodiless
+global: the renamer feeds its type through the ordinary signature
+channel (kinds and the typechecker have no FFI special cases), the
+desugarer derives a marshalling spec from the scheme, and codegen
+emits an extern prototype plus a wrapper in the owning module's C
+unit - evaluate and unbox each argument, call, box the result.
+IO-typed imports get the world-passing shape, so effect ordering is
+exactly the built-in primitives'; pure imports call at saturation;
+nullary pure imports are CAFs.
+
+The v1 marshallable universe is Int (=long; a bignum-promoted value
+dies cleanly at the boundary rather than truncating), Double, Char,
+Bool, `()` (results), String (copied each way), and the new
+`Ptr a` - a phantom-typed raw C pointer with wired Eq/Ord,
+`nullPtr`, and `peekCString :: Ptr Char -> IO String` for nullable
+C results like getenv. Runtime groundwork: an `AHC_PTR` node tag,
+`ahc_mk_primn` (a general curried collector that removes the old
+arity-3 prim ceiling), and `ahc_marshal_cstring`/`ahc_free_cstring`.
+
+Build plumbing: `AHC_CFLAGS`/`AHC_LDFLAGS` pass through
+scripts/ahc-build.sh, `{-# OPTIONS_AHC_LINK -lfoo #-}` collects
+link flags from the source into OUT.build/link_flags (GHC only
+warns on the unknown pragma), and compile flags join the
+object-cache key so a flag change can never reuse a stale object.
+New tests: ffi_libc, ffi_io, ffi_bigint_err exec goldens, a parse
+golden, and a marshallability-diagnostic golden. MANUAL chapter 9
+gains an FFI section with the type table and the two honesty rules
+(match the C definition under Int=long; bignum dies at the
+boundary).
+
 ## v1.4.2 (2026-07-26)
 
 The value-constraint patch (M87-M88): two example programs, no

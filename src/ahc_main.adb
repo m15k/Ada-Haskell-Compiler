@@ -156,6 +156,7 @@ procedure AHC_Main is
          Name : Ada.Strings.Unbounded.Unbounded_String;
          From_Group, To_Group : Natural := 0;
          From_Inst, To_Inst   : Natural := 0;
+         From_Foreign, To_Foreign : Natural := 0;
          Tag : Natural := 0;   --  diagnostic origin (Diag_Texts idx)
       end record;
       package Unit_Span_Vectors is new Ada.Containers.Vectors
@@ -171,6 +172,55 @@ procedure AHC_Main is
       Prelude_Tag : Natural := 0;
       Group_Origins, Inst_Origins :
         AHC.Diagnostics.Origin_Vectors.Vector;
+
+      --  {-# OPTIONS_AHC_LINK <flags> #-} pragmas accumulate here;
+      --  `ahc emit` writes them to OUT.build/link_flags so the build
+      --  script can pass them to the linker. GHC only warns on the
+      --  unknown pragma, so FFI source stays oracle-portable.
+      Link_Flags : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Collect_Link_Flags
+        (Src   : AHC.Source_Text.Source;
+         Spans : AHC.Lexer.Span_Vectors.Vector)
+      is
+         Key : constant String := "OPTIONS_AHC_LINK";
+
+         function Is_Space (C : Character) return Boolean
+         is (C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR);
+      begin
+         for Sp of Spans loop
+            declare
+               From : constant Positive := Positive (Sp.Start) + 3;
+               To   : constant Natural  := Natural (Sp.Stop) - 4;
+            begin
+               if To >= From then
+                  declare
+                     Inner : constant String := AHC.Source_Text.Slice
+                       (Src,
+                        AHC.Source_Text.Byte_Offset (From),
+                        AHC.Source_Text.Byte_Offset (To));
+                     I : Positive := Inner'First;
+                     J : Natural := Inner'Last;
+                  begin
+                     while I <= J and then Is_Space (Inner (I)) loop
+                        I := I + 1;
+                     end loop;
+                     while J >= I and then Is_Space (Inner (J)) loop
+                        J := J - 1;
+                     end loop;
+                     if J - I + 1 > Key'Length
+                       and then Inner (I .. I + Key'Length - 1) = Key
+                       and then Is_Space (Inner (I + Key'Length))
+                     then
+                        Ada.Strings.Unbounded.Append
+                          (Link_Flags,
+                           " " & Inner (I + Key'Length + 1 .. J));
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Collect_Link_Flags;
 
       --  Function contracts (PRE/POST pragmas): collected per
       --  module, signatures injected after the frontend, wrapping
@@ -277,6 +327,7 @@ procedure AHC_Main is
          begin
             AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream, L_Pragmas);
             AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
+            Collect_Link_Flags (L.Text, L_Pragmas);
             if not Bag.Has_Errors then
                --  PRE/POST contract pragmas become hidden top-level
                --  bindings in this module's arena.
@@ -365,6 +416,7 @@ procedure AHC_Main is
             AHC.Lexer.Scan (Text, Table, Bag, Root_Stream, R_Pragmas);
             AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
                                      Root.Ref.all);
+            Collect_Link_Flags (Text, R_Pragmas);
             if not Bag.Has_Errors then
                AHC.Contracts.Collect
                  (Text, R_Pragmas, Table, Bag, Root.Ref.all,
@@ -463,6 +515,8 @@ procedure AHC_Main is
                  Natural (M.Top_Binds.Length);
                I0 : constant Natural :=
                  Natural (M.Last_Instance);
+               F0 : constant Natural :=
+                 Natural (M.Foreigns.Length);
                L_Tag : Natural;
                L_Res   : AHC.Rename.Resolutions;
                L_Annos : AHC.Kinds.Anno_Maps.Map;
@@ -524,6 +578,8 @@ procedure AHC_Main is
                      To_Group => Natural (M.Top_Binds.Length),
                      From_Inst => I0 + 1,
                      To_Inst => Natural (M.Last_Instance),
+                     From_Foreign => F0 + 1,
+                     To_Foreign => Natural (M.Foreigns.Length),
                      Tag => L_Tag));
                if Bag.Has_Errors then
                   Bag.Print_All (L.Text);
@@ -755,7 +811,8 @@ procedure AHC_Main is
                        Equivalent_Keys => AHC.Core."=");
                   Dict_Owner : Var_UStr_Maps.Map;
 
-                  Owners : AHC.CodeGen.UStr_Vectors.Vector;
+                  Owners   : AHC.CodeGen.UStr_Vectors.Vector;
+                  F_Owners : AHC.CodeGen.UStr_Vectors.Vector;
                   Units  : AHC.CodeGen.UStr_Vectors.Vector;
                   Header : Unbounded_String;
                   Files  : AHC.CodeGen.Unit_File_Vectors.Vector;
@@ -845,6 +902,23 @@ procedure AHC_Main is
                      end;
                   end loop;
 
+                  --  One owner entry per foreign import, from the
+                  --  same spans.
+                  for FI in 1 .. Natural (M.Foreigns.Length) loop
+                     declare
+                        Name : Unbounded_String :=
+                          To_Unbounded_String ("Prelude");
+                     begin
+                        for Sp of Unit_Spans loop
+                           if FI in Sp.From_Foreign .. Sp.To_Foreign
+                           then
+                              Name := Sp.Name;
+                           end if;
+                        end loop;
+                        F_Owners.Append (Name);
+                     end;
+                  end loop;
+
                   Units.Append (To_Unbounded_String ("Prelude"));
                   for Sp of Unit_Spans loop
                      if To_String (Sp.Name) /= "Prelude" then
@@ -853,7 +927,7 @@ procedure AHC_Main is
                   end loop;
 
                   AHC.CodeGen.Emit_Units
-                    (Table, M, Env, Prims, Owners, Units,
+                    (Table, M, Env, Prims, Owners, F_Owners, Units,
                      Header, Files);
 
                   Ada.Directories.Create_Path (Build_Dir);
@@ -886,6 +960,10 @@ procedure AHC_Main is
                         Put (F, To_String (Files (I).Text));
                         Close (F);
                      end loop;
+                     Create (F, Out_File,
+                             Build_Dir & "/link_flags");
+                     Put (F, To_String (Link_Flags));
+                     Close (F);
                   end;
                   Put_Line ("wrote " & Build_Dir);
                end;

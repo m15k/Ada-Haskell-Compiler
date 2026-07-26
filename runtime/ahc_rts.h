@@ -18,7 +18,7 @@
 
 typedef enum {
   AHC_THUNK, AHC_BLACKHOLE, AHC_FUN, AHC_CON, AHC_IND,
-  AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT
+  AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT, AHC_PTR
 } AhcTag;
 
 typedef struct AhcNode AhcNode;
@@ -36,6 +36,7 @@ struct AhcNode {
     double d;
     long c;
     struct { int32_t sign; int32_t n; uint32_t *d; } big;
+    void *p;
   } u;
 };
 
@@ -56,6 +57,15 @@ AhcNode *ahc_mk_confun(int contag, int arity); /* curried worker      */
 AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_missing(const char *what);     /* dies when forced    */
+AhcNode *ahc_mk_ptr(void *p);                  /* foreign pointer     */
+
+/* FFI support: a curried prim of any arity (args arrive as possibly
+   unevaluated nodes), and Haskell-string -> malloc'd NUL-terminated
+   C string (caller frees). */
+typedef AhcNode *(*AhcPrimN)(AhcNode **args);
+AhcNode *ahc_mk_primn(int arity, AhcPrimN f);
+char *ahc_marshal_cstring(AhcNode *s);
+void ahc_free_cstring(char *s);
 
 void ahc_run_main(AhcNode *main_io);           /* execute IO action   */
 void ahc_die(const char *msg) __attribute__((noreturn));
@@ -104,7 +114,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_check_range_d,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
-  *ahc_prim_from_integer_d, *ahc_prim_show_d;
+  *ahc_prim_from_integer_d, *ahc_prim_show_d,
+  *ahc_prim_null_ptr, *ahc_prim_peek_cstring;
 
 void ahc_rts_init(void);
 

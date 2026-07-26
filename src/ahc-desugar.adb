@@ -1474,6 +1474,178 @@ package body AHC.Desugar is
          Ds_Group (Value_Decls, Into);
       end Ds_Method_Bodies;
 
+      ------------------------------------------------------------------
+      --  Foreign imports: derive the marshalling spec from the
+      --  binder's scheme; codegen turns each spec into a C wrapper.
+      ------------------------------------------------------------------
+
+      procedure Ds_Foreign (D : Real_Decl_Id; N : Decl_Node) is
+         V : constant Core.Var_Id := Res.Decl_Var (Positive (D));
+
+         procedure Err (Msg : String) is
+         begin
+            Bag.Add (Diagnostics.Error, Diagnostics.Rename_Unsupported,
+                     N.Span,
+                     "foreign import '"
+                     & Table.Text (Names.Real_Name_Id (N.F_Name))
+                     & "': " & Msg);
+         end Err;
+
+         --  The v1 marshallable universe: Int, Double, Char, Bool,
+         --  (), String, Ptr a. Anything else (bare tyvars included)
+         --  fails; tyvars are thereby allowed only under Ptr.
+         function Classify
+           (T : Core.Type_Id; K : out Core.Marshal_Kind)
+            return Boolean
+         is
+            use type Core.Type_Id;
+            use type Core.TyCon_Id;
+            use type Core.Type_Kind;
+         begin
+            K := Core.M_Unit;
+            if T = Core.No_Type then
+               return False;
+            end if;
+            declare
+               TN : constant Core.Type_Node :=
+                 M.Node (Core.Real_Type_Id (T));
+            begin
+               case TN.Kind is
+                  when Core.TCon_T =>
+                     if Core.TyCon_Id (TN.Con) = Env.Int_TC then
+                        K := Core.M_Int;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Double_TC then
+                        K := Core.M_Double;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Char_TC then
+                        K := Core.M_Char;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Bool_TC then
+                        K := Core.M_Bool;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Unit_TC then
+                        K := Core.M_Unit;
+                     else
+                        return False;
+                     end if;
+                     return True;
+                  when Core.TApp_T =>
+                     declare
+                        FN : constant Core.Type_Node :=
+                          M.Node (TN.T_Fun);
+                     begin
+                        if FN.Kind /= Core.TCon_T then
+                           return False;
+                        end if;
+                        if Core.TyCon_Id (FN.Con) = Env.Ptr_TC then
+                           K := Core.M_Ptr;
+                           return True;
+                        end if;
+                        if Core.TyCon_Id (FN.Con) = Env.List_TC then
+                           declare
+                              AN : constant Core.Type_Node :=
+                                M.Node (TN.T_Arg);
+                           begin
+                              if AN.Kind = Core.TCon_T
+                                and then Core.TyCon_Id (AN.Con)
+                                           = Env.Char_TC
+                              then
+                                 K := Core.M_String;
+                                 return True;
+                              end if;
+                           end;
+                        end if;
+                        return False;
+                     end;
+                  when others =>
+                     return False;
+               end case;
+            end;
+         end Classify;
+
+      begin
+         if Core."=" (V, Core.No_Var) then
+            return;   --  rename already failed
+         end if;
+         declare
+            use Kinds.Sig_Maps;
+            C : constant Kinds.Sig_Maps.Cursor :=
+              Sigs.Find (Core.Real_Var_Id (V));
+         begin
+            if not Has_Element (C) then
+               return;   --  kind error already reported
+            end if;
+            declare
+               use type Core.Type_Kind;
+               Sch : constant Core.Scheme :=
+                 M.Node (Core.Real_Scheme_Id (Element (C)));
+               F : Core.Foreign_Import;
+               T : Core.Type_Id := Sch.S_Body;
+            begin
+               if not Sch.Context.Is_Empty then
+                  Err ("a foreign import may not have a class "
+                       & "context");
+                  return;
+               end if;
+               F.Binder := Core.Real_Var_Id (V);
+               F.C_Name := N.F_CName;
+               F.Span := N.Span;
+
+               --  Arguments along the function spine.
+               loop
+                  declare
+                     TN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (T));
+                  begin
+                     exit when TN.Kind /= Core.TFun_T;
+                     declare
+                        K : Core.Marshal_Kind;
+                     begin
+                        if not Classify (Core.Type_Id (TN.From), K)
+                          or else Core."=" (K, Core.M_Unit)
+                        then
+                           Err ("argument type is not marshallable "
+                                & "across the FFI");
+                           return;
+                        end if;
+                        F.Args.Append (K);
+                     end;
+                     T := Core.Type_Id (TN.To);
+                  end;
+               end loop;
+
+               --  Result, possibly under IO.
+               declare
+                  TN : constant Core.Type_Node :=
+                    M.Node (Core.Real_Type_Id (T));
+               begin
+                  if TN.Kind = Core.TApp_T then
+                     declare
+                        FN : constant Core.Type_Node :=
+                          M.Node (TN.T_Fun);
+                     begin
+                        if FN.Kind = Core.TCon_T
+                          and then Core."="
+                            (Core.TyCon_Id (FN.Con), Env.IO_TC)
+                        then
+                           F.Res_IO := True;
+                           T := Core.Type_Id (TN.T_Arg);
+                        end if;
+                     end;
+                  end if;
+               end;
+               declare
+                  K : Core.Marshal_Kind;
+               begin
+                  if not Classify (T, K) then
+                     Err ("result type is not marshallable across "
+                          & "the FFI");
+                     return;
+                  end if;
+                  F.Res := K;
+               end;
+               M.Foreigns.Append (F);
+            end;
+         end;
+      end Ds_Foreign;
+
    begin
       for D of Arena.Top_Decls loop
          declare
@@ -1509,6 +1681,8 @@ package body AHC.Desugar is
                         end if;
                      end loop;
                   end;
+               when Foreign_D =>
+                  Ds_Foreign (D, N);
                when others =>
                   null;
             end case;

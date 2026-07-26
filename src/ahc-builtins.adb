@@ -242,6 +242,9 @@ package body AHC.Builtins is
       Env.Ordering_TC := TyCon_Id (Def_TyCon ("Ordering", 0, Star_K));
       Env.Maybe_TC    := TyCon_Id (Def_TyCon ("Maybe", 1, Star1));
       Env.Arrow_TC    := TyCon_Id (Def_TyCon ("(->)", 2, Star2));
+      --  Ptr is phantom in its argument: the runtime value is a raw
+      --  C pointer (AHC_PTR); the parameter only types the pointee.
+      Env.Ptr_TC      := TyCon_Id (Def_TyCon ("Ptr", 1, Star1));
 
       Env.False_DC := DataCon_Id
         (Def_DataCon ("False", Real_TyCon_Id (Env.Bool_TC), 1, 0));
@@ -819,6 +822,20 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Ordering_TC));
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ordering_TC));
 
+         --  Eq/Ord (Ptr a): address comparison, so no context on a.
+         declare
+            A1 : constant Real_TyVar_Id := New_Tv ("a");
+            A2 : constant Real_TyVar_Id := New_Tv ("a");
+            V1, V2 : TyVar_Id_Vectors.Vector;
+         begin
+            V1.Append (A1);
+            V2.Append (A2);
+            Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ptr_TC),
+                          Head_Vars => V1);
+            Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Ptr_TC),
+                          Head_Vars => V2);
+         end;
+
          for T of Numeric loop
             Def_Instance (Cl (Env.Num_Cl), TCn (T));
             Def_Instance (Cl (Env.Real_Cl), TCn (T));
@@ -1069,6 +1086,16 @@ package body AHC.Builtins is
                Ignore := Def_Global ("primComplementI", Mono (II));
                Ignore := Def_Global ("primPopCountI", Mono (II));
             end;
+            declare
+               A3 : constant Real_TyVar_Id := New_Tv ("a");
+            begin
+               Ignore := Def_Global
+                 ("nullPtr", Poly1 (A3, AP (TC (Env.Ptr_TC), TV (A3))));
+            end;
+            Ignore := Def_Global
+              ("peekCString",
+               Mono (FN (AP (TC (Env.Ptr_TC), TC (Env.Char_TC)),
+                         IO_T (String_T2))));
          end;
          pragma Unreferenced (Ignore);
       end;

@@ -394,6 +394,13 @@ package body AHC.Syntax.Printer is
                return To_String (R);
             when Default_D =>
                return "(default" & Types_S (N.Def_Types) & ")";
+            when Foreign_D =>
+               return "(foreign "
+                 & (if N.F_Export then "export" else "import")
+                 & " ccall "
+                 & (if N.F_Safe then "safe " else "unsafe ")
+                 & """" & NM (N.F_CName) & """ "
+                 & NM (N.F_Name) & " " & Type_S (N.F_Type) & ")";
          end case;
       end Decl_S;
 

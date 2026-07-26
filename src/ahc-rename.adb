@@ -950,6 +950,17 @@ package body AHC.Rename is
          Units : constant Unit_Vectors.Vector :=
            Group (Arena, Decls, Bag);
       begin
+         if not Global then
+            for D of Decls loop
+               if Arena.Node (D).Kind = Foreign_D then
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Unsupported,
+                           Arena.Node (D).Span,
+                           "foreign declarations are only allowed at "
+                           & "the top level");
+               end if;
+            end loop;
+         end if;
          --  Binders first (letrec semantics), then signatures.
          for U of Units loop
             case U.Kind is
@@ -1769,6 +1780,37 @@ package body AHC.Rename is
          end;
       end loop;
 
+      --  Foreign imports: bodiless globals whose signature is the
+      --  declaration's type (the same channel Sig_D uses, so kinds
+      --  and the typechecker need no special cases).
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind = Foreign_D then
+               declare
+                  V : constant Core.Real_Var_Id :=
+                    M.Mint_Var ((Name => N.F_Name, Span => N.Span,
+                                 Is_Global => True, others => <>));
+               begin
+                  if Top_Names.Contains (N.F_Name) then
+                     Bag.Add (Diagnostics.Error,
+                              Diagnostics.Rename_Duplicate, N.Span,
+                              "'" & Text (N.F_Name)
+                              & "' is defined more than once");
+                  end if;
+                  Top_Names.Include (N.F_Name, V);
+                  Env.Values.Include (N.F_Name, V);
+                  Own.Values.Include (N.F_Name, V);
+                  Res.Decl_Var.Replace_Element
+                    (Positive (D), Core.Var_Id (V));
+                  Rename_Type (N.F_Type);
+                  Res.Var_Sig.Include (V, N.F_Type);
+               end;
+            end if;
+         end;
+      end loop;
+
       --  ... then top-level value binders and signatures.
       Declare_Group (Arena.Top_Decls, Global => True);
 
@@ -1820,6 +1862,8 @@ package body AHC.Rename is
                   end loop;
                when Fixity_D =>
                   null;
+               when Foreign_D =>
+                  null;   --  handled before Declare_Group
             end case;
          end;
       end loop;

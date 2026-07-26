@@ -28,8 +28,22 @@ if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
   gc_ldflags="-L$prefix/lib -lgc"
 fi
 
+# FFI plumbing: AHC_CFLAGS/AHC_LDFLAGS come from the environment;
+# {-# OPTIONS_AHC_LINK ... #-} pragmas arrive via OUT.build/link_flags.
+# A foreign import's Int=long prototype may redeclare a libc builtin
+# (e.g. strlen returns size_t); that mismatch is the documented v1
+# type model, so silence just that warning.
+user_cflags="${AHC_CFLAGS:-} -Wno-incompatible-library-redeclaration"
+user_ldflags="${AHC_LDFLAGS:-}"
+if [ -f "$builddir/link_flags" ]; then
+  user_ldflags="$user_ldflags $(cat "$builddir/link_flags")"
+fi
+
+# Compile flags are part of each object's cache key: a flag change
+# must not reuse a stale object.
 hash_of() {
-  cat "$@" | shasum -a 256 | cut -d' ' -f1
+  { cat "$@"; printf '%s' "$gc_cflags $user_cflags"; } \
+    | shasum -a 256 | cut -d' ' -f1
 }
 
 objs=""
@@ -39,18 +53,18 @@ rh=$(hash_of runtime/ahc_rts.c runtime/ahc_rts.h)
 ro="$cache/rts_$rh.o"
 if [ ! -f "$ro" ]; then
   # shellcheck disable=SC2086
-  clang -O1 -c -o "$ro" -I runtime $gc_cflags runtime/ahc_rts.c
+  clang -O1 -c -o "$ro" -I runtime $gc_cflags $user_cflags runtime/ahc_rts.c
 fi
 objs="$objs $ro"
 
 # Program units: a unit recompiles only when its generated text (or
-# the shared header / runtime header) changed.
+# the shared header / runtime header / effective flags) changed.
 for c in "$builddir"/*.c; do
   h=$(hash_of "$c" "$builddir/ahc_prog.h" runtime/ahc_rts.h)
   o="$cache/$(basename "${c%.c}")_$h.o"
   if [ ! -f "$o" ]; then
     # shellcheck disable=SC2086
-    clang -O1 -c -o "$o" -I runtime -I "$builddir" $gc_cflags "$c"
+    clang -O1 -c -o "$o" -I runtime -I "$builddir" $gc_cflags $user_cflags "$c"
   fi
   objs="$objs $o"
 done
@@ -64,5 +78,5 @@ case "$(uname)" in
   *)      stack_ld="-Wl,-z,stacksize=0x20000000" ;;
 esac
 # shellcheck disable=SC2086
-clang -O1 -o "$out" $stack_ld $objs $gc_ldflags
+clang -O1 -o "$out" $stack_ld $objs $gc_ldflags $user_ldflags
 echo "built $out"
