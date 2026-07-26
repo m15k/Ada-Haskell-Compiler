@@ -1,0 +1,16 @@
+-- Syntax errors are the program's own business and are reported.
+-- Everything a VALUE can get wrong belongs to the constraints, and
+-- those cases live in the harness (they exit 1).
+tuesday
+2026-07-25-01
+26-07-25
+2026-07-xx
+2026-07-25 soon
+--cal 2026 seven
+--cal twenty 7
+--leapday MMXXVIII
+--between 2026-01-01 nope
+--zone half 2026-07-25 13:30
+--zone 5.75 2026-07-25 1330
+--zone 5.75 2026-07-25 13:3
+--frobnicate 2026-07-25

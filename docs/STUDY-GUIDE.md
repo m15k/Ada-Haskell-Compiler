@@ -239,7 +239,11 @@ readable in an afternoon, in any order:
   notes): the Ada extension. Discharge is a bonus station: a
   complete constant EVALUATOR for Core in 600 lines — a miniature
   of the interpreter you have already written for a DSL, aimed at
-  proofs instead of execution.
+  proofs instead of execution. Read `examples/cal/Main.hs` first,
+  from the *user's* side: a calendar that declares every bound and
+  every relation and writes no validation code at all, so each
+  failure message you can provoke from it names a check one of
+  these two files inserted.
 - **The fuzzer** (`tests/fuzz/Gen.hs` — Haskell, not Ada!) and
   **the REPL** (`src/ahc-repl.adb`, 524 lines +
   `docs/repl-design-note.md`): the verification tooling. Both are

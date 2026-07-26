@@ -1,5 +1,62 @@
 # AHC Changelog
 
+## Unreleased
+
+examples/fibs repaired and promoted: fastfibinwest.hs was a stray
+broken file (`Main = do` bound a nonexistent constructor, so both
+compilers rejected it) and is now a working CLI - fib by fast
+doubling, reading indices from arguments or stdin, one result per
+line, with per-word error reporting. The only real gap behind it
+was `Data.Bits.bitSize`, deprecated in base and absent from AHC's
+Data.Bits; rather than add it, the program derives the bit width
+from its own argument, because an AHC Int promotes to bignum on
+overflow and therefore has no fixed width to report honestly.
+Everything else in the original already worked (an
+MR-restricted `foldl_ = foldl'`, a `let` inside a list-comprehension
+generator, descending stepped enumeration, bignum arithmetic). It
+carries a `{-# PRE fib \n -> n >= 0 #-}` that main's boundary check
+guarantees can never fire, and it is oracle-verified: goldens are
+GHC 9.4.8's output, crossing the fib 92/93 machine-word boundary
+where AHC's hand-rolled limbs meet GMP. fib 1000000 (208988
+digits) takes ~1.1s.
+
+The value-constraint example (M87): examples/cal - ahccal, a civil
+calendar utility and the worked tour of the Ada extension's two
+halves working together. Four refinement kinds carry the values
+(Int ranges for Year/Month/Day/DayOfYear, a `satisfying` predicate
+for LeapYear, `Int mod 7` and `Int mod 1440` for weekdays and
+clocks, `Double in -12.0 .. 14.0` for real UTC offsets, all of them
+inside constructor fields on Date), and Pre/Post contracts carry
+the relations no per-value constraint can state - February 31st is
+a `mkDate` precondition, not a `Day` bound. The date/integer
+isomorphism is fully specified: dayNumber and dateOf are declared
+to invert each other, addDays and daysBetween are specified in
+terms of them, and every call in the test suite checks all of it at
+demand time. The program contains no hand-written validation
+whatsoever; every failure message it can produce comes from a check
+the compiler inserted.
+
+The examples harness grows from 13 tests to 25, and gains two
+assertions no other example could make: the four constraint kinds
+each fail with the right message and a nonzero exit, and the
+`--unchecked` build agrees with the checked build on every valid
+input - which also pins that modular normalization survives the
+release policy while the claims do not. ahccal is the first example
+that is AHC-only by construction (contract pragmas are portable,
+the refinement surface is not), so its goldens are AHC's output and
+`run_examples.sh --oracle` skips it, with `--update-cal` to
+regenerate.
+
+Two things the build found, both recorded in examples/cal/README.md:
+refined type synonyms work in constructor fields (`data Date = Date
+Year Month Day` checks every construction) - previously only
+inline field refinements were pinned; and a contract on a function
+whose signature carries refinements is never discharged even when
+its claim is argument-free, which is why the one argument-free
+claim in the program lives on an unrefined helper. Incompleteness,
+not unsoundness - but a real limit on the discharge evaluator's
+reach, measured on a real program for the first time.
+
 ## v1.4.1 (2026-07-25)
 
 The dogfood patch (M85-M86): two new example programs, no

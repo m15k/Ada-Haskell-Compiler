@@ -1,0 +1,95 @@
+> 2026-07-25
+date     2026-07-25
+weekday  Saturday
+ordinal  206 of 365
+leap     no
+week     2026-07-19 .. 2026-07-25
+
+> 1900-01-01
+date     1900-01-01
+weekday  Monday
+ordinal  1 of 365
+leap     no
+week     1900-01-01 .. 1900-01-06
+
+> 2400-12-31
+date     2400-12-31
+weekday  Sunday
+ordinal  366 of 366
+leap     yes
+week     2400-12-31 .. 2400-12-31
+
+> 2000-02-29
+date     2000-02-29
+weekday  Tuesday
+ordinal  60 of 366
+leap     yes
+week     2000-02-27 .. 2000-03-04
+
+> 2028-02-29
+date     2028-02-29
+weekday  Tuesday
+ordinal  60 of 366
+leap     yes
+week     2028-02-27 .. 2028-03-04
+
+> 2026-7-25
+date     2026-07-25
+weekday  Saturday
+ordinal  206 of 365
+leap     no
+week     2026-07-19 .. 2026-07-25
+
+> 2026-07-25 +120
+2026-07-25 + 120 days = 2026-11-22 (Sunday)
+
+> 2026-07-25 -30
+2026-07-25 - 30 days = 2026-06-25 (Thursday)
+
+> 2026-12-31 +1
+2026-12-31 + 1 days = 2027-01-01 (Friday)
+
+> 2027-01-01 -1
+2027-01-01 - 1 days = 2026-12-31 (Thursday)
+
+> 2024-02-28 +1
+2024-02-28 + 1 days = 2024-02-29 (Thursday)
+
+> 2023-02-28 +1
+2023-02-28 + 1 days = 2023-03-01 (Wednesday)
+
+> --between 2026-01-01 2026-12-25
+2026-01-01 .. 2026-12-25 = 358 days (51 weeks + 1 day)
+
+> --between 2026-07-25 2026-07-26
+2026-07-25 .. 2026-07-26 = 1 day (0 weeks + 1 day)
+
+> --between 2026-07-26 2026-07-25
+2026-07-26 .. 2026-07-25 = -1 days (-1 weeks + 6 days)
+
+> --between 1900-01-01 2400-12-31
+1900-01-01 .. 2400-12-31 = 182986 days (26140 weeks + 6 days)
+
+> --leapday 2028
+2028-02-29 (Tuesday)
+
+> --leapday 2000
+2000-02-29 (Tuesday)
+
+> --syntax 2026-02-31
+syntax ok: 2026-02-31 (not demanded)
+
+> --syntax 2500-01-01
+syntax ok: 2500-01-01 (not demanded)
+
+> --help
+ahccal - a calendar built on value constraints
+  ahccal DATE                weekday, ordinal day, leap flag
+  ahccal DATE [+-]N          add or subtract days
+  ahccal --cal YEAR MONTH    month grid
+  ahccal --between D1 D2     days between two dates
+  ahccal --leapday YEAR      February 29th
+  ahccal --zone OFF D HH:MM  UTC offset conversion (+ --dst)
+  ahccal --syntax DATE       parse without demanding the date
+  ahccal                     read commands from stdin
+

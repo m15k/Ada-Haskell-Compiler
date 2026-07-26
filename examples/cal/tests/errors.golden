@@ -1,0 +1,39 @@
+> tuesday
+error: bad date 'tuesday' (want YYYY-MM-DD)
+
+> 2026-07-25-01
+error: bad date '2026-07-25-01' (want YYYY-MM-DD)
+
+> 26-07-25
+error: bad date '26-07-25' (want YYYY-MM-DD)
+
+> 2026-07-xx
+error: bad date '2026-07-xx' (want YYYY-MM-DD)
+
+> 2026-07-25 soon
+error: bad day count 'soon'
+
+> --cal 2026 seven
+error: bad month 'seven'
+
+> --cal twenty 7
+error: bad year 'twenty'
+
+> --leapday MMXXVIII
+error: bad year 'MMXXVIII'
+
+> --between 2026-01-01 nope
+error: bad date 'nope' (want YYYY-MM-DD)
+
+> --zone half 2026-07-25 13:30
+error: bad offset 'half'
+
+> --zone 5.75 2026-07-25 1330
+error: bad time '1330'
+
+> --zone 5.75 2026-07-25 13:3
+error: bad time '13:3'
+
+> --frobnicate 2026-07-25
+error: unknown command '--frobnicate' (try --help)
+

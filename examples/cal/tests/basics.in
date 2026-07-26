@@ -1,0 +1,29 @@
+-- Dates, weekdays, ordinals and arithmetic.
+2026-07-25
+1900-01-01
+2400-12-31
+2000-02-29
+2028-02-29
+-- Unpadded fields are accepted; the constraints care about the
+-- value, not the spelling.
+2026-7-25
+-- Day arithmetic, forwards and backwards, across year ends.
+2026-07-25 +120
+2026-07-25 -30
+2026-12-31 +1
+2027-01-01 -1
+2024-02-28 +1
+2023-02-28 +1
+-- Spans.
+--between 2026-01-01 2026-12-25
+--between 2026-07-25 2026-07-26
+--between 2026-07-26 2026-07-25
+--between 1900-01-01 2400-12-31
+-- February 29th of a leap year.
+--leapday 2028
+--leapday 2000
+-- Laziness: the date is parsed but never demanded, so neither the
+-- field refinements nor mkDate's precondition fire.
+--syntax 2026-02-31
+--syntax 2500-01-01
+--help

@@ -19,3 +19,9 @@ examples/json/ajson.c
 examples/hm/microhm
 examples/hm/microhm.build/
 examples/hm/microhm.c
+examples/cal/ahccal
+examples/cal/ahccal.build/
+examples/cal/ahccal.c
+examples/fibs/fastfib
+examples/fibs/fastfib.build/
+examples/fibs/fastfib.c

@@ -1,0 +1,19 @@
+-- The base cases and the small end.
+0
+1
+2
+3
+4 5 6 7 8 9 10
+-- Around the machine-word boundary: fib 92 is the last one that
+-- fits a 64-bit Int, fib 93 is the first that does not. AHC's
+-- Integer is a hand-rolled bignum, GHC's is GMP, and they must
+-- agree digit for digit.
+90 91 92 93 94
+-- The classic.
+100
+-- Big enough that fast doubling is the only reason this returns:
+-- naive recursion would need 10^41 additions.
+200
+500
+1000
+10000

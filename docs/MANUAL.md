@@ -1215,6 +1215,28 @@ opaque parameter, so the discharge can only ever be incomplete,
 never wrong. `scripts/run_discharge.sh` pins all three behaviors
 against the generated C.
 
+### Both halves, on a whole program
+
+`examples/cal/` (ahccal, a calendar utility) is this chapter's
+worked tour: four refinement kinds on the values, Pre/Post
+contracts on the functions, and no hand-written validation code
+anywhere — every failure it can produce comes from a check the
+compiler inserted. It is also where the reason the two halves are
+*two* is easiest to feel: `type Day = Int in 1 .. 31` bounds one
+value and therefore cannot rule out February 31st, because that
+day's legality depends on the month and the year. Only
+`{-# PRE mkDate \y m d -> d <= daysInMonth y m #-}` can say it.
+
+Building it measured two things worth knowing. Refined type
+synonyms work in constructor fields (`data Date = Date Year Month
+Day` checks every construction site), which until then only inline
+field refinements had pinned. And discharge does not fire for a
+contract on a function whose signature carries refinements, even
+when the claim is argument-free — the identical claim discharges on
+an unrefined helper. That is incompleteness rather than
+unsoundness, and it is the first measurement of the evaluator's
+reach taken on a real program instead of a fragment.
+
 ---
 
 ## 13. The optimizer

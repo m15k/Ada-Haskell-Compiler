@@ -1,0 +1,15 @@
+-- A month starting mid-week, a leap February, a month starting on
+-- Sunday, and one starting on Saturday (the 6-row case the
+-- discharged capacity claim is about).
+--cal 2026 7
+--cal 2026 2
+--cal 2024 2
+--cal 2026 3
+--cal 2026 8
+-- The ends of the supported range.
+--cal 1900 1
+--cal 2400 12
+-- clampTo at Int: an out-of-range year is clamped into Year rather
+-- than raising a refinement violation.
+--cal 1800 1
+--cal 2500 12

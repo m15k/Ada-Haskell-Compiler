@@ -1,0 +1,18 @@
+-- Whole-hour, three-quarter-hour and half-hour offsets: the Double
+-- range in, the modular clock out.
+--zone 0 2026-07-25 13:30
+--zone 5.75 2026-07-25 13:30
+--zone 12.75 2026-07-25 13:30
+--zone -3.5 2026-07-25 01:00
+-- Crossing midnight in both directions: the time-of-day wraps
+-- (Int mod 1440), the date does not (floored division).
+--zone 5.75 2026-07-25 20:30
+--zone -8 2026-07-25 04:00
+--zone 14 2026-12-31 23:59
+--zone -12 2026-01-01 00:00
+-- The clock argument is modular too, so an out-of-range hour
+-- normalizes instead of failing - wrapping is arithmetic, not a claim.
+--zone 0 2026-07-25 25:00
+-- clampTo at Double: summer time cannot push the offset past +14.
+--zone 5.75 2026-07-25 13:30 --dst
+--zone 14 2026-07-25 13:30 --dst

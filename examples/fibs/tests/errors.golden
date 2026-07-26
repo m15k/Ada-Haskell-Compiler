@@ -1,0 +1,9 @@
+error: not a number: 'abc'
+error: fib is defined for n >= 0, got -1
+error: fib is defined for n >= 0, got -100
+error: not a number: '12x'
+error: not a number: '0x10'
+13
+error: not a number: '1e3'
+error: not a number: '3.5'
+13

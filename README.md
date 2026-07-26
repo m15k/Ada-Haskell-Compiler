@@ -266,7 +266,7 @@ the root file, then `$AHC_LIB`, then `lib/`. Conformance oracles run
 the same programs under GHC's real base library, so AHC's
 implementations are tested against the canonical ones.
 
-## Examples — the dogfood program
+## Examples — the dogfood programs
 
 `examples/lisp/` is a Scheme-flavored mini-Lisp interpreter written
 in Haskell 2010 and compiled by AHC itself: a REPL and batch
@@ -278,7 +278,34 @@ behave byte-identically (goldens are GHC's output, `--oracle`
 regenerates). Its first compile immediately found and fixed a real
 compiler bug (cross-module type synonyms read the defining module's
 syntax arena through an importing module's ids) and drove the first
-need-based stdlib addition (`isEOF`).
+need-based stdlib addition (`isEOF`). `examples/json/` (ajson - a
+parser and pretty-printer over the exact-literal machinery, with a
+Data.Map `--stats` mode) and `examples/hm/` (microhm - Algorithm W
+in ~350 lines, the compiler's own typechecker in miniature, with
+its occurs-check obligation restated as a live contract) followed,
+both byte-identical under either compiler on their first build.
+`examples/fibs/` is the small one: Fibonacci by fast doubling over
+the bignum Integer, reading indices from arguments or stdin, with
+goldens that straddle the fib 92/93 machine-word boundary where
+AHC's hand-rolled limbs meet GMP (fib 1000000, 208988 digits, in
+about a second).
+
+`examples/cal/` (ahccal - a civil-calendar utility) is the odd one
+out and the reason to read it: it is the worked tour of the Ada
+extension's two halves together, and the only example that is
+AHC-only by construction. Ranges, a `satisfying` predicate, two
+modular types, a Double range and refined constructor fields carry
+the values; Pre/Post contracts carry the relations no per-value
+constraint can express (February 31st is a `mkDate` precondition,
+not a `Day` bound), up to a full specification of the date/integer
+isomorphism. The program contains no hand-written validation at
+all - every failure message comes from a check the compiler
+inserted. The harness additionally pins that the four constraint
+kinds actually fire, and that `--unchecked` strips every claim
+without changing a single answer while modular normalization
+survives. Contract pragmas are portable; the refinement surface is
+not, so its goldens are AHC's own output and `--oracle` skips it
+(`examples/cal/README.md` says why, in full).
 
 ## Layout
 
