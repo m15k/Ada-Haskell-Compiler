@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The classic lands (M100): tests/exec/ffi_qsort.hs - libc's qsort
+sorting a C Int64 array with a Haskell comparator, exercising the
+wrapper callback, the marshal surface, and the fixed-width types in
+one golden. The whole-FFI smoke test the plan aimed at from the
+start.
+
 The marshal surface (M99): raw memory for C interop, all through
 the existing prims boundary - mallocBytes/free, plusPtr/castPtr,
 peek/poke at every fixed width plus Double and Ptr (byte offsets,
