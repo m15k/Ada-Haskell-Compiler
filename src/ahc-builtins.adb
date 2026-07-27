@@ -1238,6 +1238,26 @@ package body AHC.Builtins is
                end;
                Ignore := Def_Global
                  ("primYield", Mono (IO_T (U_T)));
+
+               --  Sparks (B1): pure, advisory parallelism.
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("primPar",
+                     Poly2 (A, B,
+                            FN (TV (A), TV (B), TV (B))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("primPseq",
+                     Poly2 (A, B,
+                            FN (TV (A), TV (B), TV (B))));
+               end;
             end;
             declare
                A3 : constant Real_TyVar_Id := New_Tv ("a");

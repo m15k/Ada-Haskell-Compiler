@@ -36,7 +36,9 @@ if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
   # gc >= 8.2); an older collector falls back to no-GC rather than
   # miscompile the runtime.
   if grep -qs GC_set_stackbottom "$prefix/include/gc/gc.h"; then
-    gc_cflags="-I$prefix/include -DAHC_USE_BOEHM"
+    # GC_THREADS: B1 spark workers allocate; gc.h also intercepts
+    # pthread_create so workers register with the collector.
+    gc_cflags="-I$prefix/include -DAHC_USE_BOEHM -DGC_THREADS"
     gc_ldflags="-L$prefix/lib -lgc"
   fi
 fi
@@ -101,8 +103,11 @@ fi
 # match practical programs rather than the 8MB default. The linker
 # spelling is per-OS (Darwin -stack_size; ELF -z stacksize).
 case "$(uname)" in
-  Darwin) stack_ld="-Wl,-stack_size,0x20000000" ;;
-  *)      stack_ld="-Wl,-z,stacksize=0x20000000" ;;
+  # 1GB (was 512MB): the B1 eval loop's extra locals nudged the
+  # per-frame cost, and a 2M-deep thunk chain (b_sumfold, no-opt)
+  # sat exactly at the old edge. Virtual, committed lazily.
+  Darwin) stack_ld="-Wl,-stack_size,0x40000000" ;;
+  *)      stack_ld="-Wl,-z,stacksize=0x40000000" ;;
 esac
 # shellcheck disable=SC2086
 clang -O1 -o "$out" $stack_ld $objs $gc_ldflags $user_ldflags

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Sparks land opt-in; the gate returns a finding (M105, Phase B1):
+Control.Parallel (par/pseq) over a multi-threaded thunk protocol -
+CAS claim via a transient tag, release/acquire IND updates, worker
+OS threads with Chase-Lev spark deques that never park on
+blackholes, and sparked errors captured into re-raising thunks so
+error programs stay byte-identical at every worker count. TSan is
+an acceptance harness (scripts/run_tsan.sh) and found two real
+races in the first draft of the protocol. Workers are OPT-IN
+(AHC_WORKERS=N; default 0): the benchmark gate (>= 1.6x on 2
+workers, scripts/run_parbench.sh) recorded 0.46-0.70x under the
+shipped collector, and the control experiments isolated the cause
+- Boehm anti-scales under parallel allocation-storm mutation in
+every configuration tried (stock, tuned, thread-local-alloc
+source build, collections disabled), while the identical runtime
+over plain malloc scales 2.06x/2.58x/2.96x at 2/4/8 workers. The
+allocator is the sixth hot subsystem the Phase B inventory
+missed; the postmortem and the collector-campaign prerequisite
+are design note section 7.8. Shipped regardless: sequential
+allocation now batches through GC_malloc_many per-thread free
+lists (measurably faster), worker stacks get the 512MB
+virtual-reservation treatment, and the main stack reservation
+doubles to 1GB (the new eval locals nudged a 2M-deep thunk chain
+over the old 512MB edge - caught by the bench harness's
+output-verification step).
+
 Protected values (M103): Control.Concurrent.Protected - Ada's
 protected object with the no-blocking rule made a type. Shared
 state accessed only through pure transitions: reading (atomic

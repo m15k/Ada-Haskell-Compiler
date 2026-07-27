@@ -19,7 +19,8 @@
 
 typedef enum {
   AHC_THUNK, AHC_BLACKHOLE, AHC_FUN, AHC_CON, AHC_IND,
-  AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT, AHC_PTR
+  AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT, AHC_PTR,
+  AHC_CLAIM   /* transient: tag claimed, owner not yet published */
 } AhcTag;
 
 typedef struct AhcNode AhcNode;
@@ -108,6 +109,7 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_task_yield,
   *ahc_prim_prot_new, *ahc_prim_prot_read,
   *ahc_prim_prot_update, *ahc_prim_prot_entry,
+  *ahc_prim_par, *ahc_prim_pseq,
   *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,

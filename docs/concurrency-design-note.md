@@ -11,9 +11,12 @@ _XOPEN_SOURCE precedes every include (MANUAL chapter 16, both).
 Channels landed as unbounded FIFO (GHC's Chan semantics), which
 keeps the GHC shim (tests/shim) a direct wrapper. Protected
 values are designed and implemented in section 6 (M103). Phase B
-(SMP) is designed in section 7 (PROPOSED, measurement-gated, two
-stages: sparks first - they trade nothing observable - then
-opt-in SMP scheduling, which may never clear its gate).
+(SMP) is designed in section 7; its B1 stage (sparks) LANDED as
+correct, TSan-clean, byte-deterministic machinery - but OPT-IN
+(AHC_WORKERS=N), because the 7.6 gate found the shipped collector
+anti-scales under parallel graph reduction while plain malloc
+scales to 2.96x: the allocator is the missing sixth subsystem,
+and Phase B's future is a collector campaign (7.8).
 
 AHC has zero concurrency at every layer, and until now deliberately:
 Haskell 2010 has none (Control.Concurrent is GHC library territory,
@@ -430,7 +433,21 @@ layer, until something dogfooded wants it.
 
 ## 7. Phase B: SMP, in two stages (the campaign design)
 
-**Status: PROPOSED.** Section 4's sketch, made a plan. The design
+**Status: B1 MACHINERY LANDED, OPT-IN; the gate was NOT cleared,
+and the reason is a finding.** The thunk protocol, worker pool,
+par/pseq, and all tests landed TSan-clean and byte-deterministic
+at every worker count (even sparked errors re-raise at the same
+point with the same bytes). But the 7.6 gate recorded 0.46-0.70x
+under the shipped collector, and the diagnosis (7.8) is that the
+shared-state inventory in 7.2 MISSED A SUBSYSTEM: the allocator.
+A graph reducer allocates on every reduction, and Boehm - stock,
+tuned, or rebuilt with thread-local allocation, collections on or
+off - anti-scales under multiple allocation-storm mutators, while
+the identical runtime over plain malloc scales to 2.96x on 8
+workers. The machinery is correct and waiting; workers default to
+0 (AHC_WORKERS=N opts in); the gate's return clause points every
+future Phase B effort at one place: the collector. Section 4's
+sketch, made a plan. The design
 brief has not changed since section 2: AHC will not out-GHC GHC at
 throughput, and `--deterministic` (Phase A's schedule, byte-for-
 byte) remains the DEFAULT profile forever - the Ravenscar bet is
@@ -591,3 +608,49 @@ designed to be the resting place if the measurements say so, and
 the note considers that outcome a success, not a retreat - the
 project's identity is the deterministic profile, and B1 is the
 largest amount of parallelism obtainable without touching it.
+
+### 7.8 The B1 postmortem: the sixth subsystem
+
+Landing B1 was a measurement story, recorded here because 7.6
+demanded it in advance. What the harnesses found, in order:
+
+1. **TSan (before any benchmark)**: two real races in the first
+   protocol draft - a loser's speculative code/env read racing the
+   winner's owner store (both live in the same union words), and
+   the owner word read as a pointer while an updater overwrites it
+   with the IND payload. Fixes: read code/env only after winning
+   the claim; treat the owner word as compare-only, never
+   dereferenced; park-vs-spin decided by n_workers and the
+   reader's own side. The 7.3 promise that TSan is an acceptance
+   test, vindicated within the hour.
+2. **Worker stacks**: a 200k-cons forceList exhausted 64MB worker
+   stacks mid-GC-prologue (manifesting as libgc-internal faults,
+   two red herrings deep). Workers now get main's 512MB virtual
+   budget - the same trick, pthread edition.
+3. **The gate**: 0.46-0.70x at 2-4 workers (recorded run), everything busy in
+   ahc_eval, monotonically WORSE with more workers. The
+   discriminating experiments: GC_DONT_GC did not help (not
+   stop-the-world); a source-built collector with thread-local
+   allocation did not help (not the allocation lock alone);
+   plain malloc scaled - 2.06x/2.58x/2.96x at 2/4/8 workers
+   (so the sparks, deques, and protocol are innocent).
+4. **Conclusion**: allocation IS the concurrency substrate in a
+   graph reducer - every reduction allocates, so the allocator's
+   parallel behavior bounds every other subsystem. The 7.2 table
+   gets a sixth hot row, and it is the one Boehm cannot serve.
+   GHC knew: per-capability nurseries are not an optimization,
+   they are the precondition.
+
+What survives regardless of the collector: sequential allocation
+now batches through GC_malloc_many free lists (one global-lock
+acquisition per ~150 objects instead of one per node - measured
+faster sequentially), and one strictness fix with golden-level
+teeth: a worker-captured error re-raises through the same
+flush-then-die path as a direct error, so error programs are
+byte-identical at every worker count.
+
+The path forward, when a collector campaign is worth it: a
+per-thread nursery design (bump-allocated, scavenged into the
+shared heap) or a different collector entirely. That is its own
+design note; nothing else in Phase B is worth touching until it
+exists.

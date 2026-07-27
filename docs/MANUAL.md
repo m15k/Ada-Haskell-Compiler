@@ -1165,6 +1165,28 @@ one primitive what the deterministic epilogue builds by hand.
 Five `prot_*` exec goldens; no requeue, no timed entries, FIFO
 only (the Ravenscar simplification again).
 
+**Sparks** (B1) brought `Control.Parallel` — `par`/`pseq`, GHC's
+deterministic parallelism idiom — and with it the multi-threaded
+thunk protocol: claim by CAS through a transient `AHC_CLAIM` tag,
+release/acquire IND updates, workers that never park (a busy
+thunk is someone else's work; steal the next spark), and errors
+in sparked code captured into a thunk that re-raises at the
+demand point, so error programs are byte-identical at every
+worker count. The machinery is TSan-verified (`run_tsan.sh`,
+which found two real races in the first draft) and **opt-in**:
+`AHC_WORKERS=N` starts the pool, and the default is 0, because
+the benchmark gate produced a finding instead of a speedup — a
+graph reducer allocates on every reduction, and the Boehm
+collector anti-scales under parallel allocation storms in every
+configuration measured, while the identical runtime over plain
+malloc scales to ~3x on 8 workers. The full postmortem, including
+the control experiments, is design-note section 7.8; the honest
+summary is that Phase B now has one prerequisite, and it is a
+collector. (A useful side effect shipped anyway: sequential
+allocation batches through `GC_malloc_many` free lists, one
+global-lock acquisition per ~150 objects instead of one per
+node.)
+
 ---
 
 ## 10. Numbers

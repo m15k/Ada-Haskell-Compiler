@@ -12,6 +12,8 @@
 #endif
 #include <ucontext.h>
 
+#include <pthread.h>
+
 #include "ahc_rts.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +71,8 @@ struct AhcTask {
   int id;
   int state;              /* 0 run, 1 blocked, 2 done, 3 failed */
   int awaited;            /* someone called await: failure is theirs */
+  int is_worker;          /* a B1 spark worker's shell, not a green
+                             task: never parks, never scheduled */
   AhcNode *action;        /* the IO action a spawned task runs */
   AhcNode *result;
   AhcNode *xfer;          /* channel hand-off mailbox */
@@ -85,8 +89,14 @@ struct AhcScope {
 };
 
 static AhcTask main_task;            /* id 0, the process itself */
-static AhcTask *cur_task = &main_task;
+
+/* Thread-local: on the main OS thread this walks the green tasks
+   as they switch; on a B1 spark worker it stays pinned to that
+   worker's shell. Everything scheduler-side (runq, park, wake)
+   runs on the main thread only. */
+static __thread AhcTask *cur_task = &main_task;
 static AhcTask *runq_head, *runq_tail;
+static int n_workers;    /* live B1 spark workers (grows once) */
 
 static size_t stack_guard_pg;        /* one page, PROT_NONE */
 
@@ -225,15 +235,66 @@ static void die_msg_list(const char *prefix, AhcNode *cell) {
   ahc_die(buf);
 }
 
+/* Per-thread free lists refilled by GC_malloc_many. The installed
+   collector takes a GLOBAL mutex in GC_malloc (no thread-local
+   allocation in the brew build), and a graph reducer allocates on
+   nearly every reduction step - under B1 that lock was the whole
+   ballgame (measured: workers converted sparks and the clock did
+   not move). GC_malloc_many hands back a LIST of same-size
+   objects under one lock; parked on a per-thread free list, the
+   lock is amortized across a batch while every object stays an
+   ordinary, individually-collectable GC object - no retention
+   change. (A bump-arena version was tried first: sequential time
+   went 2.6x WORSE from block-grain retention. The collector's own
+   batching API is the right tool.) List heads live in a static
+   (scanned) array, not in TLS alone - TLS is invisible to the
+   collector, and a free chain must stay reachable. */
+#ifdef AHC_USE_BOEHM
+#define AHC_NCLASS 8                    /* 8..64 bytes, 8-byte step */
+#define AHC_NSLOTS (33 + 1)             /* main + workers */
+/* One 128-byte-aligned row per thread: every allocation WRITES its
+   row's list head, and rows sharing a cache line would ping-pong
+   between cores on every single allocation. */
+static void *hot_free[AHC_NSLOTS][16]
+  __attribute__((aligned(128)));        /* scanned roots */
+static __thread void **my_hot_free;
+extern int ahc_bump_slot_hint(void);    /* fwd: my_deque, below */
+
+static void *ahc_hot_alloc(size_t n) {
+  size_t cls;
+  void *p;
+  n = (n + 7) & ~(size_t)7;
+  if (n == 0 || n > AHC_NCLASS * 8) {
+    p = GC_MALLOC(n);
+    if (!p) ahc_die("out of memory");
+    return p;
+  }
+  if (!my_hot_free) my_hot_free = hot_free[ahc_bump_slot_hint()];
+  cls = (n >> 3) - 1;
+  p = my_hot_free[cls];
+  if (!p) {
+    p = GC_malloc_many(n);
+    if (!p) ahc_die("out of memory");
+  }
+  my_hot_free[cls] = GC_NEXT(p);
+  GC_NEXT(p) = NULL;    /* restore the zeroed-memory invariant */
+  return p;
+}
+#define AHC_ALLOC_HOT(n) ahc_hot_alloc(n)
+#else
+#define AHC_ALLOC_HOT(n) AHC_ALLOC(n)
+#endif
+
 static AhcNode *alloc_node(void) {
-  AhcNode *n = (AhcNode *)AHC_ALLOC(sizeof(AhcNode));
+  AhcNode *n = (AhcNode *)AHC_ALLOC_HOT(sizeof(AhcNode));
   if (!n) ahc_die("out of memory");
   return n;
 }
 
 AhcNode **ahc_env(int n) {
   if (n == 0) return NULL;
-  AhcNode **e = (AhcNode **)AHC_ALLOC(sizeof(AhcNode *) * n);
+  AhcNode **e =
+    (AhcNode **)AHC_ALLOC_HOT(sizeof(AhcNode *) * (size_t)n);
   if (!e) ahc_die("out of memory");
   return e;
 }
@@ -274,42 +335,102 @@ AhcNode *ahc_mk_con(int contag, int arity) {
 }
 
 /* Update-in-place graph reduction: the PRD's thunk model. */
+/* One brief pause in a spin loop; be polite to the OS now and
+   then. B1 spins are bounded: a blackhole's owner is always making
+   progress on some OS thread (pure evaluation cannot block), so a
+   spin ends when the owner updates. */
+static void spin_pause(unsigned long *iters) {
+#if defined(__x86_64__)
+  __builtin_ia32_pause();
+#else
+  __asm__ volatile("" ::: "memory");
+#endif
+  if ((++*iters & 1023) == 0) sched_yield();
+}
+
+/* The thunk protocol (design note 7.3). Claim is a CAS to the
+   transient AHC_CLAIM, then owner/waiters are written, then the
+   tag goes AHC_BLACKHOLE with release - so anyone who reads
+   BLACKHOLE (acquire) sees a valid owner. Update stores the
+   payload, then the IND tag, both release; the dispatch load is
+   acquire. Green-vs-green contention parks (Phase A, unchanged);
+   any contention involving a worker spins, because workers never
+   park and their victims never wait long. */
 AhcNode *ahc_eval(AhcNode *n) {
+  unsigned long spins = 0;
   for (;;) {
-    switch (n->tag) {
+    switch (__atomic_load_n(&n->tag, __ATOMIC_ACQUIRE)) {
     case AHC_IND:
-      n = n->u.ind;
+      n = (AhcNode *)__atomic_load_n(&n->u.ind, __ATOMIC_ACQUIRE);
       break;
     case AHC_THUNK: {
-      AhcCode code = n->u.thunk.code;
-      AhcNode **env = n->u.thunk.env;
-      n->tag = AHC_BLACKHOLE;
-      n->u.bh.owner = cur_task;
+      /* code/env are read only AFTER winning the claim: between
+         CLAIM and the BLACKHOLE publish the winner has the node
+         to itself, and a loser's speculative read would race the
+         winner's owner store into the same union words (TSan
+         found exactly that). */
+      AhcCode code;
+      AhcNode **env;
+      AhcTag expect = AHC_THUNK;
+      if (!__atomic_compare_exchange_n(&n->tag, &expect, AHC_CLAIM,
+                                       0, __ATOMIC_ACQ_REL,
+                                       __ATOMIC_ACQUIRE))
+        break;                 /* lost the race - redispatch */
+      code = n->u.thunk.code;
+      env = n->u.thunk.env;
+      __atomic_store_n(&n->u.bh.owner, cur_task, __ATOMIC_RELAXED);
       n->u.bh.waiters = NULL;
-      AhcNode *v = ahc_eval(code(env));
+      __atomic_store_n(&n->tag, AHC_BLACKHOLE, __ATOMIC_RELEASE);
       {
-        /* wake tasks parked on this thunk (FIFO), then update */
+        AhcNode *v = ahc_eval(code(env));
+        /* wake tasks parked on this thunk (FIFO), then update.
+           Waiters exist only on green-owned blackholes, and green
+           tasks share one OS thread - reading the list before the
+           payload store overwrites its word is race-free. */
         AhcTask *w = (AhcTask *)n->u.bh.waiters;
-        n->tag = AHC_IND;
-        n->u.ind = v;
+        __atomic_store_n(&n->u.ind, v, __ATOMIC_RELEASE);
+        __atomic_store_n(&n->tag, AHC_IND, __ATOMIC_RELEASE);
         while (w) {
           AhcTask *nx = w->qnext;
           wake(w);
           w = nx;
         }
+        n = v;
       }
-      n = v;
       break;
     }
-    case AHC_BLACKHOLE:
-      /* Another task is forcing this thunk: park until it updates.
-         Self-dependency is still the honest <<loop>>. If the owner
-         DIED mid-force the thunk never updates and the scheduler's
-         deadlock detector reports it. */
-      if ((AhcTask *)n->u.bh.owner == cur_task) ahc_die("<<loop>>");
+    case AHC_CLAIM:
+      spin_pause(&spins);      /* owner is publishing; momentary */
+      break;
+    case AHC_BLACKHOLE: {
+      /* The owner WORD may be stale: it shares its union slot
+         with u.ind, so a racing updater can overwrite it with the
+         payload between our tag load and here. Every use below is
+         therefore a pointer COMPARE, never a dereference - a
+         payload pointer can equal no task's address. */
+      AhcTask *owner =
+        (AhcTask *)__atomic_load_n(&n->u.bh.owner, __ATOMIC_ACQUIRE);
+      if (owner == cur_task) ahc_die("<<loop>>");
+      if (cur_task->is_worker
+          || __atomic_load_n(&n_workers, __ATOMIC_RELAXED) > 0) {
+        /* Any contention involving workers spins: the owner is
+           making progress on some OS thread (or is a green task
+           main will reschedule), and workers never park - that is
+           what keeps them deadlock-free by construction (7.3).
+           The cost, documented: with workers live, a genuinely
+           CYCLIC cross-task dependency spins instead of reporting
+           deadlock; without par the Phase A reports are intact. */
+        spin_pause(&spins);
+        break;
+      }
+      /* No workers exist: pure Phase A, one OS thread. Park until
+         the owner updates. Self-dependency died <<loop>> above;
+         if the owner died mid-force the thunk never updates and
+         the scheduler's deadlock detector reports it. */
       waitlist_append((AhcTask **)&n->u.bh.waiters, cur_task);
       park();
       break;
+    }
     default:
       return n;
     }
@@ -1830,6 +1951,235 @@ static AhcNode *p_prot_entry(AhcNode *pi, AhcNode *g, AhcNode *f) {
   return ahc_mk_fun(io_prot_entry, e);
 }
 
+/* ----- sparks (B1: par/pseq, design note 7.1/7.4) ----------------
+   Worker OS threads evaluate PURE thunks only; every IO action
+   still runs on the main thread under the Phase A scheduler, so
+   results are identical by purity and the IO schedule identical by
+   construction - B1 trades nothing observable and ships on by
+   default. The pool starts lazily on the first `par`, so programs
+   that never spark never see a second thread.
+
+   Sparks live in per-thread bounded Chase-Lev deques (Le et al.'s
+   weak-memory version): the owner pushes and pops its bottom,
+   thieves CAS the top. A full deque DROPS the spark (counted) -
+   sparks are advisory, the demander evaluates the thunk anyway.
+   An `error` inside sparked pure code cannot be raised on the
+   worker (that would make the failure time racy): the worker
+   catches it and updates the thunk with a thunk that re-raises,
+   so the message surfaces exactly when the main program demands
+   the value - same bytes, same point, every run. */
+
+#define AHC_MAX_WORKERS 32
+#define SPARK_CAP 8192
+/* Workers evaluate the same lazily-built structures main does, so
+   they get main's stack budget (the 512MB trick, pthread edition;
+   virtual, committed lazily). 64MB was tried and a 200k-cons
+   forceList genuinely exhausted it. */
+#define AHC_WORKER_STACK (512ul * 1024 * 1024)
+
+typedef struct {
+  long top, bottom;              /* __atomic-accessed */
+  AhcNode *ring[SPARK_CAP];
+} SparkDeque;
+
+static SparkDeque spark_deques[AHC_MAX_WORKERS + 1];
+static __thread int my_deque;    /* 0 = main thread */
+
+#ifdef AHC_USE_BOEHM
+int ahc_bump_slot_hint(void) { return my_deque; }
+#endif
+static AhcTask worker_shells[AHC_MAX_WORKERS];
+static pthread_mutex_t idle_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t idle_cv = PTHREAD_COND_INITIALIZER;
+static long sparks_created, sparks_converted, sparks_fizzled,
+  sparks_dropped;                /* __atomic counters */
+
+static void spark_push(SparkDeque *d, AhcNode *x) {
+  long b = __atomic_load_n(&d->bottom, __ATOMIC_RELAXED);
+  long t = __atomic_load_n(&d->top, __ATOMIC_ACQUIRE);
+  if (b - t >= SPARK_CAP - 1) {
+    __atomic_fetch_add(&sparks_dropped, 1, __ATOMIC_RELAXED);
+    return;
+  }
+  d->ring[b % SPARK_CAP] = x;
+  __atomic_store_n(&d->bottom, b + 1, __ATOMIC_RELEASE);
+}
+
+static AhcNode *spark_pop(SparkDeque *d) {   /* owner, bottom end */
+  long b = __atomic_load_n(&d->bottom, __ATOMIC_RELAXED) - 1;
+  AhcNode *x;
+  long t;
+  __atomic_store_n(&d->bottom, b, __ATOMIC_RELAXED);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  t = __atomic_load_n(&d->top, __ATOMIC_RELAXED);
+  if (t <= b) {
+    x = d->ring[b % SPARK_CAP];
+    if (t == b) {
+      if (!__atomic_compare_exchange_n(&d->top, &t, t + 1, 0,
+                                       __ATOMIC_SEQ_CST,
+                                       __ATOMIC_RELAXED))
+        x = NULL;
+      __atomic_store_n(&d->bottom, b + 1, __ATOMIC_RELAXED);
+    }
+  } else {
+    x = NULL;
+    __atomic_store_n(&d->bottom, b + 1, __ATOMIC_RELAXED);
+  }
+  return x;
+}
+
+static AhcNode *spark_steal(SparkDeque *d) {  /* thief, top end */
+  long t = __atomic_load_n(&d->top, __ATOMIC_ACQUIRE);
+  long b;
+  AhcNode *x;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  b = __atomic_load_n(&d->bottom, __ATOMIC_ACQUIRE);
+  if (t >= b) return NULL;
+  x = d->ring[t % SPARK_CAP];
+  if (!__atomic_compare_exchange_n(&d->top, &t, t + 1, 0,
+                                   __ATOMIC_SEQ_CST,
+                                   __ATOMIC_RELAXED))
+    return NULL;
+  return x;
+}
+
+/* The value a sparked error becomes: a thunk that re-raises the
+   original message when the program actually demands it. */
+static AhcNode *sparked_die_code(AhcNode **env) {
+  fflush(stdout);   /* p_error's invariant: produced output
+                       precedes the die, worker path included */
+  ahc_die((const char *)env[0]->u.p);
+  return NULL;
+}
+
+static AhcNode *mk_sparked_die(const char *msg) {
+  size_t l = strlen(msg);
+  char *m = (char *)AHC_ALLOC(l + 1);
+  AhcNode **e;
+  if (!m) ahc_die("out of memory");
+  memcpy(m, msg, l + 1);
+  e = ahc_env(1);
+  e[0] = ahc_mk_ptr(m);
+  return ahc_mk_thunk(sparked_die_code, e);
+}
+
+/* Evaluate one spark. Try-claim: if the thunk is already claimed
+   or evaluated, the spark fizzled and the worker moves on - a
+   worker never spins on a WHOLE spark, only on nested blackholes
+   inside one it owns (ahc_eval's rule). */
+static void run_spark(AhcNode *x) {
+  AhcCode code;
+  AhcNode **env;
+  AhcTag expect = AHC_THUNK;
+  if (!__atomic_compare_exchange_n(&x->tag, &expect, AHC_CLAIM, 0,
+                                   __ATOMIC_ACQ_REL,
+                                   __ATOMIC_ACQUIRE)) {
+    __atomic_fetch_add(&sparks_fizzled, 1, __ATOMIC_RELAXED);
+    return;
+  }
+  code = x->u.thunk.code;     /* safe only post-claim, as in eval */
+  env = x->u.thunk.env;
+  __atomic_store_n(&x->u.bh.owner, cur_task, __ATOMIC_RELAXED);
+  x->u.bh.waiters = NULL;
+  __atomic_store_n(&x->tag, AHC_BLACKHOLE, __ATOMIC_RELEASE);
+  {
+    AhcNode *v;
+    if (setjmp(*ahc_err_frame()) == 0) {
+      v = ahc_eval(code(env));
+      ahc_err_disarm();
+    } else {
+      v = mk_sparked_die(cur_task->err_msg);
+    }
+    __atomic_store_n(&x->u.ind, v, __ATOMIC_RELEASE);
+    __atomic_store_n(&x->tag, AHC_IND, __ATOMIC_RELEASE);
+  }
+  __atomic_fetch_add(&sparks_converted, 1, __ATOMIC_RELAXED);
+}
+
+static void *worker_main(void *arg) {
+  int me = (int)(intptr_t)arg;
+  cur_task = &worker_shells[me];
+  my_deque = me + 1;
+  for (;;) {
+    AhcNode *x = spark_pop(&spark_deques[my_deque]);
+    if (!x) {
+      int v;
+      for (v = 0; v <= n_workers && !x; v++)
+        if (v != my_deque) x = spark_steal(&spark_deques[v]);
+    }
+    if (x) {
+      run_spark(x);
+    } else {
+      /* 1ms naps instead of a wake protocol: robust against lost
+         wakeups by construction, and the idle cost is noise. */
+      struct timespec ts;
+      pthread_mutex_lock(&idle_mx);
+      ts.tv_sec = 0;
+      ts.tv_nsec = 1000000;
+      pthread_cond_timedwait_relative_np(&idle_cv, &idle_mx, &ts);
+      pthread_mutex_unlock(&idle_mx);
+    }
+  }
+  return NULL;
+}
+
+static pthread_once_t workers_once = PTHREAD_ONCE_INIT;
+
+static void start_workers(void) {
+  /* OPT-IN (AHC_WORKERS=N), not default-on as section 7.1 first
+     planned: the machinery scales (plain-malloc control: 2.96x on
+     8 workers), but under the shipped collector - every Boehm
+     configuration measured, including a thread-local-alloc source
+     build with collections disabled - parallel mutators LOSE
+     time, so the honest default is off until the collector
+     campaign (design note 7.6, the gate's return clause). */
+  const char *cfg = getenv("AHC_WORKERS");
+  long want = cfg ? atol(cfg) : 0;
+  int i;
+  if (want < 0) want = 0;
+  if (want > AHC_MAX_WORKERS) want = AHC_MAX_WORKERS;
+  for (i = 0; i < want; i++) {
+    pthread_t tid;
+    pthread_attr_t at;
+    worker_shells[i].is_worker = 1;
+    worker_shells[i].id = -(i + 1);
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, AHC_WORKER_STACK);
+    if (pthread_create(&tid, &at, worker_main,
+                       (void *)(intptr_t)i) != 0)
+      break;                    /* keep however many started */
+    pthread_attr_destroy(&at);
+    /* visible to stealers as they come */
+    __atomic_store_n(&n_workers, i + 1, __ATOMIC_RELEASE);
+  }
+}
+
+static void spark_stats(void) {
+  fprintf(stderr,
+          "sparks: created %ld converted %ld fizzled %ld dropped %ld\n",
+          __atomic_load_n(&sparks_created, __ATOMIC_RELAXED),
+          __atomic_load_n(&sparks_converted, __ATOMIC_RELAXED),
+          __atomic_load_n(&sparks_fizzled, __ATOMIC_RELAXED),
+          __atomic_load_n(&sparks_dropped, __ATOMIC_RELAXED));
+}
+
+static AhcNode *p_par(AhcNode *a, AhcNode *b) {
+  pthread_once(&workers_once, start_workers);
+  if (n_workers > 0
+      && __atomic_load_n(&a->tag, __ATOMIC_ACQUIRE) == AHC_THUNK) {
+    spark_push(&spark_deques[my_deque], a);
+    __atomic_fetch_add(&sparks_created, 1, __ATOMIC_RELAXED);
+    pthread_cond_signal(&idle_cv);
+  }
+  return b;
+}
+
+/* seq with a guaranteed order: the left argument first. */
+static AhcNode *p_pseq(AhcNode *a, AhcNode *b) {
+  ahc_eval(a);
+  return b;
+}
+
 /* ----- globals ---------------------------------------------------- */
 
 /* ----- Double arithmetic (Num/Fractional/Show at Double) --------- */
@@ -2966,6 +3316,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_task_yield,
   *ahc_prim_prot_new, *ahc_prim_prot_read,
   *ahc_prim_prot_update, *ahc_prim_prot_entry,
+  *ahc_prim_par, *ahc_prim_pseq,
   *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
@@ -3084,6 +3435,9 @@ void ahc_rts_init(void) {
   ahc_prim_prot_read = mk_prim2(p_prot_read);
   ahc_prim_prot_update = mk_prim2(p_prot_update);
   ahc_prim_prot_entry = mk_prim3(p_prot_entry);
+  ahc_prim_par = mk_prim2(p_par);
+  ahc_prim_pseq = mk_prim2(p_pseq);
+  if (getenv("AHC_SPARK_STATS")) atexit(spark_stats);
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
