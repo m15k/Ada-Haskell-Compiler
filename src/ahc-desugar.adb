@@ -1682,7 +1682,6 @@ package body AHC.Desugar is
                      return;
                   end if;
                   declare
-                     use type Core.Type_Kind;
                      Bad_Shape : constant String :=
                        "a wrapper import must have type "
                        & "ft -> IO (FunPtr ft)";

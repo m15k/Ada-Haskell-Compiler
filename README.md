@@ -63,9 +63,27 @@ Burger-Dybvig show digits, a floored-mod overflow fix, and the
 hardened deep-campaign fuzzer that found them. v1.4.1 and v1.4.2
 are the example patches (M85-M88): five dogfood programs now, from
 a mini-Lisp to a calendar built entirely out of declared
-constraints, 28 example tests. 74 conformance programs
-byte-identical to GHC 9.4.8, eleven test harnesses. Nothing
-planned remains unbuilt.
+constraints, 28 example tests. v1.5 is the FFI release (M89-M97):
+a complete bidirectional foreign function interface - `foreign
+import ccall` and `foreign export ccall` (Report chapter 8),
+library mode producing a static archive plus a generated C header,
+Haskell closures as C function pointers (no libffi), fixed-width C
+types with boundary-enforced widths, and `ahc bindgen` generating
+idiomatic C++, Rust, Go, and GHC bindings; the same AHC-compiled
+library runs embedded from all four (`examples/ffi/`), including
+GHC - two Haskell runtimes in one process, talking through C. 74
+conformance programs byte-identical to GHC 9.4.8, thirteen test
+harnesses. Nothing planned remains unbuilt.
+
+```haskell
+foreign import ccall "sin" c_sin :: Double -> Double  -- call C
+foreign export ccall square :: Int -> Int             -- be called
+```
+
+```sh
+scripts/ahc-build.sh --lib MathLib.hs mathlib.a   # + ahc_exports.h
+./bin/ahc bindgen rust MathLib.hs mathlib.a       # + safe wrappers
+```
 
 ```sh
 scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable

@@ -1,6 +1,15 @@
 # AHC Changelog
 
-## Unreleased
+## v1.5 (2026-07-26)
+
+The FFI release (M89-M97): a complete bidirectional foreign
+function interface built as a C-ABI hub with generated per-language
+spokes. `foreign import ccall` and `foreign export ccall` (Report
+chapter 8), library mode with a generated C header, Haskell
+closures as C function pointers, fixed-width C types, and
+`ahc bindgen` producing idiomatic C++, Rust, Go, and GHC bindings -
+one AHC-compiled library demonstrably embedded from all four, plus
+plain C. The milestone entries below tell the story newest-first.
 
 The spokes (M96-M97): `ahc bindgen cpp|rust|go|ghc Lib.hs OUT`
 generates idiomatic host-language bindings next to ahc_exports.h -
