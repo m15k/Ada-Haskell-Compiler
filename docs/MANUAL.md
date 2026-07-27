@@ -1075,6 +1075,74 @@ orphan-instance rules, no interface-consistency checking, no
 recompilation-avoidance bugs — the classic sharp edges of the
 interface-file world — at a cost of ~0.3 seconds per build.
 
+### Green threads: deterministic structured concurrency
+
+Concurrency arrived in v1.6 (M102) with a design brief that
+started away from AHC entirely: survey what Go, GHC, Rust, and Ada
+each do well *as a consequence of their infrastructure*, keep
+GHC's surface idioms where convenient, and break with GHC where
+AHC can be superior (`docs/concurrency-design-note.md` is the full
+argument). The conclusion: AHC cannot out-GHC GHC at throughput or
+thread count, and does not try. It offers what GHC structurally
+cannot: **reproducible schedules** and **leak-free structure**.
+
+The model, from `Control.Concurrent.Scoped` (a plain `lib/`
+module over seven prims):
+
+    scope   :: (Scope -> IO a) -> IO a     -- joins all children
+    spawn   :: Scope -> IO a -> IO (Task a)
+    await   :: Task a -> IO a              -- re-raises child death
+    newChan :: IO (Chan a)
+    send    :: Chan a -> a -> IO ()        -- unbounded, never blocks
+    recv    :: Chan a -> IO a              -- parks while empty
+    yield   :: IO ()
+
+Structure is Ada's master rule made primitive: `scope` cannot
+return while children run, and a failed child nobody awaited fails
+the scope at the join point. There is no `forkIO`; threads cannot
+leak by construction. `Scope`, `Task a`, and `Chan a` are the
+Handle discipline again — abstract types over `Int` indices into
+runtime registries, with phantom parameters restoring the type
+safety the Int-typed prims give away, and a value leaked past its
+scope dying with a clean message instead of dangling.
+
+The runtime (Phase A, one OS thread) runs tasks as `ucontext`
+coroutines on a strict FIFO run queue. The only scheduling points
+are the IO bind/then boundaries (`maybe_yield` in `io_bind` and
+`io_then` — one pointer test when nothing else is runnable),
+blocking operations, and `yield`. Consequence: **the same program
+on the same input runs the same schedule, every run** — an
+interleaving is a testable output (`tests/exec/conc_interleave.hs`
+pins one), concurrency bugs reproduce, and a deadlock is a
+reported outcome ("deadlock: all green threads blocked"), not a
+hang. This is Ada's Ravenscar bet — restrict the model until it is
+analyzable, make that the default — where GHC chose throughput and
+gave up replay. The stated cost: a pure non-allocating loop never
+preempts (Go's pre-1.14 lesson, accepted knowingly).
+
+Three mechanical points earned their scars. Each green thread's
+stack is the 512MB-executable-stack trick generalized: a 64MB
+*virtual* reservation (`mmap`) over a `PROT_NONE` guard page, so
+deep lazy evaluation works on any task and overflow dies cleanly
+instead of scribbling the heap. Boehm is told about exactly the
+live extent `[sp, top]` of each parked stack (`GC_add_roots` at
+switch-out, removed at switch-in) with `GC_set_stackbottom`
+retargeting the running one. Error frames — the FFI's boundary
+setjmp stack — moved into the task control block, so a spawned
+task's death fails its `Task`, not the process. And thunk
+blackholing gained an owner field: a task forcing another task's
+blackhole parks on it and wakes on update, while forcing your own
+still dies `<<loop>>`.
+
+Testing kept both halves of the discipline: schedule-independent
+programs are differential-tested against GHC through
+`tests/shim/Control/Concurrent/Scoped.hs` (forkIO/MVar/Chan
+underneath — `runghc -i tests/shim`), and schedule-sensitive
+outputs are AHC-only exec goldens, meaningful precisely because
+the scheduler is deterministic. What Phase A is *not*: no SMP (a
+measurement-gated Phase B campaign), no STM, no async exceptions —
+each a deliberate absence, argued in the design note.
+
 ---
 
 ## 10. Numbers
@@ -1626,6 +1694,13 @@ dictionary knot whenever a user instance omits them; an Ord
 instance can even define only `<=`, with `compare` itself defaulting
 through the superclass Eq dictionary.
 
+`Control.Concurrent.Scoped` (chapter 9) is the newest member and
+the first library module that is *deliberately not* a GHC module:
+it replaces `Control.Concurrent`'s forkIO/MVar surface with
+scope/spawn/await on purpose, and its GHC twin lives in
+`tests/shim/` so the oracle methodology still applies to every
+concurrent program whose output is schedule-independent.
+
 ---
 
 ## 16. War stories
@@ -1782,6 +1857,24 @@ never touch the foreign arena again. Rule, and the reason the
 example exists: **arena ids are meaningless outside their arena**,
 and only a real program exercises the seams between features that
 the per-feature tests each cover alone.
+
+**The 56-byte ucontext that was really 768.** The first spawned
+green thread (M102) died jumping the program counter into its own
+stack. Darwin's `ucontext_t` only carries its inline register
+block (`__mcontext_data`, 768 bytes total) when `_XOPEN_SOURCE` is
+visible *the first time* `sys/ucontext.h` is seen; defined after
+`<stdio.h>` had transitively included it, the struct compiled as a
+56-byte stub - and `getcontext` faithfully wrote register state
+far past the end of it, corrupting whatever the allocator had
+placed next. The macro looked like it worked: the code compiled,
+`getcontext` returned 0, and a probe program with the define at
+the top of the file ran perfectly. Rule: **feature-test macros go
+on line one of the translation unit**, and when a libc struct
+crosses an ABI boundary, check `sizeof` under the exact include
+order that ships. (The second scar in the same milestone: an 8MB
+green-thread stack overflowed silently under deep lazy evaluation
+and scribbled the heap - hence the guard page and the 64MB virtual
+reservation of chapter 9.)
 
 ---
 

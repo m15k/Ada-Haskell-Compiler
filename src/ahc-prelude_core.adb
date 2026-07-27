@@ -1250,6 +1250,13 @@ package body AHC.Prelude_Core is
          BP ("primHGetContents", "ahc_prim_h_get_contents");
          BP ("primHIsEOF", "ahc_prim_h_is_eof");
          BP ("primHFlush", "ahc_prim_h_flush");
+         BP ("primScope", "ahc_prim_scope");
+         BP ("primSpawn", "ahc_prim_spawn");
+         BP ("primAwait", "ahc_prim_await");
+         BP ("primChanNew", "ahc_prim_chan_new");
+         BP ("primChanSend", "ahc_prim_chan_send");
+         BP ("primChanRecv", "ahc_prim_chan_recv");
+         BP ("primYield", "ahc_prim_task_yield");
          BP ("getArgs", "ahc_prim_getargs");
          BP ("getProgName", "ahc_prim_getprogname");
          BP ("exitWithCode", "ahc_prim_exit_with");

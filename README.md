@@ -71,9 +71,15 @@ Haskell closures as C function pointers (no libffi), fixed-width C
 types with boundary-enforced widths, and `ahc bindgen` generating
 idiomatic C++, Rust, Go, and GHC bindings; the same AHC-compiled
 library runs embedded from all four (`examples/ffi/`), including
-GHC - two Haskell runtimes in one process, talking through C. 74
-conformance programs byte-identical to GHC 9.4.8, thirteen test
-harnesses. Nothing planned remains unbuilt.
+GHC - two Haskell runtimes in one process, talking through C. v1.6
+in progress adds deterministic structured concurrency (M102):
+`Control.Concurrent.Scoped` - scope/spawn/await, channels, and
+yield over green threads whose strict round-robin scheduler makes
+every run of a program reproduce the same schedule byte for byte;
+an interleaving is a golden test, a deadlock is a reported
+outcome, and a scope joins its children by construction (Ada's
+master rule; there is deliberately no forkIO). 74 conformance
+programs byte-identical to GHC 9.4.8, thirteen test harnesses.
 
 ```haskell
 foreign import ccall "sin" c_sin :: Double -> Double  -- call C

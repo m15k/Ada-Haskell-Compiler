@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Deterministic structured concurrency, Phase A (M102):
+Control.Concurrent.Scoped - scope/spawn/await, unbounded FIFO
+channels (newChan/send/recv), and yield, over green threads on one
+OS thread with a strictly deterministic FIFO round-robin scheduler
+whose only scheduling points are the IO bind boundaries, blocking
+operations, and yield. Same program, same input, same schedule,
+same bytes - an interleaving is now a testable golden
+(tests/exec/conc_interleave.hs), a deadlock is a reported outcome,
+and a failed child nobody awaited fails its scope at the join
+point (Ada's master rule as the primitive; there is no forkIO).
+Runtime: ucontext coroutines with 64MB virtual guard-paged stacks,
+live-extent GC registration (GC_set_stackbottom + GC_add_roots per
+switch), per-task error frames, blackholes that park a foreign
+forcer and still die <<loop>> on self-dependency, and Scope/Task/
+Chan as registry indices per the Handle discipline. Six exec
+goldens; schedule-independent programs differential-tested against
+GHC via tests/shim (runghc -i tests/shim). Design and the
+four-language survey behind it: docs/concurrency-design-note.md.
+War stories: the 56-byte ucontext stub and the silent 8MB stack
+overflow (MANUAL chapter 16).
+
 The dogfood binding (M101): examples/sqlite - ahcsql binds the
 OS-shipped sqlite3 in ~80 lines and runs a full session against an
 in-memory database: an out-parameter open (mallocBytes/peekPtr),

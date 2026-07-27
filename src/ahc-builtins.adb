@@ -1137,6 +1137,58 @@ package body AHC.Builtins is
                Ignore := Def_Global ("primComplementI", Mono (II));
                Ignore := Def_Global ("primPopCountI", Mono (II));
             end;
+
+            --  Structured concurrency (Phase A): Scope, Task, and
+            --  Chan are Int registry indices at prim level;
+            --  lib/Control/Concurrent/Scoped.hs wraps them
+            --  abstractly (the Handle discipline), which restores
+            --  the type safety these signatures give away.
+            declare
+               I_T : constant Real_Type_Id := TC (Env.Int_TC);
+               U_T : constant Real_Type_Id := TC (Env.Unit_TC);
+            begin
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primScope",
+                     Poly1 (A, FN (FN (I_T, IO_T (TV (A))),
+                                   IO_T (TV (A)))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primSpawn",
+                     Poly1 (A, FN (I_T, IO_T (TV (A)),
+                                   IO_T (I_T))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primAwait",
+                     Poly1 (A, FN (I_T, IO_T (TV (A)))));
+               end;
+               Ignore := Def_Global
+                 ("primChanNew", Mono (IO_T (I_T)));
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primChanSend",
+                     Poly1 (A, FN (I_T, TV (A), IO_T (U_T))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primChanRecv",
+                     Poly1 (A, FN (I_T, IO_T (TV (A)))));
+               end;
+               Ignore := Def_Global
+                 ("primYield", Mono (IO_T (U_T)));
+            end;
             declare
                A3 : constant Real_TyVar_Id := New_Tv ("a");
                A4 : constant Real_TyVar_Id := New_Tv ("a");

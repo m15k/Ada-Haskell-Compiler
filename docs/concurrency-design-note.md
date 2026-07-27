@@ -1,6 +1,16 @@
 # Design note: Concurrency and parallelism for AHC
 
-**Status:** PROPOSED (M98 writes this; M99-M100 build Phase A).
+**Status:** Phase A LANDED (M102). Written at M98; sections 1-2
+are as proposed. Two implementation notes from the landing: green
+stacks became 64MB mmap'd virtual reservations behind a PROT_NONE
+guard page with live-extent-only GC registration (GC_add_roots of
+[sp, top] at switch-out; GC_set_stackbottom retargets the running
+stack) - the GC_MALLOC'd-stack idea scanned too much and guarded
+nothing; and Darwin's ucontext_t compiles as a 56-byte stub unless
+_XOPEN_SOURCE precedes every include (MANUAL chapter 16, both).
+Channels landed as unbounded FIFO (GHC's Chan semantics), which
+keeps the GHC shim (tests/shim) a direct wrapper. Contracts on
+shared state (section 2.3) and Phase B remain future milestones.
 
 AHC has zero concurrency at every layer, and until now deliberately:
 Haskell 2010 has none (Control.Concurrent is GHC library territory,

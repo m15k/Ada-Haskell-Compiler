@@ -1,3 +1,17 @@
+/* _XOPEN_SOURCE must predate EVERY include: Darwin's ucontext_t
+   only carries its inline register block (__mcontext_data) when the
+   macro is visible the first time sys/ucontext.h is seen, and the
+   stub layout is 56 bytes where the real one is 768 - getcontext
+   against the stub corrupts whatever follows it. (Found the hard
+   way: wild jumps into green-thread stacks.) */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1    /* _XOPEN_SOURCE alone hides MAP_ANON */
+#endif
+#include <ucontext.h>
+
 #include "ahc_rts.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,35 +34,159 @@
 
 #define AHC_ERR_DEPTH 8
 
-static jmp_buf ahc_err_stack[AHC_ERR_DEPTH];
-static int ahc_err_depth = 0;
-static char ahc_err_msg[512];
+/* ----- green threads (Phase A: one OS thread) --------------------
+   docs/concurrency-design-note.md. Tasks are ucontext coroutines.
+   ONE task runs at a time; the scheduler is a strict FIFO run
+   queue whose only scheduling points are the IO bind/then
+   boundaries and blocking operations - which is what makes every
+   schedule reproducible. Error frames live per task so a spawned
+   task's death fails its Task instead of the process.
+
+   Stacks are the 512MB-executable-stack trick generalized per
+   green thread: a 64MB VIRTUAL reservation (address space is the
+   cheap resource on 64-bit; untouched pages cost nothing) over a
+   PROT_NONE guard page, so lazy evaluation gets the same deep
+   recursion budget it has on the main stack and an overflow dies
+   with a clean message instead of scribbling the heap. The
+   collector is told about exactly the LIVE extent [sp, top] of
+   every parked stack (GC_add_roots at switch-out, removed at
+   switch-in), and GC_set_stackbottom retargets the running one. */
+
+#include <sys/mman.h>
+#include <unistd.h>
+#include <signal.h>
+
+#define AHC_TASK_STACK (64ul * 1024 * 1024)
+
+typedef struct AhcTask AhcTask;
+typedef struct AhcScope AhcScope;
+
+struct AhcTask {
+  ucontext_t ctx;
+  char *stack;            /* mmap base = the guard page; main: NULL */
+  char *stack_top;        /* the cold end the collector scans to */
+  char *parked_lo;        /* live-extent low mark while parked */
+  int id;
+  int state;              /* 0 run, 1 blocked, 2 done, 3 failed */
+  int awaited;            /* someone called await: failure is theirs */
+  AhcNode *action;        /* the IO action a spawned task runs */
+  AhcNode *result;
+  AhcNode *xfer;          /* channel hand-off mailbox */
+  AhcTask *qnext;         /* run-queue / wait-list linkage */
+  AhcTask *join_waiters;  /* tasks parked on my completion */
+  jmp_buf err_stack[AHC_ERR_DEPTH];
+  int err_depth;
+  char err_msg[512];      /* ahc_last_error; the death message at 3 */
+};
+
+struct AhcScope {
+  AhcTask **kids;
+  int n, cap;
+};
+
+static AhcTask main_task;            /* id 0, the process itself */
+static AhcTask *cur_task = &main_task;
+static AhcTask *runq_head, *runq_tail;
+
+static size_t stack_guard_pg;        /* one page, PROT_NONE */
 
 const char *ahc_last_error(void) {
-  return ahc_err_msg;
+  return cur_task->err_msg;
 }
 
 jmp_buf *ahc_err_frame(void) {
-  if (ahc_err_depth == AHC_ERR_DEPTH)
+  if (cur_task->err_depth == AHC_ERR_DEPTH)
     ahc_die("FFI: entry functions nested too deeply");
-  ahc_err_msg[0] = 0;
-  return &ahc_err_stack[ahc_err_depth++];
+  cur_task->err_msg[0] = 0;
+  return &cur_task->err_stack[cur_task->err_depth++];
 }
 
 void ahc_err_disarm(void) {
-  if (ahc_err_depth > 0) ahc_err_depth--;
+  if (cur_task->err_depth > 0) cur_task->err_depth--;
 }
 
 static void die_unwind_if_armed(const char *msg) {
-  if (ahc_err_depth > 0) {
+  if (cur_task->err_depth > 0) {
     size_t i = 0;
-    while (msg[i] && i + 1 < sizeof ahc_err_msg) {
-      ahc_err_msg[i] = msg[i];
+    while (msg[i] && i + 1 < sizeof cur_task->err_msg) {
+      cur_task->err_msg[i] = msg[i];
       i++;
     }
-    ahc_err_msg[i] = 0;
-    longjmp(ahc_err_stack[--ahc_err_depth], 1);
+    cur_task->err_msg[i] = 0;
+    longjmp(cur_task->err_stack[--cur_task->err_depth], 1);
   }
+}
+
+/* ----- the scheduler --------------------------------------------- */
+
+static void runq_push(AhcTask *t) {
+  t->qnext = NULL;
+  if (runq_tail) runq_tail->qnext = t;
+  else runq_head = t;
+  runq_tail = t;
+}
+
+static AhcTask *runq_pop(void) {
+  AhcTask *t = runq_head;
+  if (t) {
+    runq_head = t->qnext;
+    if (!runq_head) runq_tail = NULL;
+  }
+  return t;
+}
+
+/* Switch to the next runnable task. Requeue_self distinguishes a
+   voluntary yield (still runnable) from a park (blocked) or death
+   (never runnable again). */
+static void sched_switch(int requeue_self) {
+  AhcTask *self = cur_task;
+  AhcTask *nxt;
+  if (requeue_self) runq_push(self);
+  nxt = runq_pop();
+  if (!nxt)
+    ahc_die("deadlock: all green threads blocked");
+  if (nxt == self) return;
+#ifdef AHC_USE_BOEHM
+  {
+    struct GC_stack_base sb;
+    if (self->state < 2) {       /* a dying stack holds nothing */
+      self->parked_lo = (char *)&sb - 1024;    /* slack below sp */
+      GC_add_roots(self->parked_lo, self->stack_top);
+    }
+    if (nxt->parked_lo) {
+      GC_remove_roots(nxt->parked_lo, nxt->stack_top);
+      nxt->parked_lo = NULL;
+    }
+    sb.mem_base = nxt->stack_top;
+    GC_set_stackbottom(NULL, &sb);
+  }
+#endif
+  cur_task = nxt;
+  swapcontext(&self->ctx, &nxt->ctx);
+}
+
+/* The scheduling point: rotate iff someone else is runnable, so a
+   program with one task pays one pointer test. */
+static void maybe_yield(void) {
+  if (runq_head) sched_switch(1);
+}
+
+static void park(void) {
+  cur_task->state = 1;
+  sched_switch(0);
+  cur_task->state = 0;
+}
+
+static void wake(AhcTask *t) {
+  if (t->state >= 2) return;   /* died while parked (deadlock path) */
+  t->state = 0;
+  runq_push(t);
+}
+
+static void waitlist_append(AhcTask **list, AhcTask *t) {
+  t->qnext = NULL;
+  while (*list) list = &(*list)->qnext;
+  *list = t;
 }
 
 void ahc_die(const char *msg) {
@@ -146,14 +284,32 @@ AhcNode *ahc_eval(AhcNode *n) {
       AhcCode code = n->u.thunk.code;
       AhcNode **env = n->u.thunk.env;
       n->tag = AHC_BLACKHOLE;
+      n->u.bh.owner = cur_task;
+      n->u.bh.waiters = NULL;
       AhcNode *v = ahc_eval(code(env));
-      n->tag = AHC_IND;
-      n->u.ind = v;
+      {
+        /* wake tasks parked on this thunk (FIFO), then update */
+        AhcTask *w = (AhcTask *)n->u.bh.waiters;
+        n->tag = AHC_IND;
+        n->u.ind = v;
+        while (w) {
+          AhcTask *nx = w->qnext;
+          wake(w);
+          w = nx;
+        }
+      }
       n = v;
       break;
     }
     case AHC_BLACKHOLE:
-      ahc_die("<<loop>>");
+      /* Another task is forcing this thunk: park until it updates.
+         Self-dependency is still the honest <<loop>>. If the owner
+         DIED mid-force the thunk never updates and the scheduler's
+         deadlock detector reports it. */
+      if ((AhcTask *)n->u.bh.owner == cur_task) ahc_die("<<loop>>");
+      waitlist_append((AhcTask **)&n->u.bh.waiters, cur_task);
+      park();
+      break;
     default:
       return n;
     }
@@ -1184,7 +1340,9 @@ static AhcNode *p_put_str_ln(AhcNode *s) {
 
 /* bindIO m k = \w -> (k (m w)) w */
 static AhcNode *io_bind(AhcNode **env, AhcNode *w) {
-  AhcNode *r = ahc_apply(env[0], w);
+  AhcNode *r;
+  maybe_yield();               /* the deterministic scheduling point */
+  r = ahc_apply(env[0], w);
   return ahc_apply(ahc_apply(env[1], r), w);
 }
 
@@ -1196,6 +1354,7 @@ static AhcNode *p_bind_io(AhcNode *m, AhcNode *k) {
 
 /* thenIO m k = \w -> m w `seq-ish` k w */
 static AhcNode *io_then(AhcNode **env, AhcNode *w) {
+  maybe_yield();               /* the deterministic scheduling point */
   ahc_eval(ahc_apply(env[0], w));
   return ahc_apply(env[1], w);
 }
@@ -1223,6 +1382,296 @@ AhcNode *ahc_run_io(AhcNode *io) {
 
 void ahc_run_main(AhcNode *main_io) {
   ahc_eval(ahc_apply(main_io, the_world));
+}
+
+/* ----- green-thread prims (Phase A) ------------------------------ */
+
+/* Scope, Task, and Chan cross the Haskell boundary as Int indices
+   into these registries - the Handle discipline (M78): a stale
+   index dies with a clean message, never a dangling pointer. The
+   tables are AHC_ALLOC'd and reachable from statics, so the
+   collector sees every task's stack, action, result, and every
+   queued channel value. */
+
+typedef struct AhcChanCell {
+  AhcNode *v;
+  struct AhcChanCell *next;
+} AhcChanCell;
+
+typedef struct AhcChan {
+  AhcChanCell *head, *tail;  /* sent, not yet received (FIFO) */
+  AhcTask *recv_waiters;     /* parked receivers (FIFO) */
+} AhcChan;
+
+static AhcTask **task_reg;  static int task_n, task_cap;
+static AhcScope **scope_reg; static int scope_n, scope_cap;
+static AhcChan **chan_reg;  static int chan_n, chan_cap;
+
+static int reg_add(void ***tab, int *n, int *cap, void *p) {
+  if (*n == *cap) {
+    int nc = *cap ? *cap * 2 : 16;
+    void **nt = (void **)AHC_ALLOC(sizeof(void *) * nc);
+    int i;
+    if (!nt) ahc_die("out of memory");
+    for (i = 0; i < *n; i++) nt[i] = (*tab)[i];
+    *tab = nt;
+    *cap = nc;
+  }
+  (*tab)[*n] = p;
+  return (*n)++;
+}
+
+static AhcTask *task_of(AhcNode *n, const char *who) {
+  long i = ahc_eval(n)->u.i;
+  if (i < 0 || i >= task_n || !task_reg[i]) ahc_die(who);
+  return task_reg[i];
+}
+
+static AhcScope *scope_of(AhcNode *n, const char *who) {
+  long i = ahc_eval(n)->u.i;
+  if (i < 0 || i >= scope_n || !scope_reg[i]) ahc_die(who);
+  return scope_reg[i];
+}
+
+static AhcChan *chan_of(AhcNode *n) {
+  long i = ahc_eval(n)->u.i;
+  if (i < 0 || i >= chan_n || !chan_reg[i])
+    ahc_die("channel does not exist");
+  return chan_reg[i];
+}
+
+/* Every spawned task starts here. The armed frame turns a runtime
+   death (error, refinement violation, deadlock while parked) into
+   state 3 with the message in err_msg - the process survives and
+   await/scope-exit decide who inherits the failure. */
+static void task_trampoline(int id) {
+  AhcTask *t = task_reg[id];
+  if (setjmp(*ahc_err_frame()) == 0) {
+    t->result = ahc_eval(ahc_apply(t->action, the_world));
+    ahc_err_disarm();
+    t->state = 2;
+  } else {
+    t->state = 3;
+  }
+  t->action = NULL;
+  {
+    AhcTask *w = t->join_waiters;
+    t->join_waiters = NULL;
+    while (w) {
+      AhcTask *nx = w->qnext;
+      wake(w);
+      w = nx;
+    }
+  }
+  sched_switch(0);             /* finished: never scheduled again */
+  ahc_die("resumed a finished task");
+}
+
+/* scope f: open a scope, run f on its id, then JOIN every child in
+   spawn order before returning (Ada's master rule). A child that
+   failed and was never awaited fails the scope here. On exit the
+   scope's ids are retired, so a Task or Scope value leaked past its
+   scope dies cleanly instead of dangling. */
+static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
+  AhcScope *sc = (AhcScope *)AHC_ALLOC(sizeof(AhcScope));
+  AhcNode *r;
+  int si, i;
+  if (!sc) ahc_die("out of memory");
+  sc->kids = NULL;
+  sc->n = 0;
+  sc->cap = 0;
+  si = reg_add((void ***)&scope_reg, &scope_n, &scope_cap, sc);
+  r = ahc_eval(ahc_apply(ahc_apply(env[0], ahc_mk_int(si)), w));
+  for (i = 0; i < sc->n; i++) {  /* sc->n can grow while we join */
+    AhcTask *k = sc->kids[i];
+    while (k->state < 2) {
+      waitlist_append(&k->join_waiters, cur_task);
+      park();
+    }
+    if (k->state == 3 && !k->awaited)
+      ahc_die(k->err_msg);
+  }
+  for (i = 0; i < sc->n; i++) {
+    AhcTask *k = sc->kids[i];
+    if (k->stack) {
+      munmap(k->stack, AHC_TASK_STACK + stack_guard_pg);
+      k->stack = NULL;
+    }
+    task_reg[k->id] = NULL;
+  }
+  scope_reg[si] = NULL;
+  return r;
+}
+
+static AhcNode *p_scope(AhcNode *f) {
+  AhcNode **e = ahc_env(1);
+  e[0] = f;
+  return ahc_mk_fun(io_scope, e);
+}
+
+/* spawn: the child goes to the TAIL of the run queue and the
+   spawner keeps running - creation is not a scheduling point, so
+   spawn order alone fixes the schedule. */
+/* A green thread overflowing its reservation lands on the guard
+   page; this handler (on an alternate signal stack) names the
+   failure instead of leaving a corrupt-looking crash. */
+static void stack_overflow_handler(int sig, siginfo_t *si, void *uc) {
+  char *a = (char *)si->si_addr;
+  int i;
+  (void)uc;
+  for (i = 0; i < task_n; i++) {
+    AhcTask *t = task_reg[i];
+    if (t && t->stack && a >= t->stack
+        && a < t->stack + stack_guard_pg) {
+      static const char msg[] =
+        "ahc: green thread stack overflow\n";
+      ssize_t r = write(2, msg, sizeof msg - 1);
+      (void)r;
+      _exit(1);
+    }
+  }
+  signal(sig, SIG_DFL);        /* not ours: crash as before */
+  raise(sig);
+}
+
+static AhcNode *io_spawn(AhcNode **env, AhcNode *w) {
+  AhcScope *sc = scope_of(env[0], "spawn: scope already closed");
+  AhcTask *t = (AhcTask *)AHC_ALLOC(sizeof(AhcTask));
+  char *base;
+  int id;
+  (void)w;
+  if (!t) ahc_die("out of memory");
+  memset(t, 0, sizeof *t);
+  base = (char *)mmap(NULL, AHC_TASK_STACK + stack_guard_pg,
+                      PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (base == MAP_FAILED) ahc_die("spawn: cannot map a task stack");
+  mprotect(base, stack_guard_pg, PROT_NONE);
+  t->stack = base;
+  t->stack_top = base + stack_guard_pg + AHC_TASK_STACK;
+  t->action = env[1];
+  id = reg_add((void ***)&task_reg, &task_n, &task_cap, t);
+  t->id = id;
+  if (getcontext(&t->ctx) != 0) ahc_die("spawn: getcontext failed");
+  t->ctx.uc_stack.ss_sp = t->stack + stack_guard_pg;
+  t->ctx.uc_stack.ss_size = AHC_TASK_STACK;
+  t->ctx.uc_link = NULL;
+  makecontext(&t->ctx, (void (*)(void))task_trampoline, 1, id);
+  if (sc->n == sc->cap) {
+    int nc = sc->cap ? sc->cap * 2 : 4;
+    AhcTask **nk = (AhcTask **)AHC_ALLOC(sizeof(AhcTask *) * nc);
+    int i;
+    if (!nk) ahc_die("out of memory");
+    for (i = 0; i < sc->n; i++) nk[i] = sc->kids[i];
+    sc->kids = nk;
+    sc->cap = nc;
+  }
+  sc->kids[sc->n++] = t;
+  runq_push(t);
+  return ahc_mk_int(id);
+}
+
+static AhcNode *p_spawn(AhcNode *si, AhcNode *act) {
+  AhcNode **e = ahc_env(2);
+  e[0] = si;
+  e[1] = act;
+  return ahc_mk_fun(io_spawn, e);
+}
+
+static AhcNode *io_await(AhcNode **env, AhcNode *w) {
+  AhcTask *t = task_of(env[0], "await: task's scope already closed");
+  (void)w;
+  t->awaited = 1;
+  while (t->state < 2) {
+    waitlist_append(&t->join_waiters, cur_task);
+    park();
+  }
+  if (t->state == 3) ahc_die(t->err_msg);
+  return t->result;
+}
+
+static AhcNode *p_await(AhcNode *ti) {
+  AhcNode **e = ahc_env(1);
+  e[0] = ti;
+  return ahc_mk_fun(io_await, e);
+}
+
+/* Channels are unbounded FIFO queues (GHC's Chan semantics, which
+   keeps the shim a one-liner): send never blocks, recv parks when
+   empty. Parked receivers are served strictly in arrival order. */
+static AhcNode *io_chan_new(AhcNode **env, AhcNode *w) {
+  AhcChan *c = (AhcChan *)AHC_ALLOC(sizeof(AhcChan));
+  (void)env;
+  (void)w;
+  if (!c) ahc_die("out of memory");
+  c->head = NULL;
+  c->tail = NULL;
+  c->recv_waiters = NULL;
+  return ahc_mk_int(reg_add((void ***)&chan_reg,
+                            &chan_n, &chan_cap, c));
+}
+
+static AhcNode *io_chan_send(AhcNode **env, AhcNode *w) {
+  AhcChan *c = chan_of(env[0]);
+  AhcNode *v = env[1];         /* lazily: the thunk travels */
+  AhcTask *r;
+  (void)w;
+  while ((r = c->recv_waiters) != NULL) {
+    c->recv_waiters = r->qnext;
+    if (r->state < 2) {
+      r->xfer = v;
+      wake(r);
+      return ahc_mk_con(UNIT_TAG, 0);
+    }
+  }
+  {
+    AhcChanCell *cell = (AhcChanCell *)AHC_ALLOC(sizeof(AhcChanCell));
+    if (!cell) ahc_die("out of memory");
+    cell->v = v;
+    cell->next = NULL;
+    if (c->tail) c->tail->next = cell;
+    else c->head = cell;
+    c->tail = cell;
+  }
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+
+static AhcNode *p_chan_send(AhcNode *ci, AhcNode *x) {
+  AhcNode **e = ahc_env(2);
+  e[0] = ci;
+  e[1] = x;
+  return ahc_mk_fun(io_chan_send, e);
+}
+
+static AhcNode *io_chan_recv(AhcNode **env, AhcNode *w) {
+  AhcChan *c = chan_of(env[0]);
+  (void)w;
+  if (c->head) {
+    AhcChanCell *cell = c->head;
+    c->head = cell->next;
+    if (!c->head) c->tail = NULL;
+    return cell->v;
+  }
+  waitlist_append(&c->recv_waiters, cur_task);
+  park();
+  {
+    AhcNode *v = cur_task->xfer;
+    cur_task->xfer = NULL;
+    return v;
+  }
+}
+
+static AhcNode *p_chan_recv(AhcNode *ci) {
+  AhcNode **e = ahc_env(1);
+  e[0] = ci;
+  return ahc_mk_fun(io_chan_recv, e);
+}
+
+static AhcNode *io_task_yield(AhcNode **env, AhcNode *w) {
+  (void)env;
+  (void)w;
+  maybe_yield();
+  return ahc_mk_con(UNIT_TAG, 0);
 }
 
 /* ----- globals ---------------------------------------------------- */
@@ -2356,6 +2805,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_seq, *ahc_prim_from_rational_d,
+  *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
+  *ahc_prim_chan_new, *ahc_prim_chan_send, *ahc_prim_chan_recv,
+  *ahc_prim_task_yield,
   *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
@@ -2402,7 +2854,29 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
   GC_INIT();
+  {
+    struct GC_stack_base sb;
+    GC_get_my_stackbottom(&sb);
+    main_task.stack_top = (char *)sb.mem_base;
+  }
 #endif
+  stack_guard_pg = (size_t)sysconf(_SC_PAGESIZE);
+  {
+    /* Guard-page hits must be caught on their own stack (the
+       faulting thread's has none left). */
+    static char sigstk[SIGSTKSZ];
+    stack_t ss;
+    struct sigaction sa;
+    ss.ss_sp = sigstk;
+    ss.ss_size = sizeof sigstk;
+    ss.ss_flags = 0;
+    sigaltstack(&ss, NULL);
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = stack_overflow_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+  }
   the_world = ahc_mk_con(UNIT_TAG, 0);
   ahc_prim_add_int = mk_prim2(p_add);
   ahc_prim_sub_int = mk_prim2(p_sub);
@@ -2441,6 +2915,13 @@ void ahc_rts_init(void) {
   ahc_prim_return_io = mk_prim1(p_return_io);
   ahc_prim_error = mk_prim1(p_error);
   ahc_prim_seq = mk_prim2(p_seq);
+  ahc_prim_scope = mk_prim1(p_scope);
+  ahc_prim_spawn = mk_prim2(p_spawn);
+  ahc_prim_await = mk_prim1(p_await);
+  ahc_prim_chan_new = ahc_mk_fun(io_chan_new, NULL);
+  ahc_prim_chan_send = mk_prim2(p_chan_send);
+  ahc_prim_chan_recv = mk_prim1(p_chan_recv);
+  ahc_prim_task_yield = ahc_mk_fun(io_task_yield, NULL);
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);

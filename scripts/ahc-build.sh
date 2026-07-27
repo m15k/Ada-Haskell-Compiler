@@ -32,8 +32,13 @@ mkdir -p "$cache"
 gc_cflags=""
 gc_ldflags=""
 if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
-  gc_cflags="-I$prefix/include -DAHC_USE_BOEHM"
-  gc_ldflags="-L$prefix/lib -lgc"
+  # Green threads need the coroutine API (GC_set_stackbottom,
+  # gc >= 8.2); an older collector falls back to no-GC rather than
+  # miscompile the runtime.
+  if grep -qs GC_set_stackbottom "$prefix/include/gc/gc.h"; then
+    gc_cflags="-I$prefix/include -DAHC_USE_BOEHM"
+    gc_ldflags="-L$prefix/lib -lgc"
+  fi
 fi
 
 # FFI plumbing: AHC_CFLAGS/AHC_LDFLAGS come from the environment;
@@ -41,7 +46,9 @@ fi
 # A foreign import's Int=long prototype may redeclare a libc builtin
 # (e.g. strlen returns size_t); that mismatch is the documented v1
 # type model, so silence just that warning.
-user_cflags="${AHC_CFLAGS:-} -Wno-incompatible-library-redeclaration"
+# -Wno-deprecated-declarations: macOS marks the whole ucontext API
+# deprecated; the runtime's green threads use it deliberately.
+user_cflags="${AHC_CFLAGS:-} -Wno-incompatible-library-redeclaration -Wno-deprecated-declarations"
 user_ldflags="${AHC_LDFLAGS:-}"
 if [ -f "$builddir/link_flags" ]; then
   user_ldflags="$user_ldflags $(cat "$builddir/link_flags")"
