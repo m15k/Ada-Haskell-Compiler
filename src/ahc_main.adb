@@ -17,6 +17,7 @@ with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.Environment_Variables;
 
+with AHC.Bindgen;
 with AHC.Builtins;
 with AHC.CodeGen;
 with AHC.Contracts;
@@ -56,6 +57,8 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc emit FILE.hs OUT"
                 & " [--unchecked|--no-opt|--lib]"
                         & "   (writes OUT.c)");
+      Put_Line (Target, "       ahc bindgen cpp|rust|go|ghc"
+                & " FILE.hs OUT");
       Put_Line (Target, "       ahc repl");
    end Print_Usage;
 
@@ -124,7 +127,8 @@ procedure AHC_Main is
    procedure Run_Middle
      (Path     : String; Mode : Character; Out_Path : String := "";
       Refined  : Boolean := True; Optimize : Boolean := True;
-      Lib      : Boolean := False) is
+      Lib      : Boolean := False;
+      Bindgen_Lang : String := "") is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -973,6 +977,22 @@ procedure AHC_Main is
                              Build_Dir & "/ahc_exports.h");
                      Put (F, To_String (Exports_H));
                      Close (F);
+                     if Bindgen_Lang /= "" then
+                        Create (F, Out_File,
+                                Build_Dir & "/"
+                                & AHC.Bindgen.File_Name
+                                    (Bindgen_Lang));
+                        Put (F, To_String
+                               (AHC.Bindgen.Generate
+                                  (Bindgen_Lang,
+                                   Ada.Directories.Simple_Name
+                                     (Out_Path),
+                                   M.Foreign_Exports, Table)));
+                        Close (F);
+                        Put_Line
+                          ("wrote " & Build_Dir & "/"
+                           & AHC.Bindgen.File_Name (Bindgen_Lang));
+                     end if;
                   end;
                   Put_Line ("wrote " & Build_Dir);
                end;
@@ -1072,6 +1092,17 @@ begin
             Run_Middle (Argument (2), 't');
          else
             Usage_Error ("expected: ahc check FILE.hs");
+         end if;
+      elsif Command = "bindgen" then
+         if Argument_Count = 4
+           and then AHC.Bindgen.Supported (Argument (2))
+         then
+            Run_Middle (Argument (3), 'b', Argument (4),
+                        Lib => True,
+                        Bindgen_Lang => Argument (2));
+         else
+            Usage_Error
+              ("expected: ahc bindgen cpp|rust|go|ghc FILE.hs OUT");
          end if;
       elsif Command = "emit" then
          if Argument_Count >= 3 then

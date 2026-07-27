@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The spokes (M96-M97): `ahc bindgen cpp|rust|go|ghc Lib.hs OUT`
+generates idiomatic host-language bindings next to ahc_exports.h -
+a C++ RAII class, a Rust module of safe wrappers over a raw extern
+block, a cgo package that funnels every call onto one locked OS
+thread, and a GHC foreign-import module (two Haskell runtimes in
+one process). examples/ffi/ holds a working consumer per language
+over the shared tests/export/MathLib.hs; scripts/run_bindgen.sh
+builds and runs whichever spokes have their toolchain installed -
+all four (clang++, rustc, go, ghc) verified end to end. MANUAL
+ch. 9 closes with the hub-and-spoke story.
+
 Fixed-width C types (M95): Int8/16/32/64 and Word8/16/32/64 as
 builtin tycons, with CChar/CInt/CUInt/CLong/CULong/CSize as wired
 synonyms (LP64 widths). `int abs(int)` is now honestly

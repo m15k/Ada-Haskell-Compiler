@@ -972,6 +972,26 @@ host's stack raised. `scripts/run_export.sh` keeps the round trip
 green: it builds `tests/export/MathLib.hs`, compiles a C `main`
 against the header, and diffs the output.
 
+### The FFI: bindgen and the spokes
+
+The C ABI is the hub; `ahc bindgen` generates the spokes:
+
+    ahc bindgen cpp|rust|go|ghc Lib.hs OUT
+
+runs the normal `--lib` pipeline and writes, next to
+`ahc_exports.h`, an idiomatic binding for the chosen host language:
+a C++ RAII class (`ahc::Lib`, `std::string` by copy), a Rust module
+of safe wrappers over a raw `extern "C"` block (no `unsafe` in the
+caller), a cgo package that funnels every call onto one locked OS
+thread (so any goroutine may call it despite the single-threaded
+runtime), or a GHC module of `foreign import`s — two Haskell
+runtimes in one process, talking through C. `examples/ffi/` holds a
+working consumer per language over the shared
+`tests/export/MathLib.hs`, and `scripts/run_bindgen.sh` builds and
+runs whichever ones have their toolchain installed. Any language
+that can call C gets a spoke the same way; the generator is
+~500 lines per language of `src/ahc-bindgen.adb`.
+
 ### The layered Prelude
 
 Where do `map` and `sum` come from? Three layers, and knowing them
