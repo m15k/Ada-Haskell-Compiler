@@ -67,6 +67,11 @@ AhcNode *ahc_mk_primn(int arity, AhcPrimN f);
 char *ahc_marshal_cstring(AhcNode *s);
 void ahc_free_cstring(char *s);
 
+/* Wrapper imports: claim a slot in the site's trampoline pool for
+   the closure and return the matching C function pointer node. */
+AhcNode *ahc_wrap_fun(AhcNode *clos, AhcNode **slots, void **tramps,
+                      int pool);
+
 void ahc_run_main(AhcNode *main_io);           /* execute IO action   */
 AhcNode *ahc_run_io(AhcNode *io);              /* run IO, return node */
 void ahc_die(const char *msg) __attribute__((noreturn));
@@ -116,7 +121,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
   *ahc_prim_from_integer_d, *ahc_prim_show_d,
-  *ahc_prim_null_ptr, *ahc_prim_peek_cstring;
+  *ahc_prim_null_ptr, *ahc_prim_peek_cstring,
+  *ahc_prim_free_funptr;
 
 void ahc_rts_init(void);
 

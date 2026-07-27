@@ -3,3 +3,5 @@ tests/golden/check_foreign_errors.hs:3:1: error: foreign import 'bad2': result t
 tests/golden/check_foreign_errors.hs:4:1: error: foreign import 'bad3': a foreign declaration may not have a class context
 tests/golden/check_foreign_errors.hs:5:1: error: foreign import 'bad4': argument type is not marshallable across the FFI
 tests/golden/check_foreign_errors.hs:6:1: error: foreign import 'switch': 'switch' is not a usable C identifier (name the C symbol explicitly: foreign import ccall "c_name" ...)
+tests/golden/check_foreign_errors.hs:7:1: error: foreign import 'badWrap': a wrapper import must have type ft -> IO (FunPtr ft)
+tests/golden/check_foreign_errors.hs:9:1: error: foreign import 'badDyn': dynamic imports are not supported

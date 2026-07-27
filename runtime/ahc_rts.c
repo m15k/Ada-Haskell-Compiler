@@ -1299,6 +1299,55 @@ void ahc_free_cstring(char *s) {
   free(s);
 }
 
+/* ----- wrapper imports: Haskell closures as C function pointers.
+   Each wrapper-import site owns a static pool of trampolines and a
+   parallel closure-slot array (static data, so the Boehm collector
+   sees the closures). The registry maps a trampoline address back
+   to its slot so freeHaskellFunPtr can clear it. ---------------- */
+
+#define AHC_MAX_FUNPTRS 1024
+
+static struct { void *tramp; AhcNode **slot; } funptr_reg[AHC_MAX_FUNPTRS];
+static int funptr_reg_n = 0;
+
+AhcNode *ahc_wrap_fun(AhcNode *clos, AhcNode **slots, void **tramps,
+                      int pool) {
+  int i, j, found = 0;
+  for (i = 0; i < pool; i++)
+    if (!slots[i]) break;
+  if (i == pool)
+    ahc_die("FFI: wrapper pool exhausted (32 per import site)");
+  slots[i] = clos;
+  for (j = 0; j < funptr_reg_n; j++)
+    if (funptr_reg[j].tramp == tramps[i]) { found = 1; break; }
+  if (!found) {
+    if (funptr_reg_n == AHC_MAX_FUNPTRS)
+      ahc_die("FFI: too many live function pointers");
+    funptr_reg[funptr_reg_n].tramp = tramps[i];
+    funptr_reg[funptr_reg_n].slot = &slots[i];
+    funptr_reg_n++;
+  }
+  return ahc_mk_ptr(tramps[i]);
+}
+
+static AhcNode *io_free_funptr(AhcNode **env, AhcNode *w) {
+  AhcNode *p = ahc_eval(env[0]);
+  int j;
+  (void)w;
+  for (j = 0; j < funptr_reg_n; j++)
+    if (funptr_reg[j].tramp == p->u.p) {
+      *funptr_reg[j].slot = NULL;
+      return ahc_mk_con(UNIT_TAG, 0);
+    }
+  ahc_die("freeHaskellFunPtr: not a wrapper-created FunPtr");
+}
+
+static AhcNode *p_free_funptr(AhcNode *p) {
+  AhcNode **e = ahc_env(1);
+  e[0] = p;
+  return ahc_mk_fun(io_free_funptr, e);
+}
+
 
 static int ahc_argc = 0;
 static char **ahc_argv = NULL;
@@ -2080,7 +2129,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_add_d, *ahc_prim_sub_d, *ahc_prim_mul_d, *ahc_prim_div_d,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
   *ahc_prim_from_integer_d, *ahc_prim_show_d,
-  *ahc_prim_null_ptr, *ahc_prim_peek_cstring;
+  *ahc_prim_null_ptr, *ahc_prim_peek_cstring,
+  *ahc_prim_free_funptr;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -2195,4 +2245,5 @@ void ahc_rts_init(void) {
   ahc_prim_show_d = mk_prim1(p_show_d);
   ahc_prim_null_ptr = ahc_mk_ptr(NULL);
   ahc_prim_peek_cstring = mk_prim1(p_peek_cstring);
+  ahc_prim_free_funptr = mk_prim1(p_free_funptr);
 }

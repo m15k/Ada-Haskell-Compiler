@@ -1486,6 +1486,48 @@ package body AHC.Desugar is
          --  keyword, or the generated prototype/entry function would
          --  not compile (exporting Haskell's `double` is the classic
          --  trip-wire).
+         --  Structural equality of Core types, for the wrapper-shape
+         --  check ft -> IO (FunPtr ft).
+         function Type_Eq (A, B : Core.Type_Id) return Boolean is
+            use type Core.Type_Id;
+            use type Core.Type_Kind;
+         begin
+            if A = B then
+               return True;
+            end if;
+            if A = Core.No_Type or else B = Core.No_Type then
+               return False;
+            end if;
+            declare
+               NA : constant Core.Type_Node :=
+                 M.Node (Core.Real_Type_Id (A));
+               NB : constant Core.Type_Node :=
+                 M.Node (Core.Real_Type_Id (B));
+            begin
+               if NA.Kind /= NB.Kind then
+                  return False;
+               end if;
+               case NA.Kind is
+                  when Core.TVar_T =>
+                     return Core."=" (NA.Tv, NB.Tv);
+                  when Core.TCon_T =>
+                     return Core."=" (NA.Con, NB.Con);
+                  when Core.TApp_T =>
+                     return Type_Eq (Core.Type_Id (NA.T_Fun),
+                                     Core.Type_Id (NB.T_Fun))
+                       and then Type_Eq (Core.Type_Id (NA.T_Arg),
+                                         Core.Type_Id (NB.T_Arg));
+                  when Core.TFun_T =>
+                     return Type_Eq (Core.Type_Id (NA.From),
+                                     Core.Type_Id (NB.From))
+                       and then Type_Eq (Core.Type_Id (NA.To),
+                                         Core.Type_Id (NB.To));
+                  when Core.TMeta_T =>
+                     return False;
+               end case;
+            end;
+         end Type_Eq;
+
          function Valid_C_Name (S : String) return Boolean is
          begin
             if S'Length = 0
@@ -1563,7 +1605,10 @@ package body AHC.Desugar is
                         if FN.Kind /= Core.TCon_T then
                            return False;
                         end if;
-                        if Core.TyCon_Id (FN.Con) = Env.Ptr_TC then
+                        if Core.TyCon_Id (FN.Con) = Env.Ptr_TC
+                          or else Core.TyCon_Id (FN.Con)
+                                    = Env.FunPtr_TC
+                        then
                            K := Core.M_Ptr;
                            return True;
                         end if;
@@ -1608,6 +1653,136 @@ package body AHC.Desugar is
                F : Core.Foreign_Import;
                T : Core.Type_Id := Sch.S_Body;
             begin
+               --  "wrapper" imports: Haskell closure -> C function
+               --  pointer, shape ft -> IO (FunPtr ft).
+               if not N.F_Export
+                 and then Table.Text (Names.Real_Name_Id (N.F_CName))
+                            = "dynamic"
+               then
+                  Err ("dynamic imports are not supported");
+                  return;
+               end if;
+               if not N.F_Export
+                 and then Table.Text (Names.Real_Name_Id (N.F_CName))
+                            = "wrapper"
+               then
+                  if not Sch.Context.Is_Empty then
+                     Err ("a foreign declaration may not have a "
+                          & "class context");
+                     return;
+                  end if;
+                  declare
+                     use type Core.Type_Kind;
+                     Bad_Shape : constant String :=
+                       "a wrapper import must have type "
+                       & "ft -> IO (FunPtr ft)";
+                     TN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (T));
+                  begin
+                     if TN.Kind /= Core.TFun_T then
+                        Err (Bad_Shape);
+                        return;
+                     end if;
+                     declare
+                        FT : constant Core.Type_Id :=
+                          Core.Type_Id (TN.From);
+                        RN : constant Core.Type_Node :=
+                          M.Node (TN.To);
+                     begin
+                        --  Result: IO (FunPtr ft).
+                        if RN.Kind /= Core.TApp_T
+                          or else M.Node (RN.T_Fun).Kind
+                                    /= Core.TCon_T
+                          or else Core."/="
+                            (Core.TyCon_Id
+                               (M.Node (RN.T_Fun).Con), Env.IO_TC)
+                          or else M.Node (RN.T_Arg).Kind
+                                    /= Core.TApp_T
+                          or else M.Node
+                                    (M.Node (RN.T_Arg).T_Fun).Kind
+                                    /= Core.TCon_T
+                          or else Core."/="
+                            (Core.TyCon_Id
+                               (M.Node
+                                  (M.Node (RN.T_Arg).T_Fun).Con),
+                             Env.FunPtr_TC)
+                          or else not Type_Eq
+                            (FT,
+                             Core.Type_Id
+                               (M.Node (RN.T_Arg).T_Arg))
+                        then
+                           Err (Bad_Shape);
+                           return;
+                        end if;
+                        --  Derive the callback's own C signature
+                        --  from ft.
+                        F.Binder := Core.Real_Var_Id (V);
+                        F.C_Name := N.F_CName;
+                        F.Span := N.Span;
+                        F.Is_Wrapper := True;
+                        F.Res := Core.M_Ptr;
+                        F.Res_IO := True;
+                        declare
+                           CT : Core.Type_Id := FT;
+                        begin
+                           loop
+                              declare
+                                 CN : constant Core.Type_Node :=
+                                   M.Node (Core.Real_Type_Id (CT));
+                              begin
+                                 exit when CN.Kind /= Core.TFun_T;
+                                 declare
+                                    K : Core.Marshal_Kind;
+                                 begin
+                                    if not Classify
+                                        (Core.Type_Id (CN.From), K)
+                                      or else Core."="
+                                        (K, Core.M_Unit)
+                                    then
+                                       Err ("callback argument type "
+                                            & "is not marshallable "
+                                            & "across the FFI");
+                                       return;
+                                    end if;
+                                    F.CB_Args.Append (K);
+                                 end;
+                                 CT := Core.Type_Id (CN.To);
+                              end;
+                           end loop;
+                           declare
+                              CN : constant Core.Type_Node :=
+                                M.Node (Core.Real_Type_Id (CT));
+                           begin
+                              if CN.Kind = Core.TApp_T
+                                and then M.Node (CN.T_Fun).Kind
+                                           = Core.TCon_T
+                                and then Core."="
+                                  (Core.TyCon_Id
+                                     (M.Node (CN.T_Fun).Con),
+                                   Env.IO_TC)
+                              then
+                                 F.CB_Res_IO := True;
+                                 CT := Core.Type_Id (CN.T_Arg);
+                              end if;
+                           end;
+                           declare
+                              K : Core.Marshal_Kind;
+                           begin
+                              if not Classify (CT, K) then
+                                 Err ("callback result type is not "
+                                      & "marshallable across the "
+                                      & "FFI");
+                                 return;
+                              end if;
+                              F.CB_Res := K;
+                           end;
+                        end;
+                        M.Foreigns.Append (F);
+                        return;
+                     end;
+                  end;
+               end if;
+
                if not Valid_C_Name
                         (Table.Text (Names.Real_Name_Id (N.F_CName)))
                then

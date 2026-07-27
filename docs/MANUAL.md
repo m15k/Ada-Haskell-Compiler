@@ -923,6 +923,26 @@ like an argument would. The exported C name must be a plain C
 identifier that isn't a C keyword; exporting Haskell's `double`
 without a `"c_name"` is caught in the frontend, not by clang.
 
+Callbacks go the same direction without a library build.
+`FunPtr a` is a phantom-typed C *function* pointer (with `Eq`/`Ord`
+and `nullFunPtr`), and a **wrapper import** turns a Haskell closure
+into one:
+
+    foreign import ccall "wrapper" mkSigH
+      :: (Int -> IO ()) -> IO (FunPtr (Int -> IO ()))
+
+The type must be `ft -> IO (FunPtr ft)` for a marshallable `ft`
+(checked structurally). Each wrapper-import site gets a static pool
+of 32 typed C trampolines plus a closure-slot array — static data,
+so the collector sees the closures; no libffi. Claiming a slot is
+the IO action; `freeHaskellFunPtr` releases it, and a C call
+through a freed pointer dies cleanly
+(`FFI: callback used after freeHaskellFunPtr`) rather than touching
+a dead closure. Callbacks re-enter graph reduction on the calling
+thread, which in this runtime is the only thread — that is exactly
+why they are safe. `"dynamic"` imports (the inverse direction) are
+not supported.
+
 `--lib` turns the whole program into an embeddable library:
 
     scripts/ahc-build.sh --lib MathLib.hs mathlib.a

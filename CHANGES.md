@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Callbacks (M94): `FunPtr a` (phantom C function pointer with
+Eq/Ord, `nullFunPtr`) and `foreign import ccall "wrapper"` - a
+Haskell closure becomes a real C function pointer. The type must be
+`ft -> IO (FunPtr ft)`, checked structurally. Each wrapper-import
+site gets a static pool of 32 statically-typed C trampolines plus a
+closure-slot array (static data, so the Boehm collector sees the
+closures; no libffi dependency); a runtime registry maps trampoline
+addresses back to slots so `freeHaskellFunPtr` can clear them, and
+a C call through a freed pointer dies cleanly. `"dynamic"` imports
+are rejected with a clear message. Exec tests drive callbacks
+through libc itself: a signal handler invoked by raise(SIGINT) and
+an atexit hook that fires after main returns; a second test goldens
+the use-after-free death. FunPtr marshals as a pointer in ordinary
+imports/exports (e.g. signal's second argument).
+
 The FFI goes bidirectional (M93): `foreign export ccall` and
 library mode. An export names one of the module's own bindings; its
 type rides the same signature channel (installed when the binding

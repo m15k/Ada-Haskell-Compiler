@@ -242,9 +242,11 @@ package body AHC.Builtins is
       Env.Ordering_TC := TyCon_Id (Def_TyCon ("Ordering", 0, Star_K));
       Env.Maybe_TC    := TyCon_Id (Def_TyCon ("Maybe", 1, Star1));
       Env.Arrow_TC    := TyCon_Id (Def_TyCon ("(->)", 2, Star2));
-      --  Ptr is phantom in its argument: the runtime value is a raw
-      --  C pointer (AHC_PTR); the parameter only types the pointee.
+      --  Ptr/FunPtr are phantom in their argument: the runtime value
+      --  is a raw C pointer (AHC_PTR); the parameter only types the
+      --  pointee (or the pointed-to function's Haskell type).
       Env.Ptr_TC      := TyCon_Id (Def_TyCon ("Ptr", 1, Star1));
+      Env.FunPtr_TC   := TyCon_Id (Def_TyCon ("FunPtr", 1, Star1));
 
       Env.False_DC := DataCon_Id
         (Def_DataCon ("False", Real_TyCon_Id (Env.Bool_TC), 1, 0));
@@ -822,19 +824,24 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Ordering_TC));
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ordering_TC));
 
-         --  Eq/Ord (Ptr a): address comparison, so no context on a.
-         declare
-            A1 : constant Real_TyVar_Id := New_Tv ("a");
-            A2 : constant Real_TyVar_Id := New_Tv ("a");
-            V1, V2 : TyVar_Id_Vectors.Vector;
-         begin
-            V1.Append (A1);
-            V2.Append (A2);
-            Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ptr_TC),
-                          Head_Vars => V1);
-            Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Ptr_TC),
-                          Head_Vars => V2);
-         end;
+         --  Eq/Ord (Ptr a) / (FunPtr a): address comparison, so no
+         --  context on a.
+         for TC_I in 1 .. 2 loop
+            declare
+               T : constant Core.TyCon_Id :=
+                 (if TC_I = 1 then Env.Ptr_TC else Env.FunPtr_TC);
+               A1 : constant Real_TyVar_Id := New_Tv ("a");
+               A2 : constant Real_TyVar_Id := New_Tv ("a");
+               V1, V2 : TyVar_Id_Vectors.Vector;
+            begin
+               V1.Append (A1);
+               V2.Append (A2);
+               Def_Instance (Cl (Env.Eq_Cl), TCn (T),
+                             Head_Vars => V1);
+               Def_Instance (Cl (Env.Ord_Cl), TCn (T),
+                             Head_Vars => V2);
+            end;
+         end loop;
 
          for T of Numeric loop
             Def_Instance (Cl (Env.Num_Cl), TCn (T));
@@ -1088,9 +1095,18 @@ package body AHC.Builtins is
             end;
             declare
                A3 : constant Real_TyVar_Id := New_Tv ("a");
+               A4 : constant Real_TyVar_Id := New_Tv ("a");
+               A5 : constant Real_TyVar_Id := New_Tv ("a");
             begin
                Ignore := Def_Global
                  ("nullPtr", Poly1 (A3, AP (TC (Env.Ptr_TC), TV (A3))));
+               Ignore := Def_Global
+                 ("nullFunPtr",
+                  Poly1 (A4, AP (TC (Env.FunPtr_TC), TV (A4))));
+               Ignore := Def_Global
+                 ("freeHaskellFunPtr",
+                  Poly1 (A5, FN (AP (TC (Env.FunPtr_TC), TV (A5)),
+                                 IO_T (TC (Env.Unit_TC)))));
             end;
             Ignore := Def_Global
               ("peekCString",

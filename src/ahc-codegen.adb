@@ -907,7 +907,134 @@ package body AHC.CodeGen is
             return To_String (R);
          end Call_Text;
 
+         --  "wrapper" import: a 32-slot pool of statically typed
+         --  trampolines; each forwards to cbrun, which applies the
+         --  slot's closure to the marshalled C arguments.
+         procedure Emit_Wrapper is
+            Pool : constant := 32;
+            NCB : constant Natural := Natural (F.CB_Args.Length);
+            RT : constant String :=
+              (if F.CB_Res = M_String then "char *"
+               else C_Type (F.CB_Res));
+
+            function Args_Decl return String is
+               R : Unbounded_String;
+            begin
+               for I in 1 .. NCB loop
+                  Append (R, ", " & C_Type (F.CB_Args (I))
+                          & " a" & Img (I - 1));
+               end loop;
+               return To_String (R);
+            end Args_Decl;
+
+            function Args_Pass return String is
+               R : Unbounded_String;
+            begin
+               for I in 1 .. NCB loop
+                  Append (R, ", a" & Img (I - 1));
+               end loop;
+               return To_String (R);
+            end Args_Pass;
+         begin
+            Append (Decl, "AhcNode *ffi_" & Base & ";" & LF);
+            Append (Fns, "static AhcNode *cbclos_" & Base & "["
+                    & Img (Pool) & "];" & LF);
+            Append (Fns, "static " & RT & " cbrun_" & Base
+                    & "(int i" & Args_Decl & ") {" & LF
+                    & "  AhcNode *r = cbclos_" & Base & "[i];" & LF
+                    & "  if (!r) ahc_die(""FFI: callback used after "
+                    & "freeHaskellFunPtr"");" & LF);
+            for I in 1 .. NCB loop
+               declare
+                  A : constant String := "a" & Img (I - 1);
+               begin
+                  Append (Fns, "  r = ahc_apply(r, "
+                          & (case F.CB_Args (I) is
+                               when M_Int    =>
+                                 "ahc_mk_int(" & A & ")",
+                               when M_Double =>
+                                 "ahc_mk_double(" & A & ")",
+                               when M_Char   =>
+                                 "ahc_mk_char(" & A & ")",
+                               when M_Bool   =>
+                                 "ahc_mk_con(" & A & " ? 2 : 1, 0)",
+                               when M_String =>
+                                 "ahc_mk_string(" & A & ")",
+                               when M_Ptr    =>
+                                 "ahc_mk_ptr(" & A & ")",
+                               when M_Unit   => "ahc_mk_con(1, 0)")
+                          & ");" & LF);
+               end;
+            end loop;
+            if F.CB_Res_IO then
+               Append (Fns, "  r = ahc_run_io(r);" & LF);
+            else
+               Append (Fns, "  r = ahc_eval(r);" & LF);
+            end if;
+            case F.CB_Res is
+               when M_Unit =>
+                  Append (Fns, "  (void)r;" & LF);
+               when M_Int =>
+                  Append (Fns, "  if (r->tag != AHC_INT) ahc_die("
+                          & """FFI: Int result out of range"");" & LF
+                          & "  return r->u.i;" & LF);
+               when M_Double =>
+                  Append (Fns, "  return r->u.d;" & LF);
+               when M_Char =>
+                  Append (Fns, "  return r->u.c;" & LF);
+               when M_Bool =>
+                  Append (Fns, "  return r->u.con.contag == 2;"
+                          & LF);
+               when M_String =>
+                  Append (Fns, "  return ahc_marshal_cstring(r);"
+                          & LF);
+               when M_Ptr =>
+                  Append (Fns, "  return r->u.p;" & LF);
+            end case;
+            Append (Fns, "}" & LF);
+            declare
+               AD : constant String := Args_Decl;
+               Plain : constant String :=
+                 (if NCB = 0 then "void"
+                  else AD (AD'First + 2 .. AD'Last));
+            begin
+               for I in 0 .. Pool - 1 loop
+                  Append (Fns, "static " & RT & " tramp_" & Base
+                          & "_" & Img (I) & "(" & Plain & ") { "
+                          & (if F.CB_Res = M_Unit then ""
+                             else "return ")
+                          & "cbrun_" & Base & "(" & Img (I)
+                          & Args_Pass & "); }" & LF);
+               end loop;
+            end;
+            Append (Fns, "static void *tramps_" & Base & "["
+                    & Img (Pool) & "] = {" & LF);
+            for I in 0 .. Pool - 1 loop
+               Append (Fns, "  (void *)tramp_" & Base & "_"
+                       & Img (I) & "," & LF);
+            end loop;
+            Append (Fns, "};" & LF);
+            Append (Fns, "static AhcNode *ffiio_" & Base
+                    & "(AhcNode **env, AhcNode *w) {" & LF
+                    & "  (void)w;" & LF
+                    & "  return ahc_wrap_fun(env[0], cbclos_" & Base
+                    & ", tramps_" & Base & ", " & Img (Pool) & ");"
+                    & LF & "}" & LF);
+            Append (Fns, "static AhcNode *ffiw_" & Base
+                    & "(AhcNode **a) {" & LF
+                    & "  AhcNode **e = ahc_env(1);" & LF
+                    & "  e[0] = a[0];" & LF
+                    & "  return ahc_mk_fun(ffiio_" & Base & ", e);"
+                    & LF & "}" & LF & LF);
+            Append (Init, "  ffi_" & Base & " = ahc_mk_primn(1, ffiw_"
+                    & Base & ");" & LF);
+         end Emit_Wrapper;
+
       begin
+         if F.Is_Wrapper then
+            Emit_Wrapper;
+            return;
+         end if;
          Append (Decl, Proto & LF);
          Append (Decl, "AhcNode *ffi_" & Base & ";" & LF);
          if F.Res_IO then

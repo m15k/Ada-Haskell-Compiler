@@ -400,6 +400,13 @@ package AHC.Core is
       Res    : Marshal_Kind := M_Unit;
       Res_IO : Boolean := False;
       Span   : Diagnostics.Source_Span;
+      --  "wrapper" imports (Haskell closure -> C function pointer):
+      --  CB_* describe the callback's own C signature; Args is then
+      --  empty and Res/Res_IO describe the import (FunPtr under IO).
+      Is_Wrapper : Boolean := False;
+      CB_Args    : Marshal_Vectors.Vector;
+      CB_Res     : Marshal_Kind := M_Unit;
+      CB_Res_IO  : Boolean := False;
    end record;
 
    package Foreign_Vectors is new Ada.Containers.Vectors

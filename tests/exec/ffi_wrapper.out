@@ -1,0 +1,4 @@
+signal handler got 2
+False
+main done
+atexit: goodbye from a Haskell callback
