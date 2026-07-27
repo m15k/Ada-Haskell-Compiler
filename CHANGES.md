@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Protected values (M103): Control.Concurrent.Protected - Ada's
+protected object with the no-blocking rule made a type. Shared
+state accessed only through pure transitions: reading (atomic
+snapshot), updating (s -> (s, r)), and entry behind a pure
+barrier (s -> Bool) with callers parked FIFO and the queue
+rescanned from the head after every commit (Ada's eggshell
+epilogue, order pinned - wake order is a testable golden).
+Commits force the new state to WHNF inside the protected action,
+so a named transition's {-# PRE/POST #-} contracts fire before
+any other task can see the state, with zero new contract
+machinery; refined state fields keep their demand rule and die at
+first observation. GHC shim: a TVar with the barrier spelled
+retry. Four prims, five prot_* exec goldens, design note
+section 6.
+
 Deterministic structured concurrency, Phase A (M102):
 Control.Concurrent.Scoped - scope/spawn/await, unbounded FIFO
 channels (newChan/send/recv), and yield, over green threads on one

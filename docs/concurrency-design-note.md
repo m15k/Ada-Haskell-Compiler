@@ -9,8 +9,9 @@ stack) - the GC_MALLOC'd-stack idea scanned too much and guarded
 nothing; and Darwin's ucontext_t compiles as a 56-byte stub unless
 _XOPEN_SOURCE precedes every include (MANUAL chapter 16, both).
 Channels landed as unbounded FIFO (GHC's Chan semantics), which
-keeps the GHC shim (tests/shim) a direct wrapper. Contracts on
-shared state (section 2.3) and Phase B remain future milestones.
+keeps the GHC shim (tests/shim) a direct wrapper. Protected
+values are designed and implemented in section 6 (M103); Phase B
+remains a future campaign.
 
 AHC has zero concurrency at every layer, and until now deliberately:
 Haskell 2010 has none (Control.Concurrent is GHC library territory,
@@ -216,8 +217,8 @@ Pre/Post were: a protected value whose operations carry
 `{-# PRE/POST #-}` and whose entries carry barriers. `MVar` gives
 you a cell; a protected value gives you a cell with OBLIGATIONS,
 checked (or discharged at compile time) like every other contract
-in this project. This lands after Phase A stabilizes, as its own
-milestone with its own note section.
+in this project. Designed in section 6 (M103); lands now that
+Phase A has stabilized.
 
 ## 3. Phase A implementation plan (single OS thread)
 
@@ -270,3 +271,162 @@ Phase B is a large, separate campaign.
 No STM (GHC's crown; out of scope until a design note argues
 otherwise). No async exceptions. No preemption of pure loops in
 Phase A. Each absence is an EXCLUSIONS row, not a silence.
+
+## 6. Protected values: contracts reach shared state (M103)
+
+**Status: IMPLEMENTED** (runtime + lib + shim + five prot_* exec
+goldens; see 6.3 for the one claim the implementation corrected).
+Section 2.3's promise, designed. This is
+the milestone where the two halves of the project's identity -
+the contract machinery (refinements M60s, Pre/Post M73, discharge
+M80s) and the deterministic scheduler (M102) - meet in one
+feature, and the design's job is mostly to arrange that they
+compose with ZERO new contract machinery.
+
+### 6.1 The Ada original, and the one improvement available
+
+An Ada protected object is state + three operation kinds:
+protected functions (read-only), protected procedures (exclusive
+read-write), and entries (exclusive read-write behind a BARRIER, a
+boolean guard over the state; callers queue until it holds).
+Bodies must not block - but Ada enforces that with a RUNTIME check
+(Program_Error on a blocking call inside a protected action).
+
+The transplant gets to do better, and this is the design's center:
+**operations are pure state transitions, so the no-blocking rule
+is a TYPE, not a check.**
+
+    read    :: s -> a           -- protected function
+    update  :: s -> (s, a)      -- protected procedure
+    barrier :: s -> Bool        -- entry guard
+
+A pure function cannot send, recv, await, or open a file. What Ada
+polices at runtime, the type system rules unrepresentable - Rust's
+row of the synthesis table (safety checkable before running),
+delivered with machinery AHC already owns. And on Phase A's single
+OS thread, pure evaluation contains no scheduling points, so
+mutual exclusion costs NOTHING: a protected action is atomic by
+construction. Phase B adds one mutex per protected value and the
+semantics carry over unchanged.
+
+### 6.2 Surface
+
+    data Protected s                      -- abstract (registry index)
+
+    newProtected :: s -> IO (Protected s)
+    reading  :: Protected s -> (s -> a) -> IO a
+    updating :: Protected s -> (s -> (s, a)) -> IO a
+    entry    :: Protected s -> (s -> Bool) -> (s -> (s, a)) -> IO a
+
+`Control.Concurrent.Protected`, a plain lib/ module over four
+prims, Handle discipline as always. `entry` parks the caller until
+the barrier holds, then runs the body atomically.
+
+The operations passed in are ORDINARY NAMED TOP-LEVEL FUNCTIONS at
+the call sites that matter - and that single sentence is the whole
+contract story. A named `s -> (s, a)` function takes `{-# PRE #-}`
+and `{-# POST #-}` pragmas TODAY, with M73's demand-time wrapper,
+M73's typing rules, and the discharge pass, none of them modified:
+
+    data Buf = MkBuf { items :: [Int]
+                     , cap :: Int satisfying (\n -> n > 0) }
+
+    {-# PRE  push \x s -> length (items s) < cap s          #-}
+    {-# POST push \x s (s', _) -> length (items s') <= cap s' #-}
+    push :: Int -> Buf -> (Buf, ())
+    push x s = (s { items = items s ++ [x] }, ())
+
+    notFull :: Buf -> Bool
+    notFull s = length (items s) < cap s
+
+    ... entry buf notFull (push x) ...
+
+`MVar` gives you a cell; `Protected Buf` gives you a cell whose
+every update carries obligations. A refined STATE TYPE (satisfying
+fields, ranges) composes too, under the extension's own rule: a
+field's check fires at first OBSERVATION, so no task can ever see
+an out-of-range field - while a boundary-checked whole-state
+invariant, Ada Type_Invariant style, is spelled POST (on every
+transition, checked at commit).
+
+### 6.3 Semantics: where the checks fire (the load-bearing part)
+
+Contracts fire at demand time (M73's rule), so the design must say
+WHEN a protected action demands. Decision: **`updating` and
+`entry` force the returned pair and the new state to WHNF inside
+the protected action.** Consequences, all deliberate:
+
+- The transition's own PRE/POST wrappers fire INSIDE the mutual
+  exclusion, before any other task can see the state - Ada's
+  boundary, transplanted. A violation names its operation and dies
+  (or unwinds to the task's frame, failing the Task, per M102's
+  error story). State-wide invariants therefore belong in POST -
+  that is the boundary-checked instrument.
+- State thunk chains cannot form across updates: each action pays
+  for its own transition. This is the hGetContents precedent - a
+  documented strictness point where laziness would otherwise let
+  one task's debt land in another task's schedule. WHNF only: the
+  state's FIELDS stay as lazy as their types allow, and a REFINED
+  field keeps the extension's demand rule - its check is part of
+  the field, so it fires at first observation, in whichever task
+  looks first. No task can observe a violating value; the check
+  point is the observation, not the commit. (Tried the stronger
+  claim first; the lazily-fired check thunks make it false, and
+  demand-time is this project's stated rule anyway.)
+- `reading` forces nothing beyond what the projection demands -
+  protected functions stay observation-only, Ada's read side.
+
+Barriers are pure `s -> Bool`, evaluated by the runtime during
+epilogues (below). A barrier must therefore tolerate being run at
+any protected-action boundary - which purity guarantees.
+
+### 6.4 Determinism: the epilogue, made reproducible
+
+Ada's "eggshell" model re-evaluates barriers at the end of every
+protected action. The transplant keeps the shape and pins the
+order: after each `updating`/`entry` body commits, the runtime
+walks that value's entry queue IN ARRIVAL ORDER; each parked entry
+whose barrier now holds runs its body immediately (state advances,
+its caller is woken with the result) and the walk CONTINUES with
+the updated state, since one enabling can disable or enable
+others. First-arrived, first-served, every run the same - the
+FIFO discipline channels already follow, so an entry queue is a
+testable golden like an interleaving. A parked entry whose barrier
+never holds again is a deadlock, reported by M102's detector when
+no task remains runnable.
+
+### 6.5 Runtime plan (small, by construction)
+
+Registry of `AhcProt { state : AhcNode*, waiters }` where each
+waiter carries (barrier closure, body closure, task) - the same
+node shapes channels use. Four prims: `primProtNew`,
+`primProtRead` (apply, return), `primProtUpdate` (apply, force
+pair + state to WHNF, store, epilogue scan), `primProtEntry`
+(barrier now, else park; on wake the epilogue has already run the
+body - the Ada pattern where the completer executes on behalf of
+the queuer, which is also what makes the order deterministic).
+Wired per the M78 template; builtins/prelude-core entries mirror
+M102's seven.
+
+### 6.6 Testing
+
+The GHC shim is the elegant one: `Protected s` = `TVar s`, and
+`entry`'s barrier-wait is LITERALLY `retry` - GHC's STM expresses
+in one primitive what the shim exists to emulate, a nice inversion
+of section 1.2. Schedule-independent programs (a bounded buffer's
+final contents, sums over producers/consumers) stay differential
+against the oracle; barrier WAKE ORDER and violation deaths are
+AHC-only exec goldens. One conformance-style program with
+contracts that hold proves protected source remains
+oracle-portable (GHC sees only ignorable pragma warnings). The
+discharge harness gets a case where a provably-true barrier
+precondition vanishes under the existing prover.
+
+### 6.7 v1 scope, stated up front
+
+No requeue (Ada's own hairiest corner), no timed or conditional
+entry calls, no priority queuing (FIFO is the profile - the
+Ravenscar simplification again), no `Protected` sharing across
+foreign exports. MVar-as-sugar (`Protected (Maybe a)`) is a
+worked example in the module documentation, not a shipped compat
+layer, until something dogfooded wants it.

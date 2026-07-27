@@ -1143,6 +1143,28 @@ the scheduler is deterministic. What Phase A is *not*: no SMP (a
 measurement-gated Phase B campaign), no STM, no async exceptions —
 each a deliberate absence, argued in the design note.
 
+**Protected values** (M103) are where the contract machinery and
+the scheduler meet: Ada's protected object with the no-blocking
+rule made a *type*. `Control.Concurrent.Protected` wraps shared
+state whose operations are pure transitions — `reading p f`
+observes atomically, `updating p (f :: s -> (s, r))` transitions,
+and `entry p barrier f` parks until a pure `s -> Bool` guard
+holds. Because a transition is an ordinary named top-level
+function, `{-# PRE/POST #-}` applies to it with zero new
+machinery, and the commit forces the new state to WHNF *inside*
+the protected action — so a transition's contracts are checked
+before any other task can see the state (state-wide invariants
+belong in POST, the boundary-checked instrument; refined fields
+keep their demand rule and die at first observation). Waiting
+entries are served first-arrived, first-served, the queue
+rescanned from the head after every commit — Ada's eggshell
+epilogue with the order pinned, so wake order is a golden like
+any interleaving. The GHC shim is the pleasing inversion: a
+`TVar` with the barrier-wait spelled `retry` — STM expressing in
+one primitive what the deterministic epilogue builds by hand.
+Five `prot_*` exec goldens; no requeue, no timed entries, FIFO
+only (the Ravenscar simplification again).
+
 ---
 
 ## 10. Numbers

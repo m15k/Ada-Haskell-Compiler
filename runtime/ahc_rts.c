@@ -1674,6 +1674,162 @@ static AhcNode *io_task_yield(AhcNode **env, AhcNode *w) {
   return ahc_mk_con(UNIT_TAG, 0);
 }
 
+/* ----- protected values (M103) -----------------------------------
+   Ada's protected object, pure-transition edition (design note
+   section 6): state + read (s -> a) + update (s -> (s, r)) +
+   entry (barrier s -> Bool, then update). Operations are pure, so
+   on one OS thread a protected action is atomic by construction.
+   Updates commit the new state to WHNF INSIDE the action - that is
+   where contract wrappers and refined-field checks fire, before
+   any other task can observe the state. After every commit the
+   epilogue rescans the entry queue FROM THE HEAD in arrival
+   order (each enabled body is a fresh protected action, Ada's
+   eggshell rule) - first-arrived, first-served, deterministic. */
+
+typedef struct AhcProtWaiter {
+  AhcNode *barrier, *body;
+  AhcTask *task;
+  struct AhcProtWaiter *next;
+} AhcProtWaiter;
+
+typedef struct AhcProt {
+  AhcNode *state;
+  AhcProtWaiter *waiters;      /* entry queue, FIFO */
+} AhcProt;
+
+static AhcProt **prot_reg;  static int prot_n, prot_cap;
+
+static AhcProt *prot_of(AhcNode *n) {
+  long i = ahc_eval(n)->u.i;
+  if (i < 0 || i >= prot_n || !prot_reg[i])
+    ahc_die("protected value does not exist");
+  return prot_reg[i];
+}
+
+/* Run one update body against the current state and commit.
+   Both evals happen BEFORE either store, so a death (contract
+   violation, refined-field check) leaves the old state intact. */
+static AhcNode *prot_commit(AhcProt *p, AhcNode *body) {
+  AhcNode *pair = ahc_eval(ahc_apply(body, p->state));
+  AhcNode *ns;
+  if (pair->tag != AHC_CON || pair->u.con.arity != 2)
+    ahc_die("protected update returned a non-pair");
+  ns = ahc_eval(pair->u.con.fields[0]);
+  p->state = ns;
+  return pair->u.con.fields[1];
+}
+
+static int prot_barrier_holds(AhcProt *p, AhcNode *barrier) {
+  return ahc_eval(ahc_apply(barrier, p->state))->u.con.contag == 2;
+}
+
+static void prot_epilogue(AhcProt *p) {
+  int progressed = 1;
+  while (progressed) {
+    AhcProtWaiter **link = &p->waiters;
+    progressed = 0;
+    while (*link) {
+      AhcProtWaiter *w = *link;
+      if (w->task->state >= 2) {     /* died while parked */
+        *link = w->next;
+        continue;
+      }
+      if (prot_barrier_holds(p, w->barrier)) {
+        *link = w->next;
+        w->task->xfer = prot_commit(p, w->body);
+        wake(w->task);
+        progressed = 1;              /* state changed: rescan */
+        break;
+      }
+      link = &w->next;
+    }
+  }
+}
+
+static AhcNode *io_prot_new(AhcNode **env, AhcNode *w) {
+  AhcProt *p = (AhcProt *)AHC_ALLOC(sizeof(AhcProt));
+  (void)w;
+  if (!p) ahc_die("out of memory");
+  p->state = ahc_eval(env[0]);   /* WHNF from birth (section 6.3) */
+  p->waiters = NULL;
+  return ahc_mk_int(reg_add((void ***)&prot_reg,
+                            &prot_n, &prot_cap, p));
+}
+
+static AhcNode *p_prot_new(AhcNode *s) {
+  AhcNode **e = ahc_env(1);
+  e[0] = s;
+  return ahc_mk_fun(io_prot_new, e);
+}
+
+/* reading: an observation-consistent snapshot - the projection is
+   applied to the state AS OF the action and forced only as far as
+   the caller demands. */
+static AhcNode *io_prot_read(AhcNode **env, AhcNode *w) {
+  AhcProt *p = prot_of(env[0]);
+  (void)w;
+  return ahc_apply(env[1], p->state);
+}
+
+static AhcNode *p_prot_read(AhcNode *pi, AhcNode *f) {
+  AhcNode **e = ahc_env(2);
+  e[0] = pi;
+  e[1] = f;
+  return ahc_mk_fun(io_prot_read, e);
+}
+
+static AhcNode *io_prot_update(AhcNode **env, AhcNode *w) {
+  AhcProt *p = prot_of(env[0]);
+  AhcNode *r;
+  (void)w;
+  r = prot_commit(p, env[1]);
+  prot_epilogue(p);
+  return r;
+}
+
+static AhcNode *p_prot_update(AhcNode *pi, AhcNode *f) {
+  AhcNode **e = ahc_env(2);
+  e[0] = pi;
+  e[1] = f;
+  return ahc_mk_fun(io_prot_update, e);
+}
+
+static AhcNode *io_prot_entry(AhcNode **env, AhcNode *w) {
+  AhcProt *p = prot_of(env[0]);
+  (void)w;
+  if (prot_barrier_holds(p, env[1])) {
+    AhcNode *r = prot_commit(p, env[2]);
+    prot_epilogue(p);
+    return r;
+  }
+  {
+    AhcProtWaiter *nw =
+      (AhcProtWaiter *)AHC_ALLOC(sizeof(AhcProtWaiter));
+    AhcProtWaiter **link = &p->waiters;
+    if (!nw) ahc_die("out of memory");
+    nw->barrier = env[1];
+    nw->body = env[2];
+    nw->task = cur_task;
+    nw->next = NULL;
+    while (*link) link = &(*link)->next;
+    *link = nw;
+  }
+  park();                    /* the epilogue ran our body for us */
+  {
+    AhcNode *r = cur_task->xfer;
+    cur_task->xfer = NULL;
+    return r;
+  }
+}
+
+static AhcNode *p_prot_entry(AhcNode *pi, AhcNode *g, AhcNode *f) {
+  AhcNode **e = ahc_env(3);
+  e[0] = pi;
+  e[1] = g;
+  e[2] = f;
+  return ahc_mk_fun(io_prot_entry, e);
+}
+
 /* ----- globals ---------------------------------------------------- */
 
 /* ----- Double arithmetic (Num/Fractional/Show at Double) --------- */
@@ -2808,6 +2964,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
   *ahc_prim_chan_new, *ahc_prim_chan_send, *ahc_prim_chan_recv,
   *ahc_prim_task_yield,
+  *ahc_prim_prot_new, *ahc_prim_prot_read,
+  *ahc_prim_prot_update, *ahc_prim_prot_entry,
   *ahc_prim_ord, *ahc_prim_chr,
   *ahc_prim_band, *ahc_prim_bor, *ahc_prim_bxor,
   *ahc_prim_bshl, *ahc_prim_bshr, *ahc_prim_bcompl,
@@ -2922,6 +3080,10 @@ void ahc_rts_init(void) {
   ahc_prim_chan_send = mk_prim2(p_chan_send);
   ahc_prim_chan_recv = mk_prim1(p_chan_recv);
   ahc_prim_task_yield = ahc_mk_fun(io_task_yield, NULL);
+  ahc_prim_prot_new = mk_prim1(p_prot_new);
+  ahc_prim_prot_read = mk_prim2(p_prot_read);
+  ahc_prim_prot_update = mk_prim2(p_prot_update);
+  ahc_prim_prot_entry = mk_prim3(p_prot_entry);
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);

@@ -1172,6 +1172,56 @@ package body AHC.Builtins is
                end;
                Ignore := Def_Global
                  ("primChanNew", Mono (IO_T (I_T)));
+
+               --  Protected values (M103, design note section 6).
+               --  The state and result types are the wrapper's
+               --  business; prims see Int indices and pure
+               --  transition functions.
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primProtNew",
+                     Poly1 (A, FN (TV (A), IO_T (I_T))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("primProtRead",
+                     Poly2 (A, B,
+                            FN (I_T, FN (TV (A), TV (B)),
+                                IO_T (TV (B)))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+                  Pair_T : constant Real_Type_Id :=
+                    AP (AP (TC (Env.Tuple_TCs (2)), TV (A)),
+                        TV (B));
+               begin
+                  Ignore := Def_Global
+                    ("primProtUpdate",
+                     Poly2 (A, B,
+                            FN (I_T, FN (TV (A), Pair_T),
+                                IO_T (TV (B)))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+                  Pair_T : constant Real_Type_Id :=
+                    AP (AP (TC (Env.Tuple_TCs (2)), TV (A)),
+                        TV (B));
+               begin
+                  Ignore := Def_Global
+                    ("primProtEntry",
+                     Poly2 (A, B,
+                            FN (I_T,
+                                FN (TV (A), TC (Env.Bool_TC)),
+                                FN (FN (TV (A), Pair_T),
+                                    IO_T (TV (B))))));
+               end;
                declare
                   A : constant Real_TyVar_Id := New_Tv ("a");
                begin
