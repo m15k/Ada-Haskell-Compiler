@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The dogfood binding (M101): examples/sqlite - ahcsql binds the
+OS-shipped sqlite3 in ~80 lines and runs a full session against an
+in-memory database: an out-parameter open (mallocBytes/peekPtr),
+SQL strings in and column values out, CInt result codes, a Haskell
+lambda as sqlite3_exec's row callback walking char** arrays
+NULL-safely, and the C library's own error message peeked back on a
+bad query. scripts/run_sqlite.sh keeps it green. This is the proof
+the FFI plan aimed at: binding a real C library is now an
+afternoon, not a compiler feature.
+
 The classic lands (M100): tests/exec/ffi_qsort.hs - libc's qsort
 sorting a C Int64 array with a Haskell comparator, exercising the
 wrapper callback, the marshal surface, and the fixed-width types in

@@ -1,0 +1,7 @@
+open rc=0
+name=C, year=1972
+name=Ada, year=1980
+name=Haskell, year=1990
+query rc=0
+sqlite error: no such table: missing
+close rc=0
