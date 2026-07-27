@@ -1594,6 +1594,16 @@ package body AHC.Desugar is
                      elsif Core.TyCon_Id (TN.Con) = Env.Unit_TC then
                         K := Core.M_Unit;
                      else
+                        for CK in Builtins.C_Fix_Kind loop
+                           if Core.TyCon_Id (TN.Con)
+                                = Env.CFix_TCs (CK)
+                           then
+                              K := Core.Marshal_Kind'Val
+                                (Core.Marshal_Kind'Pos (Core.M_I8)
+                                 + Builtins.C_Fix_Kind'Pos (CK));
+                              return True;
+                           end if;
+                        end loop;
                         return False;
                      end if;
                      return True;

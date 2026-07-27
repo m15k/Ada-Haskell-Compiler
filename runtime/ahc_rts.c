@@ -221,6 +221,18 @@ static AhcNode *mk_big(int sign, limb *d, int n) {
   }
 }
 
+/* An unsigned 64-bit C result: fast long path, bignum above
+   LONG_MAX (the FFI's Word64 boxing). */
+AhcNode *ahc_mk_ulong(unsigned long v) {
+  limb *d;
+  if (v <= (unsigned long)LONG_MAX) return ahc_mk_int((long)v);
+  d = (limb *)AHC_ALLOC(2 * sizeof(limb));
+  if (!d) ahc_die("out of memory");
+  d[0] = (limb)(v & 0xffffffffUL);
+  d[1] = (limb)(v >> 32);
+  return mk_big(1, d, 2);
+}
+
 typedef struct { int sign; int n; const limb *d; } BigView;
 
 /* View an evaluated INT/BIGINT node; tmp backs the INT case. */

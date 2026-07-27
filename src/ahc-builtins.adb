@@ -248,6 +248,17 @@ package body AHC.Builtins is
       Env.Ptr_TC      := TyCon_Id (Def_TyCon ("Ptr", 1, Star1));
       Env.FunPtr_TC   := TyCon_Id (Def_TyCon ("FunPtr", 1, Star1));
 
+      --  Fixed-width C types: distinct tycons whose runtime nodes
+      --  are plain AHC_INT - only the FFI boundary knows the width.
+      Env.CFix_TCs (C_I8)  := TyCon_Id (Def_TyCon ("Int8", 0, Star_K));
+      Env.CFix_TCs (C_I16) := TyCon_Id (Def_TyCon ("Int16", 0, Star_K));
+      Env.CFix_TCs (C_I32) := TyCon_Id (Def_TyCon ("Int32", 0, Star_K));
+      Env.CFix_TCs (C_I64) := TyCon_Id (Def_TyCon ("Int64", 0, Star_K));
+      Env.CFix_TCs (C_U8)  := TyCon_Id (Def_TyCon ("Word8", 0, Star_K));
+      Env.CFix_TCs (C_U16) := TyCon_Id (Def_TyCon ("Word16", 0, Star_K));
+      Env.CFix_TCs (C_U32) := TyCon_Id (Def_TyCon ("Word32", 0, Star_K));
+      Env.CFix_TCs (C_U64) := TyCon_Id (Def_TyCon ("Word64", 0, Star_K));
+
       Env.False_DC := DataCon_Id
         (Def_DataCon ("False", Real_TyCon_Id (Env.Bool_TC), 1, 0));
       Env.True_DC := DataCon_Id
@@ -298,6 +309,26 @@ package body AHC.Builtins is
         (Table.Intern ("String"),
          (Arity => 0, Core_Rhs => Type_Id (LST (TC (Env.Char_TC))),
           others => <>));
+
+      --  Foreign.C.Types-style names as synonyms of the fixed-width
+      --  types (the widths of the v1 targets: LP64).
+      declare
+         procedure C_Syn (Name : String; K : C_Fix_Kind) is
+         begin
+            Env.Synonyms.Include
+              (Table.Intern (Name),
+               (Arity => 0,
+                Core_Rhs => Type_Id (TC (Env.CFix_TCs (K))),
+                others => <>));
+         end C_Syn;
+      begin
+         C_Syn ("CChar", C_I8);
+         C_Syn ("CInt", C_I32);
+         C_Syn ("CUInt", C_U32);
+         C_Syn ("CLong", C_I64);
+         C_Syn ("CULong", C_U64);
+         C_Syn ("CSize", C_U64);
+      end;
 
       --  Constructor schemes for the wired-in data constructors.
       declare
@@ -853,6 +884,19 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Enum_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Int_TC));
          Def_Instance (Cl (Env.Integral_Cl), TCn (Env.Integer_TC));
+
+         --  Fixed-width C types share Int's runtime representation,
+         --  so their dictionaries reuse Int's prims wholesale
+         --  (arithmetic is exact/promoting, not wrapping - only the
+         --  FFI boundary enforces the width).
+         for K in C_Fix_Kind loop
+            Def_Instance (Cl (Env.Eq_Cl), TCn (Env.CFix_TCs (K)));
+            Def_Instance (Cl (Env.Ord_Cl), TCn (Env.CFix_TCs (K)));
+            Def_Instance (Cl (Env.Show_Cl), TCn (Env.CFix_TCs (K)));
+            Def_Instance (Cl (Env.Num_Cl), TCn (Env.CFix_TCs (K)));
+            Def_Instance (Cl (Env.Integral_Cl),
+                          TCn (Env.CFix_TCs (K)));
+         end loop;
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Float_TC));

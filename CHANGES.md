@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Fixed-width C types (M95): Int8/16/32/64 and Word8/16/32/64 as
+builtin tycons, with CChar/CInt/CUInt/CLong/CULong/CSize as wired
+synonyms (LP64 widths). `int abs(int)` is now honestly
+`CInt -> CInt` - closing the Int=long caveat that made
+int-returning libc functions undeclarable. Runtime nodes are plain
+AHC_INT sharing Int's Num/Integral/Eq/Ord/Show dictionaries
+(arithmetic stays exact and promoting; the width is enforced only
+at the FFI boundary, where out-of-range values die with the width
+in the message instead of truncating). Word64 results above 2^63-1
+box as bignums via the new ahc_mk_ulong; the reverse direction
+accepts 0..2^63-1 in v1. Marshalling covers imports, exports, and
+callback trampolines uniformly; exec goldens cover abs/toupper
+round trips and the Int32 range death.
+
 Callbacks (M94): `FunPtr a` (phantom C function pointer with
 Eq/Ord, `nullFunPtr`) and `foreign import ccall "wrapper"` - a
 Haskell closure becomes a real C function pointer. The type must be

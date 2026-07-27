@@ -872,12 +872,24 @@ nullable C results (like `getenv`) expressible. Direct `String` and
 requires `withCString`/`CInt` there); `Int`/`Double`/`Char`/`Ptr`
 match GHC's model under `Int = long`.
 
+For everything that is not `long`-shaped, the **fixed-width types**
+carry the exact C width: `Int8/16/32/64`, `Word8/16/32/64`, and the
+familiar names as synonyms — `CChar=Int8`, `CInt=Int32`,
+`CUInt=Word32`, `CLong=Int64`, `CULong=CSize=Word64` (LP64
+targets). `int isalpha(int)` is honestly `CInt -> CInt`. At runtime
+they are ordinary `AHC_INT` nodes with Int's own
+`Num`/`Integral`/`Eq`/`Ord`/`Show` dictionaries — arithmetic is
+exact and promoting (AHC never wraps, unlike GHC's `CInt`); **the
+declared width is enforced only at the boundary**, where an
+out-of-range value dies (`FFI: Int32 argument out of range`) rather
+than truncating. A `Word64` coming back from C above `2^63-1` boxes
+as a bignum; passing one back out again is the one asymmetry — the
+Haskell-to-C direction accepts `0..2^63-1` in v1.
+
 Two rules keep it honest. **Types must match the C definition**
-under the table above — declaring `int isalpha(int)` as
-`Int -> Int` reads garbage high bits; keep to `long`-, `double`-
-and pointer-shaped C functions until fixed-width `CInt`-style types
-land. **An `Int` that has silently promoted to bignum dies at the
-boundary** (`FFI: Int argument out of range`) rather than
+under the tables above — the fixed-width types exist precisely so
+they can. **An `Int` that has silently promoted to bignum dies at
+the boundary** (`FFI: Int argument out of range`) rather than
 truncating.
 
 An IO-typed import gets the world-passing shape — the wrapper packs

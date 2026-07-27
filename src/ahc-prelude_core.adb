@@ -1292,6 +1292,12 @@ package body AHC.Prelude_Core is
             Inst : constant Instance_Info :=
               M.Info (Real_Instance_Id (II));
             Cl_Id : constant Class_Id := Inst.Of_Class;
+
+            --  Fixed-width C types share Int's runtime nodes, so
+            --  their Num/Integral/Show dictionaries reuse Int's.
+            function Is_Fix (T : TyCon_Id) return Boolean
+            is (for some K in Builtins.C_Fix_Kind =>
+                  Env.CFix_TCs (K) = T);
          begin
             if Inst.Method_Binds.Is_Empty
               and then Inst.Dict_Global /= No_Var
@@ -1326,8 +1332,8 @@ package body AHC.Prelude_Core is
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Num_Cl
                     and then (Inst.Head = Env.Int_TC
-                              or else Inst.Head =
-                                        Env.Integer_TC)
+                              or else Inst.Head = Env.Integer_TC
+                              or else Is_Fix (Inst.Head))
                   then
                      Ms.Append (V (P_Add));
                      Ms.Append (V (P_Sub));
@@ -1351,7 +1357,8 @@ package body AHC.Prelude_Core is
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Integral_Cl
                     and then (Inst.Head = Env.Int_TC
-                              or else Inst.Head = Env.Integer_TC)
+                              or else Inst.Head = Env.Integer_TC
+                              or else Is_Fix (Inst.Head))
                   then
                      --  Canonical bignum representation: Int and
                      --  Integer share nodes, so both instances bind
@@ -1473,6 +1480,7 @@ package body AHC.Prelude_Core is
                   elsif Cl_Id = Env.Show_Cl then
                      if Inst.Head = Env.Int_TC
                        or else Inst.Head = Env.Integer_TC
+                       or else Is_Fix (Inst.Head)
                      then
                         Ms.Append (V (P_ShowI));
                         Ms.Append (F_SP_Prim (P_SPI));

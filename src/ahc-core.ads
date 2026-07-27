@@ -388,7 +388,12 @@ package AHC.Core is
    --  export, Binder is the exported top-level binding and C_Name
    --  the entry function's symbol.
    type Marshal_Kind is
-     (M_Int, M_Double, M_Char, M_Bool, M_Unit, M_String, M_Ptr);
+     (M_Int, M_Double, M_Char, M_Bool, M_Unit, M_String, M_Ptr,
+      --  Fixed-width C types (Int8..Word64): range-checked at the
+      --  boundary, AHC_INT nodes on the Haskell side.
+      M_I8, M_I16, M_I32, M_I64, M_U8, M_U16, M_U32, M_U64);
+
+   subtype Fixed_Marshal is Marshal_Kind range M_I8 .. M_U64;
 
    package Marshal_Vectors is new Ada.Containers.Vectors
      (Positive, Marshal_Kind);

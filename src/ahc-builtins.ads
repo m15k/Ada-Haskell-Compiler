@@ -51,6 +51,12 @@ package AHC.Builtins is
    package Syn_Maps is new Ada.Containers.Hashed_Maps
      (Names.Name_Id, Syn_Rec, Name_Hash, "=");
 
+   --  Fixed-width C types (Int8..Word64), in the same order as
+   --  Core.Fixed_Marshal so the two convert positionally.
+   type C_Fix_Kind is (C_I8, C_I16, C_I32, C_I64,
+                       C_U8, C_U16, C_U32, C_U64);
+   type C_Fix_TC_Array is array (C_Fix_Kind) of Core.TyCon_Id;
+
    Max_Tuple : constant := 7;
    type Tuple_TC_Array is array (2 .. Max_Tuple) of Core.TyCon_Id;
    type Tuple_DC_Array is array (2 .. Max_Tuple) of Core.DataCon_Id;
@@ -69,6 +75,7 @@ package AHC.Builtins is
       Unit_TC, List_TC, IO_TC, Ordering_TC, Rational_TC, Maybe_TC,
       Arrow_TC, Ptr_TC, FunPtr_TC
         : Core.TyCon_Id := Core.No_TyCon;
+      CFix_TCs : C_Fix_TC_Array := [others => Core.No_TyCon];
       Tuple_TCs : Tuple_TC_Array := [others => Core.No_TyCon];
 
       True_DC, False_DC, Unit_DC, Nil_DC, Cons_DC, Nothing_DC, Just_DC

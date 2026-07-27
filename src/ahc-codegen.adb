@@ -776,7 +776,60 @@ package body AHC.CodeGen is
             when M_Bool   => "int",
             when M_Unit   => "void",
             when M_String => "const char *",
-            when M_Ptr    => "void *");
+            when M_Ptr    => "void *",
+            when M_I8     => "int8_t",
+            when M_I16    => "int16_t",
+            when M_I32    => "int32_t",
+            when M_I64    => "int64_t",
+            when M_U8     => "uint8_t",
+            when M_U16    => "uint16_t",
+            when M_U32    => "uint32_t",
+            when M_U64    => "uint64_t");
+
+      function Fix_Name (K : Fixed_Marshal) return String
+      is (case K is
+            when M_I8  => "Int8",  when M_I16 => "Int16",
+            when M_I32 => "Int32", when M_I64 => "Int64",
+            when M_U8  => "Word8", when M_U16 => "Word16",
+            when M_U32 => "Word32", when M_U64 => "Word64");
+
+      --  C condition on the long expression V lying outside K's
+      --  range ("" when every long fits).
+      function Fix_Bounds (K : Fixed_Marshal; V : String)
+         return String
+      is (case K is
+            when M_I8  =>
+              V & " < INT8_MIN || " & V & " > INT8_MAX",
+            when M_I16 =>
+              V & " < INT16_MIN || " & V & " > INT16_MAX",
+            when M_I32 =>
+              V & " < INT32_MIN || " & V & " > INT32_MAX",
+            when M_I64 => "",
+            when M_U8  => V & " < 0 || " & V & " > UINT8_MAX",
+            when M_U16 => V & " < 0 || " & V & " > UINT16_MAX",
+            when M_U32 =>
+              V & " < 0 || " & V & " > (long)UINT32_MAX",
+            when M_U64 => V & " < 0");
+
+      --  Box a C value of width K as a Haskell node (Word64 may
+      --  need the bignum path).
+      function Fix_Box (K : Fixed_Marshal; V : String) return String
+      is (if K = M_U64 then "ahc_mk_ulong(" & V & ")"
+          else "ahc_mk_int((long)" & V & ")");
+
+      --  The die-if-unrepresentable check for unboxing a node into
+      --  width K (Src is the node expression; What is "argument" or
+      --  "result").
+      function Fix_Check
+        (K : Fixed_Marshal; Node, What : String) return String
+      is
+         Chk : constant String := Fix_Bounds (K, Node & "->u.i");
+      begin
+         return "  if (" & Node & "->tag != AHC_INT"
+           & (if Chk = "" then "" else " || " & Chk)
+           & ") ahc_die(""FFI: " & Fix_Name (K) & " " & What
+           & " out of range"");" & ASCII.LF;
+      end Fix_Check;
 
       procedure Emit_Foreign (FI : Positive) is
          F : Foreign_Import renames M.Foreigns (FI);
@@ -845,6 +898,19 @@ package body AHC.CodeGen is
                         Append (R, "  void *x" & Ix
                                 & " = ahc_eval(" & S & ")->u.p;"
                                 & LF);
+                     when Fixed_Marshal =>
+                        declare
+                           KF : constant Fixed_Marshal :=
+                             F.Args (I);
+                        begin
+                           Append (R, "  AhcNode *e" & Ix
+                                   & " = ahc_eval(" & S & ");" & LF
+                                   & Fix_Check (KF, "e" & Ix,
+                                                "argument")
+                                   & "  " & C_Type (KF) & " x" & Ix
+                                   & " = (" & C_Type (KF) & ")e"
+                                   & Ix & "->u.i;" & LF);
+                        end;
                      when M_Unit =>
                         null;   --  rejected during desugaring
                   end case;
@@ -876,6 +942,9 @@ package body AHC.CodeGen is
                           & LF);
                when M_Ptr =>
                   Append (R, "  void *rv = " & Call & ";" & LF);
+               when Fixed_Marshal =>
+                  Append (R, "  " & C_Type (F.Res) & " rv = "
+                          & Call & ";" & LF);
             end case;
 
             for I in 1 .. NArgs loop
@@ -903,6 +972,9 @@ package body AHC.CodeGen is
                           & "  return ahc_mk_string(rv);" & LF);
                when M_Ptr =>
                   Append (R, "  return ahc_mk_ptr(rv);" & LF);
+               when Fixed_Marshal =>
+                  Append (R, "  return "
+                          & Fix_Box (F.Res, "rv") & ";" & LF);
             end case;
             return To_String (R);
          end Call_Text;
@@ -962,6 +1034,8 @@ package body AHC.CodeGen is
                                  "ahc_mk_string(" & A & ")",
                                when M_Ptr    =>
                                  "ahc_mk_ptr(" & A & ")",
+                               when Fixed_Marshal =>
+                                 Fix_Box (F.CB_Args (I), A),
                                when M_Unit   => "ahc_mk_con(1, 0)")
                           & ");" & LF);
                end;
@@ -990,6 +1064,10 @@ package body AHC.CodeGen is
                           & LF);
                when M_Ptr =>
                   Append (Fns, "  return r->u.p;" & LF);
+               when Fixed_Marshal =>
+                  Append (Fns, Fix_Check (F.CB_Res, "r", "result")
+                          & "  return (" & C_Type (F.CB_Res)
+                          & ")r->u.i;" & LF);
             end case;
             Append (Fns, "}" & LF);
             declare
@@ -1134,6 +1212,8 @@ package body AHC.CodeGen is
                             when M_String =>
                               "ahc_mk_string(" & A & ")",
                             when M_Ptr    => "ahc_mk_ptr(" & A & ")",
+                            when Fixed_Marshal =>
+                              Fix_Box (F.Args (I), A),
                             when M_Unit   => "ahc_mk_con(1, 0)")
                        & ");" & LF);
             end;
@@ -1160,6 +1240,10 @@ package body AHC.CodeGen is
                Append (Fns, "  return ahc_marshal_cstring(r);" & LF);
             when M_Ptr =>
                Append (Fns, "  return r->u.p;" & LF);
+            when Fixed_Marshal =>
+               Append (Fns, Fix_Check (F.Res, "r", "result")
+                       & "  return (" & C_Type (F.Res)
+                       & ")r->u.i;" & LF);
          end case;
          Append (Fns, "}" & LF & LF);
       end Emit_Export;

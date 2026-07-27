@@ -47,6 +47,7 @@ AhcNode **ahc_env(int n);                      /* allocate env array  */
 AhcNode *ahc_mk_thunk(AhcCode code, AhcNode **env);
 AhcNode *ahc_mk_fun(AhcFn fn, AhcNode **env);
 AhcNode *ahc_mk_int(long v);
+AhcNode *ahc_mk_ulong(unsigned long v);        /* bignum > LONG_MAX */
 AhcNode *ahc_mk_big_str(const char *lexeme);   /* literal > long */
 AhcNode *ahc_mk_ratlit(long contag, const char *n, const char *d);
 void ahc_set_args(int argc, char **argv);      /* called by main() */
