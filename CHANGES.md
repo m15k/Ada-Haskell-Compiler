@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The marshal surface (M99): raw memory for C interop, all through
+the existing prims boundary - mallocBytes/free, plusPtr/castPtr,
+peek/poke at every fixed width plus Double and Ptr (byte offsets,
+memcpy'd so alignment never bites, poke values range-checked),
+newCString (malloc'd, released with free), and peekCStringLen.
+peek/poke move primitive values only; the memory is not scanned by
+the collector. This unlocks C APIs that traffic in arrays, structs,
+and out-parameters. Exec goldens cover the full round trip and the
+poke range death.
+
 Boundary errors respect the embedding (M98): while a foreign-export
 entry function is on the stack, a runtime error - error, a
 pattern-match failure, an FFI range death, a contract or refinement

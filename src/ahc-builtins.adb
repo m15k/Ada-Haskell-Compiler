@@ -1156,6 +1156,110 @@ package body AHC.Builtins is
               ("peekCString",
                Mono (FN (AP (TC (Env.Ptr_TC), TC (Env.Char_TC)),
                          IO_T (String_T2))));
+
+            --  Foreign.Marshal surface: raw memory, byte offsets.
+            declare
+               function Fix_Nm (K : C_Fix_Kind) return String
+               is (case K is
+                     when C_I8 => "Int8",   when C_I16 => "Int16",
+                     when C_I32 => "Int32", when C_I64 => "Int64",
+                     when C_U8 => "Word8",  when C_U16 => "Word16",
+                     when C_U32 => "Word32",
+                     when C_U64 => "Word64");
+
+               I_T : constant Real_Type_Id := TC (Env.Int_TC);
+               U_T : constant Real_Type_Id := TC (Env.Unit_TC);
+               D_T : constant Real_Type_Id := TC (Env.Double_TC);
+
+               function Ptr_Of (V : Real_TyVar_Id)
+                  return Real_Type_Id
+               is (AP (TC (Env.Ptr_TC), TV (V)));
+            begin
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("mallocBytes",
+                     Poly1 (A, FN (I_T, IO_T (Ptr_Of (A)))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("free",
+                     Poly1 (A, FN (Ptr_Of (A), IO_T (U_T))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("plusPtr",
+                     Poly2 (A, B,
+                            FN (Ptr_Of (A), I_T, Ptr_Of (B))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("castPtr",
+                     Poly2 (A, B, FN (Ptr_Of (A), Ptr_Of (B))));
+               end;
+               for K in C_Fix_Kind loop
+                  declare
+                     A : constant Real_TyVar_Id := New_Tv ("a");
+                     B : constant Real_TyVar_Id := New_Tv ("a");
+                     T : constant Real_Type_Id :=
+                       TC (Env.CFix_TCs (K));
+                  begin
+                     Ignore := Def_Global
+                       ("peek" & Fix_Nm (K),
+                        Poly1 (A, FN (Ptr_Of (A), I_T, IO_T (T))));
+                     Ignore := Def_Global
+                       ("poke" & Fix_Nm (K),
+                        Poly1 (B, FN (Ptr_Of (B), I_T,
+                                      FN (T, IO_T (U_T)))));
+                  end;
+               end loop;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("peekDouble",
+                     Poly1 (A, FN (Ptr_Of (A), I_T, IO_T (D_T))));
+                  Ignore := Def_Global
+                    ("pokeDouble",
+                     Poly1 (B, FN (Ptr_Of (B), I_T,
+                                   FN (D_T, IO_T (U_T)))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  B : constant Real_TyVar_Id := New_Tv ("b");
+                  C2 : constant Real_TyVar_Id := New_Tv ("a");
+                  D2 : constant Real_TyVar_Id := New_Tv ("b");
+               begin
+                  Ignore := Def_Global
+                    ("peekPtr",
+                     Poly2 (A, B, FN (Ptr_Of (A), I_T,
+                                      IO_T (Ptr_Of (B)))));
+                  Ignore := Def_Global
+                    ("pokePtr",
+                     Poly2 (C2, D2,
+                            FN (Ptr_Of (C2), I_T,
+                                FN (Ptr_Of (D2), IO_T (U_T)))));
+               end;
+               Ignore := Def_Global
+                 ("newCString",
+                  Mono (FN (String_T2,
+                            IO_T (AP (TC (Env.Ptr_TC),
+                                      TC (Env.Char_TC))))));
+               Ignore := Def_Global
+                 ("peekCStringLen",
+                  Mono (FN (AP (TC (Env.Ptr_TC), TC (Env.Char_TC)),
+                            I_T, IO_T (String_T2))));
+            end;
          end;
          pragma Unreferenced (Ignore);
       end;

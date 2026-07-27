@@ -1264,6 +1264,32 @@ package body AHC.Prelude_Core is
          BP ("peekCString", "ahc_prim_peek_cstring");
          BP ("nullFunPtr", "ahc_prim_null_ptr");
          BP ("freeHaskellFunPtr", "ahc_prim_free_funptr");
+         BP ("mallocBytes", "ahc_prim_malloc_bytes");
+         BP ("free", "ahc_prim_free_ptr");
+         BP ("plusPtr", "ahc_prim_plus_ptr");
+         BP ("castPtr", "ahc_prim_cast_ptr");
+         BP ("peekInt8", "ahc_prim_peek_i8");
+         BP ("peekInt16", "ahc_prim_peek_i16");
+         BP ("peekInt32", "ahc_prim_peek_i32");
+         BP ("peekInt64", "ahc_prim_peek_i64");
+         BP ("peekWord8", "ahc_prim_peek_u8");
+         BP ("peekWord16", "ahc_prim_peek_u16");
+         BP ("peekWord32", "ahc_prim_peek_u32");
+         BP ("peekWord64", "ahc_prim_peek_u64");
+         BP ("peekDouble", "ahc_prim_peek_d");
+         BP ("peekPtr", "ahc_prim_peek_p");
+         BP ("pokeInt8", "ahc_prim_poke_i8");
+         BP ("pokeInt16", "ahc_prim_poke_i16");
+         BP ("pokeInt32", "ahc_prim_poke_i32");
+         BP ("pokeInt64", "ahc_prim_poke_i64");
+         BP ("pokeWord8", "ahc_prim_poke_u8");
+         BP ("pokeWord16", "ahc_prim_poke_u16");
+         BP ("pokeWord32", "ahc_prim_poke_u32");
+         BP ("pokeWord64", "ahc_prim_poke_u64");
+         BP ("pokeDouble", "ahc_prim_poke_d");
+         BP ("pokePtr", "ahc_prim_poke_p");
+         BP ("newCString", "ahc_prim_new_cstring");
+         BP ("peekCStringLen", "ahc_prim_peek_cstring_len");
       end;
 
       --  quot/rem/div/mod are Integral methods now; their prims are

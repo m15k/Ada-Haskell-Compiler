@@ -1368,6 +1368,184 @@ void ahc_free_cstring(char *s) {
   free(s);
 }
 
+/* ----- Foreign.Marshal surface: raw memory for C interop.
+   peek/poke move PRIMITIVE values only - this memory is malloc'd
+   and never scanned by the collector, so node pointers must not be
+   stored in it. Offsets are in bytes. -------------------------- */
+
+static void *marshal_ptr(AhcNode *p, const char *what) {
+  AhcNode *e = ahc_eval(p);
+  if (e->tag != AHC_PTR || !e->u.p) {
+    char eb[64];
+    snprintf(eb, sizeof eb, "%s: NULL pointer", what);
+    ahc_die(eb);
+  }
+  return e->u.p;
+}
+
+static AhcNode *io_malloc_bytes(AhcNode **env, AhcNode *w) {
+  AhcNode *n = ahc_eval(env[0]);
+  void *p;
+  (void)w;
+  if (n->tag != AHC_INT || n->u.i < 0)
+    ahc_die("mallocBytes: bad size");
+  p = malloc(n->u.i == 0 ? 1 : (size_t)n->u.i);
+  if (!p) ahc_die("mallocBytes: out of memory");
+  return ahc_mk_ptr(p);
+}
+
+static AhcNode *p_malloc_bytes(AhcNode *n) {
+  AhcNode **e = ahc_env(1);
+  e[0] = n;
+  return ahc_mk_fun(io_malloc_bytes, e);
+}
+
+static AhcNode *io_free_ptr(AhcNode **env, AhcNode *w) {
+  AhcNode *e = ahc_eval(env[0]);
+  (void)w;
+  if (e->tag == AHC_PTR && e->u.p) free(e->u.p);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+
+static AhcNode *p_free_ptr(AhcNode *p) {
+  AhcNode **e = ahc_env(1);
+  e[0] = p;
+  return ahc_mk_fun(io_free_ptr, e);
+}
+
+static AhcNode *p_plus_ptr(AhcNode *p, AhcNode *n) {
+  AhcNode *e = ahc_eval(p);
+  AhcNode *o = ahc_eval(n);
+  if (o->tag != AHC_INT) ahc_die("plusPtr: offset out of range");
+  return ahc_mk_ptr((char *)e->u.p + o->u.i);
+}
+
+static AhcNode *p_cast_ptr(AhcNode *p) {
+  return p;
+}
+
+#define DEF_PEEK(SUF, TY, BOX) \
+static AhcNode *io_peek_##SUF(AhcNode **env, AhcNode *w) { \
+  char *p = (char *)marshal_ptr(env[0], "peek"); \
+  long off = ahc_eval(env[1])->u.i; \
+  TY v; \
+  (void)w; \
+  memcpy(&v, p + off, sizeof v); \
+  return BOX; \
+} \
+static AhcNode *p_peek_##SUF(AhcNode *p, AhcNode *o) { \
+  AhcNode **e = ahc_env(2); \
+  e[0] = p; e[1] = o; \
+  return ahc_mk_fun(io_peek_##SUF, e); \
+}
+
+DEF_PEEK(i8,  int8_t,   ahc_mk_int((long)v))
+DEF_PEEK(i16, int16_t,  ahc_mk_int((long)v))
+DEF_PEEK(i32, int32_t,  ahc_mk_int((long)v))
+DEF_PEEK(i64, int64_t,  ahc_mk_int((long)v))
+DEF_PEEK(u8,  uint8_t,  ahc_mk_int((long)v))
+DEF_PEEK(u16, uint16_t, ahc_mk_int((long)v))
+DEF_PEEK(u32, uint32_t, ahc_mk_int((long)v))
+DEF_PEEK(u64, uint64_t, ahc_mk_ulong(v))
+DEF_PEEK(d,   double,   ahc_mk_double(v))
+DEF_PEEK(p,   void *,   ahc_mk_ptr(v))
+
+#define DEF_POKE_INT(SUF, TY, BAD) \
+static AhcNode *io_poke_##SUF(AhcNode **env, AhcNode *w) { \
+  char *p = (char *)marshal_ptr(env[0], "poke"); \
+  long off = ahc_eval(env[1])->u.i; \
+  AhcNode *xv = ahc_eval(env[2]); \
+  long x; \
+  TY v; \
+  (void)w; \
+  if (xv->tag != AHC_INT) ahc_die("poke: value out of range"); \
+  x = xv->u.i; \
+  if (BAD) ahc_die("poke: value out of range"); \
+  v = (TY)x; \
+  memcpy(p + off, &v, sizeof v); \
+  return ahc_mk_con(UNIT_TAG, 0); \
+} \
+static AhcNode *p_poke_##SUF(AhcNode *p, AhcNode *o, AhcNode *x) { \
+  AhcNode **e = ahc_env(3); \
+  e[0] = p; e[1] = o; e[2] = x; \
+  return ahc_mk_fun(io_poke_##SUF, e); \
+}
+
+DEF_POKE_INT(i8,  int8_t,   x < INT8_MIN || x > INT8_MAX)
+DEF_POKE_INT(i16, int16_t,  x < INT16_MIN || x > INT16_MAX)
+DEF_POKE_INT(i32, int32_t,  x < INT32_MIN || x > INT32_MAX)
+DEF_POKE_INT(i64, int64_t,  0)
+DEF_POKE_INT(u8,  uint8_t,  x < 0 || x > UINT8_MAX)
+DEF_POKE_INT(u16, uint16_t, x < 0 || x > UINT16_MAX)
+DEF_POKE_INT(u32, uint32_t, x < 0 || x > (long)UINT32_MAX)
+DEF_POKE_INT(u64, uint64_t, x < 0)
+
+static AhcNode *io_poke_d(AhcNode **env, AhcNode *w) {
+  char *p = (char *)marshal_ptr(env[0], "poke");
+  long off = ahc_eval(env[1])->u.i;
+  double v = ahc_eval(env[2])->u.d;
+  (void)w;
+  memcpy(p + off, &v, sizeof v);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+
+static AhcNode *p_poke_d(AhcNode *p, AhcNode *o, AhcNode *x) {
+  AhcNode **e = ahc_env(3);
+  e[0] = p; e[1] = o; e[2] = x;
+  return ahc_mk_fun(io_poke_d, e);
+}
+
+static AhcNode *io_poke_p(AhcNode **env, AhcNode *w) {
+  char *p = (char *)marshal_ptr(env[0], "poke");
+  long off = ahc_eval(env[1])->u.i;
+  void *v = ahc_eval(env[2])->u.p;
+  (void)w;
+  memcpy(p + off, &v, sizeof v);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+
+static AhcNode *p_poke_p(AhcNode *p, AhcNode *o, AhcNode *x) {
+  AhcNode **e = ahc_env(3);
+  e[0] = p; e[1] = o; e[2] = x;
+  return ahc_mk_fun(io_poke_p, e);
+}
+
+/* newCString: malloc'd NUL-terminated copy; release with free. */
+static AhcNode *io_new_cstring(AhcNode **env, AhcNode *w) {
+  (void)w;
+  return ahc_mk_ptr(ahc_marshal_cstring(env[0]));
+}
+
+static AhcNode *p_new_cstring(AhcNode *s) {
+  AhcNode **e = ahc_env(1);
+  e[0] = s;
+  return ahc_mk_fun(io_new_cstring, e);
+}
+
+/* peekCStringLen: exactly n bytes (NULs included). */
+static AhcNode *io_peek_cstring_len(AhcNode **env, AhcNode *w) {
+  char *p = (char *)marshal_ptr(env[0], "peekCStringLen");
+  AhcNode *n = ahc_eval(env[1]);
+  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
+  long i;
+  (void)w;
+  if (n->tag != AHC_INT || n->u.i < 0)
+    ahc_die("peekCStringLen: bad length");
+  for (i = n->u.i; i > 0; i--) {
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+    c->u.con.fields[0] = ahc_mk_char((unsigned char)p[i - 1]);
+    c->u.con.fields[1] = acc;
+    acc = c;
+  }
+  return acc;
+}
+
+static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
+  AhcNode **e = ahc_env(2);
+  e[0] = p; e[1] = n;
+  return ahc_mk_fun(io_peek_cstring_len, e);
+}
+
 /* ----- wrapper imports: Haskell closures as C function pointers.
    Each wrapper-import site owns a static pool of trampolines and a
    parallel closure-slot array (static data, so the Boehm collector
@@ -2208,7 +2386,18 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_neg_d, *ahc_prim_abs_d, *ahc_prim_signum_d,
   *ahc_prim_from_integer_d, *ahc_prim_show_d,
   *ahc_prim_null_ptr, *ahc_prim_peek_cstring,
-  *ahc_prim_free_funptr;
+  *ahc_prim_free_funptr,
+  *ahc_prim_malloc_bytes, *ahc_prim_free_ptr,
+  *ahc_prim_plus_ptr, *ahc_prim_cast_ptr,
+  *ahc_prim_peek_i8, *ahc_prim_peek_i16, *ahc_prim_peek_i32,
+  *ahc_prim_peek_i64, *ahc_prim_peek_u8, *ahc_prim_peek_u16,
+  *ahc_prim_peek_u32, *ahc_prim_peek_u64,
+  *ahc_prim_peek_d, *ahc_prim_peek_p,
+  *ahc_prim_poke_i8, *ahc_prim_poke_i16, *ahc_prim_poke_i32,
+  *ahc_prim_poke_i64, *ahc_prim_poke_u8, *ahc_prim_poke_u16,
+  *ahc_prim_poke_u32, *ahc_prim_poke_u64,
+  *ahc_prim_poke_d, *ahc_prim_poke_p,
+  *ahc_prim_new_cstring, *ahc_prim_peek_cstring_len;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -2324,4 +2513,30 @@ void ahc_rts_init(void) {
   ahc_prim_null_ptr = ahc_mk_ptr(NULL);
   ahc_prim_peek_cstring = mk_prim1(p_peek_cstring);
   ahc_prim_free_funptr = mk_prim1(p_free_funptr);
+  ahc_prim_malloc_bytes = mk_prim1(p_malloc_bytes);
+  ahc_prim_free_ptr = mk_prim1(p_free_ptr);
+  ahc_prim_plus_ptr = mk_prim2(p_plus_ptr);
+  ahc_prim_cast_ptr = mk_prim1(p_cast_ptr);
+  ahc_prim_peek_i8 = mk_prim2(p_peek_i8);
+  ahc_prim_peek_i16 = mk_prim2(p_peek_i16);
+  ahc_prim_peek_i32 = mk_prim2(p_peek_i32);
+  ahc_prim_peek_i64 = mk_prim2(p_peek_i64);
+  ahc_prim_peek_u8 = mk_prim2(p_peek_u8);
+  ahc_prim_peek_u16 = mk_prim2(p_peek_u16);
+  ahc_prim_peek_u32 = mk_prim2(p_peek_u32);
+  ahc_prim_peek_u64 = mk_prim2(p_peek_u64);
+  ahc_prim_peek_d = mk_prim2(p_peek_d);
+  ahc_prim_peek_p = mk_prim2(p_peek_p);
+  ahc_prim_poke_i8 = mk_prim3(p_poke_i8);
+  ahc_prim_poke_i16 = mk_prim3(p_poke_i16);
+  ahc_prim_poke_i32 = mk_prim3(p_poke_i32);
+  ahc_prim_poke_i64 = mk_prim3(p_poke_i64);
+  ahc_prim_poke_u8 = mk_prim3(p_poke_u8);
+  ahc_prim_poke_u16 = mk_prim3(p_poke_u16);
+  ahc_prim_poke_u32 = mk_prim3(p_poke_u32);
+  ahc_prim_poke_u64 = mk_prim3(p_poke_u64);
+  ahc_prim_poke_d = mk_prim3(p_poke_d);
+  ahc_prim_poke_p = mk_prim3(p_poke_p);
+  ahc_prim_new_cstring = mk_prim1(p_new_cstring);
+  ahc_prim_peek_cstring_len = mk_prim2(p_peek_cstring_len);
 }

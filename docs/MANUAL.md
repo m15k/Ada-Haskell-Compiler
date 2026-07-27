@@ -898,6 +898,15 @@ the world token arrives — so effect ordering is exactly `getLine`'s.
 A pure import calls eagerly at saturation; a nullary pure import is
 a CAF, evaluated once.
 
+For C APIs that traffic in arrays, structs, and out-parameters,
+the **marshal surface** provides raw memory: `mallocBytes`/`free`,
+`plusPtr`/`castPtr`, `peekInt8..peekWord64`/`pokeInt8..pokeWord64`
+plus `peekDouble`/`peekPtr` and their pokes (byte offsets, always
+`memcpy`'d so alignment never bites, poke values range-checked),
+`newCString`, and `peekCStringLen`. peek/poke move *primitive*
+values only — this memory is not scanned by the collector, so node
+pointers must never be stored in it.
+
 Linking against more than libc: pass `AHC_CFLAGS`/`AHC_LDFLAGS` to
 `scripts/ahc-build.sh`, or put the flags in the source itself —
 
