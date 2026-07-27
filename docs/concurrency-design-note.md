@@ -10,8 +10,10 @@ nothing; and Darwin's ucontext_t compiles as a 56-byte stub unless
 _XOPEN_SOURCE precedes every include (MANUAL chapter 16, both).
 Channels landed as unbounded FIFO (GHC's Chan semantics), which
 keeps the GHC shim (tests/shim) a direct wrapper. Protected
-values are designed and implemented in section 6 (M103); Phase B
-remains a future campaign.
+values are designed and implemented in section 6 (M103). Phase B
+(SMP) is designed in section 7 (PROPOSED, measurement-gated, two
+stages: sparks first - they trade nothing observable - then
+opt-in SMP scheduling, which may never clear its gate).
 
 AHC has zero concurrency at every layer, and until now deliberately:
 Haskell 2010 has none (Control.Concurrent is GHC library territory,
@@ -256,15 +258,10 @@ Runtime work (runtime/ahc_rts.c):
 
 ## 4. Phase B sketch (SMP), measurement-gated
 
-CAS blackhole claim + blocked queues; IND updates become
-payload-store-release then tag-store (readers acquire); Boehm built
-with GC_THREADS and per-thread registration; capabilities with work
-stealing; `par` sparks for pure parallelism. The determinism
-guarantee survives as a profile: `--deterministic` keeps Phase A's
-sequential schedule (the certification profile); SMP mode documents
-what it trades. Every step lands only with a benchmark that
-justifies it, per the M74 rule - and the honest expectation is that
-Phase B is a large, separate campaign.
+Superseded by section 7, which designs the campaign. The one-line
+version stands: determinism survives as the default profile, SMP
+is the opt-in, and every step lands only with a benchmark that
+justifies it, per the M74 rule.
 
 ## 5. What this is not
 
@@ -430,3 +427,167 @@ Ravenscar simplification again), no `Protected` sharing across
 foreign exports. MVar-as-sugar (`Protected (Maybe a)`) is a
 worked example in the module documentation, not a shipped compat
 layer, until something dogfooded wants it.
+
+## 7. Phase B: SMP, in two stages (the campaign design)
+
+**Status: PROPOSED.** Section 4's sketch, made a plan. The design
+brief has not changed since section 2: AHC will not out-GHC GHC at
+throughput, and `--deterministic` (Phase A's schedule, byte-for-
+byte) remains the DEFAULT profile forever - the Ravenscar bet is
+the identity, SMP is the opt-in. What Phase B adds is the ability
+to spend cores at all, and the design's first job is to spend them
+WITHOUT giving up determinism where that is possible. It is,
+for half the problem.
+
+### 7.1 The staging decision: results before schedules
+
+The synthesis table (1.5) already contains the observation this
+design turns into staging: GHC's sparks are DETERMINISTIC
+parallelism - `par` changes wall time, never results. So Phase B
+splits in two, and the halves differ in what they trade:
+
+- **B1 - sparks**: `par :: a -> b -> b` and `pseq`. Worker OS
+  threads evaluate PURE thunks only; every IO action still runs
+  on the main capability, on Phase A's scheduler, in Phase A's
+  order. Results are identical by purity; the IO schedule is
+  identical by construction; therefore EVERY EXISTING GOLDEN
+  KEEPS PASSING with workers on. B1 is not a profile - it is the
+  default, because it trades nothing observable. (This is the one
+  place a Haskell runtime gets parallelism Go, Rust, and Ada
+  structurally cannot offer this cheaply: purity makes the race
+  benign.)
+- **B2 - SMP scheduling**: green tasks on N capabilities with
+  work stealing; `send`/`recv`/`spawn` interleavings become real
+  races. Opt-in (`--smp`, or AHC_RTS=-N4), and the note's rule
+  applies: the flag's documentation leads with what it trades -
+  schedule goldens hold only under the default profile. B2 exists
+  for programs whose IO structure is itself parallel (servers);
+  the honest expectation is that B1 delivers most of the value to
+  most AHC programs and B2 may never clear its gate.
+
+### 7.2 The shared-state inventory (the audit section 3 dodged)
+
+Phase A was designed so single-OS-thread execution made this list
+irrelevant. B1 makes the sublist marked (w) hot - workers touch
+it; B2 makes all of it hot.
+
+| Mutable location | B1 disposition | B2 disposition |
+|---|---|---|
+| thunk update (tag+ind stores) (w) | atomic protocol, 7.3 | same |
+| blackhole owner/waiters (w) | CAS claim + CAS push, 7.3 | same |
+| CAF thunks (w) | same protocol (they are thunks) | same |
+| Boehm allocation (w) | GC_THREADS build, 7.5 | same |
+| spark deques (w) | Chase-Lev, owner-push/thief-steal | same |
+| run queue | main-only, untouched | per-capability + steal |
+| chan queues/waiters | main-only, untouched | per-chan lock |
+| protected values | main-only, untouched | per-value lock (6.1 promised) |
+| task/scope/chan/prot registries | main-only mutation | lock on grow |
+| handle + FunPtr registries | main-only, untouched | lock |
+| per-task error frames | already per-task (M102) | same |
+| stdout/stderr | main-only, untouched | libc-locked, order honest-nondet |
+
+The (w) rows are five. That is the real content of the B1 gate:
+five subsystems made thread-safe buys spendable cores with zero
+observable change.
+
+### 7.3 The thunk protocol (the one lock-free part that must be)
+
+Every worker and the main thread race on thunk evaluation; this
+path cannot take a lock without erasing the point. The protocol,
+GHC's shape adapted to AHC's two-word node:
+
+- **Claim**: CAS tag THUNK -> BLACKHOLE. Loser either parks
+  (owner field, M102's machinery - waiter push is a CAS on the
+  waiters list) or, for a spark-evaluated thunk, simply moves on
+  (B1 workers never park on blackholes: a busy thunk is someone
+  else's work already, steal the next spark; only the main task
+  parks. Keeps workers deadlock-free by construction).
+- **Update**: store u.ind with RELEASE, then store tag IND with
+  RELEASE; readers load tag with ACQUIRE and only then u.ind.
+  The two-store window where tag says BLACKHOLE and ind is
+  written is benign: blackhole readers go to the waiters path,
+  which the updater drains after the tag store.
+- **Wake**: swap the waiters list to empty with CAS, then push
+  each waiter to a locked MPSC inbox its capability drains at its
+  own scheduling points. In B1 this stays deterministic for a
+  structural reason, not a hopeful one: workers never park, so
+  the only possible waiter is the main task - an inbox of size
+  at most one, drained at main's next scheduling point, and
+  "which worker finished the thunk first" is invisible to the
+  schedule because either way main resumes at that same point
+  with the same value. B2 gives this up along with everything
+  else it gives up.
+
+C11 atomics (`stdatomic.h`), no assembly. The protocol lands with
+a stress golden (N workers forcing one shared CAF lattice) run
+under ThreadSanitizer in CI as its acceptance test, not just the
+benchmark - TSan is the M74-hardening move for memory models.
+
+### 7.4 Sparks and capabilities
+
+`par x y`: allocate a spark (pointer to the unevaluated thunk of
+x) onto the current capability's Chase-Lev deque; return y. Spark
+pool is advisory - a spark may be evaluated by a worker, by the
+demander, or never; purity makes all three the same answer.
+Workers loop: pop own deque, else steal FIFO from a victim in
+round-robin, else sleep on a condvar the deque push signals.
+`pseq` is `seq` with a guaranteed order (evaluate left first) -
+it exists so `par`-users can stage demand; the optimizer must
+learn it is strict in both arguments but MUST NOT reorder.
+
+Fizzling is the B1 benchmark's core number: a spark whose thunk
+the main task forced first did useless bookkeeping. The M74-style
+report for parfib prints sparks created / converted / fizzled
+alongside wall time, because a speedup number without a fizzle
+rate is how spark pools rot.
+
+B2's capabilities generalize the worker loop: each capability owns
+a green-task runq + spark deque; stealing takes whole tasks from
+the runq tail. Everything section 6 built survives: protected
+values get the per-value mutex 6.1 promised (entry queues stay
+FIFO per value - wake order within one protected value remains
+deterministic even under B2; only cross-object ordering is not),
+chans get a lock, and scope join parks exactly as today.
+
+### 7.5 The collector under threads
+
+Boehm built with GC_THREADS; each worker registers
+(GC_register_my_thread) and the Phase A coroutine protocol
+(set_stackbottom + live-extent roots, M102) applies PER OS THREAD
+- a capability switching green tasks retargets its own thread's
+stackbottom, and the M102 war-story rule (feature macros on line
+one; sizeof-check ABI structs) is already paid for. Collections
+stop the world; that is Boehm's model and AHC accepts it (the
+alternative is not having a GC). The B1 gate benchmark must
+therefore include an allocation-heavy workload, because STW pause
+frequency under parallel mutation is where naive spark designs
+lose their speedup back.
+
+### 7.6 The gates (M74 discipline, stated as numbers)
+
+Nothing in Phase B lands without its benchmark, and the harness
+is hardened FIRST (interleaved A/B, best-of-5, outputs verified
+identical - run_bench.sh grows a --workers axis):
+
+- **B1 gate**: parfib and a par-mergesort in tests/bench must
+  show >= 1.6x on 2 workers and >= 2.5x on 4, fizzle rate
+  reported, all existing suites green with workers ON, TSan
+  clean. If pure-eval parallelism cannot clear 1.6x on 2 cores,
+  B1 does not land and the design returns here.
+- **B2 gate**: a channel-parallel workload (N producers hashing
+  into one consumer) >= 1.5x on 2 capabilities vs B1-main-only,
+  under --smp, with the deterministic-profile suites still green
+  by default. B2 additionally requires a written answer to "what
+  broke in the six-hour-wedge class of bugs" - i.e. its own
+  war-story section before merge, not after.
+
+### 7.7 What Phase B is not
+
+Still no STM, still no async exceptions, still no preemption of
+pure loops (sparks make long pure work a RESOURCE, which removes
+most of the pressure that made Go add async preemption). No
+NUMA/pinning/affinity vocabulary. No promise that B2 ships: B1 is
+designed to be the resting place if the measurements say so, and
+the note considers that outcome a success, not a retreat - the
+project's identity is the deterministic profile, and B1 is the
+largest amount of parallelism obtainable without touching it.
