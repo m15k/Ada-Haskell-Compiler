@@ -26,14 +26,6 @@ package body AHC.Bindgen is
       function CN (F : Foreign_Import) return String
       is (Table.Text (Names.Real_Name_Id (F.C_Name)));
 
-      function Has_String (F : Foreign_Import) return Boolean
-      is (F.Res = M_String
-          or else (for some K of F.Args => K = M_String));
-
-      function Has_Bool (F : Foreign_Import) return Boolean
-      is (F.Res = M_Bool
-          or else (for some K of F.Args => K = M_Bool));
-
       --  Shared fixed-width spellings (identical in C++ and cgo).
       function Fix_C (K : Fixed_Marshal) return String
       is (case K is
@@ -68,14 +60,21 @@ package body AHC.Bindgen is
            & LF
            & "// One Lib per process; construct it on the one thread"
            & LF
-           & "// that will make all calls." & LF
+           & "// that will make all calls. Runtime errors inside the"
+           & LF
+           & "// library surface as std::runtime_error." & LF
            & "#pragma once" & LF
            & "#include <cstdint>" & LF
            & "#include <cstdlib>" & LF
+           & "#include <stdexcept>" & LF
            & "#include <string>" & LF
            & "#include ""ahc_exports.h""" & LF & LF
            & "namespace ahc {" & LF
            & "class Lib {" & LF
+           & "  static void check_() {" & LF
+           & "    if (*ahc_last_error())" & LF
+           & "      throw std::runtime_error(ahc_last_error());" & LF
+           & "  }" & LF & LF
            & "public:" & LF
            & "  Lib() { ahc_lib_init(); }" & LF
            & "  Lib(const Lib &) = delete;" & LF
@@ -111,17 +110,23 @@ package body AHC.Bindgen is
                Append (Call, ")");
                case F.Res is
                   when M_Unit =>
-                     Append (R, "    " & Call & ";" & LF);
+                     Append (R, "    " & Call & ";" & LF
+                             & "    check_();" & LF);
                   when M_Bool =>
-                     Append (R, "    return " & Call & " != 0;"
-                             & LF);
+                     Append (R, "    int r_ = " & Call & ";" & LF
+                             & "    check_();" & LF
+                             & "    return r_ != 0;" & LF);
                   when M_String =>
                      Append (R, "    char *r_ = " & Call & ";" & LF
+                             & "    check_();" & LF
                              & "    std::string s_(r_);" & LF
                              & "    std::free(r_);" & LF
                              & "    return s_;" & LF);
                   when others =>
-                     Append (R, "    return " & Call & ";" & LF);
+                     Append (R, "    " & T (F.Res, True) & " r_ = "
+                             & Call & ";" & LF
+                             & "    check_();" & LF
+                             & "    return r_;" & LF);
                end case;
                Append (R, "  }" & LF & LF);
             end;
@@ -173,6 +178,8 @@ package body AHC.Bindgen is
            & " -C link-arg=-lgc" & LF
            & "// Call init() once, from the one thread that makes"
            & " all calls." & LF
+           & "// Runtime errors inside the library surface as"
+           & " Err(String)." & LF
            & "#![allow(dead_code)]" & LF
            & "#![allow(unused_imports)]" & LF
            & "#![allow(non_snake_case)]" & LF & LF
@@ -183,6 +190,7 @@ package body AHC.Bindgen is
            & "    use super::*;" & LF
            & "    extern ""C"" {" & LF
            & "        pub fn ahc_lib_init();" & LF
+           & "        pub fn ahc_last_error() -> *const c_char;" & LF
            & "        pub fn free(p: *mut c_void);" & LF);
          for F of Exports loop
             declare
@@ -203,7 +211,18 @@ package body AHC.Bindgen is
          end loop;
          Append (R, "    }" & LF & "}" & LF & LF
                  & "pub fn init() { unsafe { raw::ahc_lib_init() } }"
-                 & LF & LF);
+                 & LF & LF
+                 & "fn err_check() -> Result<(), String> {" & LF
+                 & "    unsafe {" & LF
+                 & "        let e = raw::ahc_last_error();" & LF
+                 & "        if *e == 0 {" & LF
+                 & "            Ok(())" & LF
+                 & "        } else {" & LF
+                 & "            Err(CStr::from_ptr(e)"
+                 & ".to_string_lossy().into_owned())" & LF
+                 & "        }" & LF
+                 & "    }" & LF
+                 & "}" & LF & LF);
          for F of Exports loop
             declare
                N : constant Natural := Natural (F.Args.Length);
@@ -216,16 +235,14 @@ package body AHC.Bindgen is
                           & (if F.Args (I) = M_String then "&str"
                              else Pub (F.Args (I))));
                end loop;
-               Append (R, ")");
-               if F.Res /= M_Unit then
-                  Append (R, " -> " & Pub (F.Res));
-               end if;
-               Append (R, " {" & LF);
+               Append (R, ") -> Result<" & Pub (F.Res)
+                       & ", String> {" & LF);
                for I in 1 .. N loop
                   if F.Args (I) = M_String then
                      Append (R, "    let " & Arg (I - 1)
                              & "_c = CString::new(" & Arg (I - 1)
-                             & ").expect(""interior NUL"");" & LF);
+                             & ").map_err(|_| ""interior NUL"""
+                             & ".to_string())?;" & LF);
                   end if;
                end loop;
                Append (Call, "raw::" & CN (F) & "(");
@@ -245,21 +262,30 @@ package body AHC.Bindgen is
                Append (R, "    unsafe {" & LF);
                case F.Res is
                   when M_Unit =>
-                     Append (R, "        " & Call & ";" & LF);
+                     Append (R, "        " & Call & ";" & LF
+                             & "        err_check()?;" & LF
+                             & "        Ok(())" & LF);
                   when M_Bool =>
-                     Append (R, "        " & Call & " != 0" & LF);
+                     Append (R, "        let r_ = " & Call & ";" & LF
+                             & "        err_check()?;" & LF
+                             & "        Ok(r_ != 0)" & LF);
                   when M_Int | M_Char =>
-                     Append (R, "        " & Call & " as i64" & LF);
+                     Append (R, "        let r_ = " & Call & ";" & LF
+                             & "        err_check()?;" & LF
+                             & "        Ok(r_ as i64)" & LF);
                   when M_String =>
                      Append (R, "        let r_ = " & Call & ";" & LF
+                             & "        err_check()?;" & LF
                              & "        let s_ = CStr::from_ptr(r_)"
                              & ".to_string_lossy().into_owned();"
                              & LF
                              & "        raw::free(r_ as *mut "
                              & "c_void);" & LF
-                             & "        s_" & LF);
+                             & "        Ok(s_)" & LF);
                   when others =>
-                     Append (R, "        " & Call & LF);
+                     Append (R, "        let r_ = " & Call & ";" & LF
+                             & "        err_check()?;" & LF
+                             & "        Ok(r_)" & LF);
                end case;
                Append (R, "    }" & LF & "}" & LF & LF);
             end;
@@ -330,10 +356,18 @@ package body AHC.Bindgen is
            & "*/" & LF
            & "import ""C""" & LF & LF
            & "import (" & LF
+           & "        ""errors""" & LF
            & "        ""runtime""" & LF
            & "        ""unsafe""" & LF
            & ")" & LF & LF
            & "var _ = unsafe.Pointer(nil)" & LF & LF
+           & "func lastErr() error {" & LF
+           & "        s := C.GoString(C.ahc_last_error())" & LF
+           & "        if s == """" {" & LF
+           & "                return nil" & LF
+           & "        }" & LF
+           & "        return errors.New(s)" & LF
+           & "}" & LF & LF
            & "var reqs = make(chan func())" & LF & LF
            & "func init() {" & LF
            & "        ready := make(chan struct{})" & LF
@@ -369,14 +403,16 @@ package body AHC.Bindgen is
                   Append (R, (if I > 1 then ", " else "")
                           & Arg (I - 1) & " " & Pub (F.Args (I)));
                end loop;
-               Append (R, ")");
-               if F.Res /= M_Unit then
-                  Append (R, " " & Pub (F.Res));
+               if F.Res = M_Unit then
+                  Append (R, ") error {" & LF);
+               else
+                  Append (R, ") (" & Pub (F.Res) & ", error) {"
+                          & LF);
                end if;
-               Append (R, " {" & LF);
                if F.Res /= M_Unit then
                   Append (R, "        var r " & Pub (F.Res) & LF);
                end if;
+               Append (R, "        var e error" & LF);
                Append (R, "        do(func() {" & LF);
                for I in 1 .. N loop
                   if F.Args (I) = M_String then
@@ -393,20 +429,28 @@ package body AHC.Bindgen is
                Append (Call, ")");
                case F.Res is
                   when M_Unit =>
-                     Append (R, "                " & Call & LF);
+                     Append (R, "                " & Call & LF
+                             & "                e = lastErr()" & LF);
                   when M_Bool =>
-                     Append (R, "                r = " & Call
-                             & " != 0" & LF);
+                     Append (R, "                r_ := " & Call & LF
+                             & "                e = lastErr()" & LF
+                             & "                r = r_ != 0" & LF);
                   when M_String =>
                      Append (R, "                p_ := " & Call & LF
-                             & "                r = C.GoString(p_)" & LF
-                             & "                C.free(unsafe.Pointer"
-                             & "(p_))" & LF);
+                             & "                e = lastErr()" & LF
+                             & "                if e == nil {" & LF
+                             & "                        r = "
+                             & "C.GoString(p_)" & LF
+                             & "                        C.free("
+                             & "unsafe.Pointer(p_))" & LF
+                             & "                }" & LF);
                   when M_Ptr =>
-                     Append (R, "                r = " & Call & LF);
+                     Append (R, "                r = " & Call & LF
+                             & "                e = lastErr()" & LF);
                   when others =>
                      Append (R, "                r = " & Pub (F.Res)
-                             & "(" & Call & ")" & LF);
+                             & "(" & Call & ")" & LF
+                             & "                e = lastErr()" & LF);
                end case;
                for I in 1 .. N loop
                   if F.Args (I) = M_String then
@@ -415,8 +459,10 @@ package body AHC.Bindgen is
                   end if;
                end loop;
                Append (R, "        })" & LF);
-               if F.Res /= M_Unit then
-                  Append (R, "        return r" & LF);
+               if F.Res = M_Unit then
+                  Append (R, "        return e" & LF);
+               else
+                  Append (R, "        return r, e" & LF);
                end if;
                Append (R, "}" & LF & LF);
             end;
@@ -454,6 +500,8 @@ package body AHC.Bindgen is
            & " -lgc (with the collector's -L path)." & LF
            & "-- Call ahcLibInit once, from the one thread that"
            & " makes all calls." & LF
+           & "-- Runtime errors inside the library surface as"
+           & " IOError (userError)." & LF
            & "{-# LANGUAGE ForeignFunctionInterface #-}" & LF
            & "module AhcLib where" & LF & LF
            & "import Data.Int" & LF
@@ -463,89 +511,91 @@ package body AHC.Bindgen is
            & "import Foreign.Marshal.Alloc (free)" & LF
            & "import Foreign.Ptr" & LF & LF
            & "foreign import ccall ""ahc_lib_init"" ahcLibInit"
-           & " :: IO ()" & LF & LF);
+           & " :: IO ()" & LF & LF
+           & "foreign import ccall ""ahc_last_error"""
+           & " c_ahcLastError :: IO CString" & LF & LF
+           & "ahcCheck :: IO ()" & LF
+           & "ahcCheck = do" & LF
+           & "  e <- c_ahcLastError" & LF
+           & "  s <- peekCString e" & LF
+           & "  if null s then return ()"
+           & " else ioError (userError s)" & LF & LF);
          for F of Exports loop
             declare
                N : constant Natural := Natural (F.Args.Length);
-               Wrap : constant Boolean :=
-                 Has_String (F) or else Has_Bool (F);
-               Raw_Name : constant String :=
-                 (if Wrap then "c_" & CN (F) else CN (F));
-               Raw_IO : constant Boolean := F.Res_IO or else Wrap;
+               Raw_Name : constant String := "c_" & CN (F);
             begin
                Append (R, "foreign import ccall """ & CN (F)
                        & """ " & Raw_Name & LF & "  :: ");
                for I in 1 .. N loop
                   Append (R, Raw (F.Args (I)) & " -> ");
                end loop;
-               Append (R, (if Raw_IO then "IO (" & Raw (F.Res) & ")"
-                           else Raw (F.Res)) & LF);
-               if Wrap then
-                  Append (R, CN (F) & " :: ");
+               Append (R, "IO (" & Raw (F.Res) & ")" & LF);
+               Append (R, CN (F) & " :: ");
+               for I in 1 .. N loop
+                  Append (R,
+                          (case F.Args (I) is
+                             when M_String => "String",
+                             when M_Bool => "Bool",
+                             when others => Raw (F.Args (I)))
+                          & " -> ");
+               end loop;
+               Append (R, "IO ("
+                       & (case F.Res is
+                            when M_String => "String",
+                            when M_Bool => "Bool",
+                            when others => Raw (F.Res))
+                       & ")" & LF);
+               Append (R, CN (F));
+               for I in 1 .. N loop
+                  Append (R, " " & Arg (I - 1));
+               end loop;
+               Append (R, " =" & LF);
+               declare
+                  Ind : Unbounded_String :=
+                    To_Unbounded_String ("  ");
+                  Call : Unbounded_String;
+               begin
                   for I in 1 .. N loop
-                     Append (R,
-                             (case F.Args (I) is
-                                when M_String => "String",
-                                when M_Bool => "Bool",
-                                when others => Raw (F.Args (I)))
-                             & " -> ");
+                     if F.Args (I) = M_String then
+                        Append (R, Ind & "withCString "
+                                & Arg (I - 1) & " (\c"
+                                & Arg (I - 1) & " -> " & LF);
+                        Append (Ind, "  ");
+                     end if;
                   end loop;
-                  Append (R, "IO ("
-                          & (case F.Res is
-                               when M_String => "String",
-                               when M_Bool => "Bool",
-                               when others => Raw (F.Res))
-                          & ")" & LF);
-                  Append (R, CN (F));
+                  Append (Call, Raw_Name);
                   for I in 1 .. N loop
-                     Append (R, " " & Arg (I - 1));
+                     Append (Call, " "
+                             & (case F.Args (I) is
+                                  when M_String =>
+                                    "c" & Arg (I - 1),
+                                  when M_Bool =>
+                                    "(if " & Arg (I - 1)
+                                    & " then 1 else 0)",
+                                  when others => Arg (I - 1)));
                   end loop;
-                  Append (R, " =" & LF);
-                  declare
-                     Ind : Unbounded_String :=
-                       To_Unbounded_String ("  ");
-                     Call : Unbounded_String;
-                  begin
-                     for I in 1 .. N loop
-                        if F.Args (I) = M_String then
-                           Append (R, Ind & "withCString "
-                                   & Arg (I - 1) & " (\c"
-                                   & Arg (I - 1) & " -> " & LF);
-                           Append (Ind, "  ");
-                        end if;
-                     end loop;
-                     Append (Call, Raw_Name);
-                     for I in 1 .. N loop
-                        Append (Call, " "
-                                & (case F.Args (I) is
-                                     when M_String =>
-                                       "c" & Arg (I - 1),
-                                     when M_Bool =>
-                                       "(if " & Arg (I - 1)
-                                       & " then 1 else 0)",
-                                     when others => Arg (I - 1)));
-                     end loop;
-                     Append (R, Ind & "do r_ <- " & Call & LF);
-                     case F.Res is
-                        when M_String =>
-                           Append (R, Ind & "   s_ <- peekCString"
-                                   & " r_" & LF
-                                   & Ind & "   free r_" & LF
-                                   & Ind & "   return s_");
-                        when M_Bool =>
-                           Append (R, Ind
-                                   & "   return (r_ /= 0)");
-                        when others =>
-                           Append (R, Ind & "   return r_");
-                     end case;
-                     for I in 1 .. N loop
-                        if F.Args (I) = M_String then
-                           Append (R, ")");
-                        end if;
-                     end loop;
-                     Append (R, "" & LF);
-                  end;
-               end if;
+                  Append (R, Ind & "do r_ <- " & Call & LF);
+                  Append (R, Ind & "   ahcCheck" & LF);
+                  case F.Res is
+                     when M_String =>
+                        Append (R, Ind & "   s_ <- peekCString"
+                                & " r_" & LF
+                                & Ind & "   free r_" & LF
+                                & Ind & "   return s_");
+                     when M_Bool =>
+                        Append (R, Ind
+                                & "   return (r_ /= 0)");
+                     when others =>
+                        Append (R, Ind & "   return r_");
+                  end case;
+                  for I in 1 .. N loop
+                     if F.Args (I) = M_String then
+                        Append (R, ")");
+                     end if;
+                  end loop;
+                  Append (R, "" & LF);
+               end;
                Append (R, "" & LF);
             end;
          end loop;

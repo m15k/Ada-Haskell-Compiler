@@ -1,5 +1,23 @@
 # AHC Changelog
 
+## Unreleased
+
+Boundary errors respect the embedding (M98): while a foreign-export
+entry function is on the stack, a runtime error - error, a
+pattern-match failure, an FFI range death, a contract or refinement
+violation - unwinds (setjmp/longjmp, 8-deep frame stack) to that
+entry instead of killing the host process; the entry returns 0/NULL
+and ahc_last_error() carries the message until the next call.
+Ordinary AHC programs are untouched: outside an armed entry ahc_die
+prints and exits as before, and every exit path in the runtime
+(error, contract claims, openFile, closed handles, refinement
+violations) now routes through the same choke point with its
+message format preserved byte-for-byte. The generated bindings
+speak each language's idiom: C++ throws std::runtime_error, Rust
+returns Result<T, String>, Go returns (T, error), GHC raises
+IOError. tests/export gains a `boom` export; every spoke example
+now errors, catches, and keeps computing.
+
 ## v1.5 (2026-07-26)
 
 The FFI release (M89-M97): a complete bidirectional foreign

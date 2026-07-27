@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <setjmp.h>
 
 typedef enum {
   AHC_THUNK, AHC_BLACKHOLE, AHC_FUN, AHC_CON, AHC_IND,
@@ -75,6 +76,14 @@ AhcNode *ahc_wrap_fun(AhcNode *clos, AhcNode **slots, void **tramps,
 
 void ahc_run_main(AhcNode *main_io);           /* execute IO action   */
 AhcNode *ahc_run_io(AhcNode *io);              /* run IO, return node */
+
+/* Boundary error protocol (foreign-export entry functions): the
+   entry does `if (setjmp(*ahc_err_frame())) return 0;`, evaluates,
+   then ahc_err_disarm() before returning. A runtime error inside
+   the armed region lands in ahc_last_error() ("" = no error). */
+jmp_buf *ahc_err_frame(void);
+void ahc_err_disarm(void);
+const char *ahc_last_error(void);
 void ahc_die(const char *msg) __attribute__((noreturn));
 
 /* Wired primitives (globals initialized by ahc_rts_init). */

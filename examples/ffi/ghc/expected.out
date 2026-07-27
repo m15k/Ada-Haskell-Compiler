@@ -2,3 +2,5 @@ square(12) = 144
 fib(90) = 2880067194370816120
 hello, GHC!
 sumTo(100) = 5050
+caught: user error (error: boom: 7)
+square(6) = 36

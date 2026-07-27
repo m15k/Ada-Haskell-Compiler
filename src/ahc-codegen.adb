@@ -1194,7 +1194,12 @@ package body AHC.CodeGen is
          LF : Character renames ASCII.LF;
       begin
          Append (Fns, Export_Proto (F) & " {" & LF);
-         Append (Fns, "  AhcNode *r = "
+         --  Armed frame: a runtime error unwinds here and becomes
+         --  ahc_last_error() plus a zero result, not process exit.
+         Append (Fns, "  AhcNode *r;" & LF
+                 & "  if (setjmp(*ahc_err_frame())) return"
+                 & (if F.Res = M_Unit then "" else " 0") & ";" & LF);
+         Append (Fns, "  r = "
                  & Var_Ref (F.Binder, Scope_Maps.Empty_Map) & ";"
                  & LF);
          for I in 1 .. NArgs loop
@@ -1225,25 +1230,33 @@ package body AHC.CodeGen is
          end if;
          case F.Res is
             when M_Unit =>
-               Append (Fns, "  (void)r;" & LF);
+               Append (Fns, "  (void)r;" & LF
+                       & "  ahc_err_disarm();" & LF);
             when M_Int =>
                Append (Fns, "  if (r->tag != AHC_INT) ahc_die(""FFI: "
                        & "Int result out of range"");" & LF
-                       & "  return r->u.i;" & LF);
+                       & "  { long v_ = r->u.i; ahc_err_disarm(); "
+                       & "return v_; }" & LF);
             when M_Double =>
-               Append (Fns, "  return r->u.d;" & LF);
+               Append (Fns, "  { double v_ = r->u.d; "
+                       & "ahc_err_disarm(); return v_; }" & LF);
             when M_Char =>
-               Append (Fns, "  return r->u.c;" & LF);
+               Append (Fns, "  { long v_ = r->u.c; "
+                       & "ahc_err_disarm(); return v_; }" & LF);
             when M_Bool =>
-               Append (Fns, "  return r->u.con.contag == 2;" & LF);
+               Append (Fns, "  { int v_ = r->u.con.contag == 2; "
+                       & "ahc_err_disarm(); return v_; }" & LF);
             when M_String =>
-               Append (Fns, "  return ahc_marshal_cstring(r);" & LF);
+               Append (Fns, "  { char *v_ = ahc_marshal_cstring(r); "
+                       & "ahc_err_disarm(); return v_; }" & LF);
             when M_Ptr =>
-               Append (Fns, "  return r->u.p;" & LF);
+               Append (Fns, "  { void *v_ = r->u.p; "
+                       & "ahc_err_disarm(); return v_; }" & LF);
             when Fixed_Marshal =>
                Append (Fns, Fix_Check (F.Res, "r", "result")
-                       & "  return (" & C_Type (F.Res)
-                       & ")r->u.i;" & LF);
+                       & "  { " & C_Type (F.Res) & " v_ = ("
+                       & C_Type (F.Res) & ")r->u.i; "
+                       & "ahc_err_disarm(); return v_; }" & LF);
          end case;
          Append (Fns, "}" & LF & LF);
       end Emit_Export;
@@ -1498,6 +1511,13 @@ package body AHC.CodeGen is
                  & "void ahc_lib_init(void);" & ASCII.LF
                  & ASCII.LF);
       end if;
+      Append (Exports_H,
+              "/* Error protocol: every entry clears this; on a"
+              & " runtime error the" & ASCII.LF
+              & "   entry returns 0/NULL and this holds the message"
+              & " until the next call. */" & ASCII.LF
+              & "const char *ahc_last_error(void);" & ASCII.LF
+              & ASCII.LF);
       for F of M.Foreign_Exports loop
          Append (Exports_H, Export_Proto (F) & ";" & ASCII.LF);
       end loop;

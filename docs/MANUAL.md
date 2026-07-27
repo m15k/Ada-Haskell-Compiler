@@ -972,6 +972,22 @@ host's stack raised. `scripts/run_export.sh` keeps the round trip
 green: it builds `tests/export/MathLib.hs`, compiles a C `main`
 against the header, and diffs the output.
 
+Errors respect the embedding. While an exported entry is on the
+stack, a runtime error — `error`, a pattern-match failure, an FFI
+range death, a contract or refinement violation — unwinds to that
+entry instead of killing the host process: the entry returns
+0/NULL and `ahc_last_error()` carries the message until the next
+call (every entry clears it). In an ordinary AHC *program* nothing
+changes — outside an armed entry, `ahc_die` prints and exits
+exactly as before, so every golden stays byte-identical. The
+generated bindings turn the protocol into each language's own
+idiom: C++ throws `std::runtime_error`, Rust returns
+`Result<T, String>`, Go returns `(T, error)`, and the GHC binding
+raises `IOError`. One honest caveat: a thunk that was mid-
+evaluation when the error struck stays blackholed, so re-forcing
+*that value* reports `<<loop>>` — the runtime itself continues
+fine, as the examples demonstrate by erroring and then computing.
+
 ### The FFI: bindgen and the spokes
 
 The C ABI is the hub; `ahc bindgen` generates the spokes:

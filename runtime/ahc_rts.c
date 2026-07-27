@@ -4,7 +4,6 @@
 #include <math.h>
 #include <limits.h>
 #include <string.h>
-#include <string.h>
 
 #ifdef AHC_USE_BOEHM
 #include <gc.h>
@@ -13,11 +12,79 @@
 #define AHC_ALLOC(n) malloc(n)
 #endif
 
+/* Boundary error recovery: while a foreign-export entry function is
+   on the stack (an "armed" frame), a runtime error unwinds to that
+   entry and becomes a reported error instead of killing the host
+   process. Outside any armed frame - an ordinary AHC program -
+   ahc_die exits as it always has. */
+
+#define AHC_ERR_DEPTH 8
+
+static jmp_buf ahc_err_stack[AHC_ERR_DEPTH];
+static int ahc_err_depth = 0;
+static char ahc_err_msg[512];
+
+const char *ahc_last_error(void) {
+  return ahc_err_msg;
+}
+
+jmp_buf *ahc_err_frame(void) {
+  if (ahc_err_depth == AHC_ERR_DEPTH)
+    ahc_die("FFI: entry functions nested too deeply");
+  ahc_err_msg[0] = 0;
+  return &ahc_err_stack[ahc_err_depth++];
+}
+
+void ahc_err_disarm(void) {
+  if (ahc_err_depth > 0) ahc_err_depth--;
+}
+
+static void die_unwind_if_armed(const char *msg) {
+  if (ahc_err_depth > 0) {
+    size_t i = 0;
+    while (msg[i] && i + 1 < sizeof ahc_err_msg) {
+      ahc_err_msg[i] = msg[i];
+      i++;
+    }
+    ahc_err_msg[i] = 0;
+    longjmp(ahc_err_stack[--ahc_err_depth], 1);
+  }
+}
+
 void ahc_die(const char *msg) {
+  die_unwind_if_armed(msg);
   fputs("ahc: ", stderr);
   fputs(msg, stderr);
   fputc('\n', stderr);
   exit(1);
+}
+
+/* Same, but the exiting print carries no "ahc: " prefix (the
+   refinement-violation message format). */
+static void ahc_die_raw(const char *msg) __attribute__((noreturn));
+static void ahc_die_raw(const char *msg) {
+  die_unwind_if_armed(msg);
+  fputs(msg, stderr);
+  fputc('\n', stderr);
+  exit(1);
+}
+
+/* Die with prefix + a Haskell string as the message. */
+static void die_msg_list(const char *prefix, AhcNode *cell)
+  __attribute__((noreturn));
+static void die_msg_list(const char *prefix, AhcNode *cell) {
+  char buf[512];
+  size_t n = 0;
+  while (*prefix && n + 1 < sizeof buf)
+    buf[n++] = *prefix++;
+  cell = ahc_eval(cell);
+  while (cell->tag == AHC_CON && cell->u.con.contag == 2) {
+    if (n + 1 < sizeof buf)
+      buf[n++] = (char)ahc_eval(cell->u.con.fields[0])->u.c;
+    cell = ahc_eval(cell->u.con.fields[1]);
+  }
+  buf[n] = 0;
+  ahc_die(buf);
 }
 
 static AhcNode *alloc_node(void) {
@@ -1063,15 +1130,8 @@ static AhcNode *p_seq(AhcNode *a, AhcNode *b) {
 }
 
 static AhcNode *p_error(AhcNode *a) {
-  AhcNode *cell = ahc_eval(a);
   fflush(stdout);   /* output already produced must precede the die */
-  fputs("ahc: error: ", stderr);
-  while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
-    fputc((int)ahc_eval(cell->u.con.fields[0])->u.c, stderr);
-    cell = ahc_eval(cell->u.con.fields[1]);
-  }
-  fputc('\n', stderr);
-  exit(1);
+  die_msg_list("error: ", a);
 }
 
 /* ----- IO: an action is a function World -> result ---------------- */
@@ -1092,10 +1152,7 @@ static void put_list(AhcNode *s, FILE *out) {
 static AhcNode *p_check_claim(AhcNode *b, AhcNode *msg, AhcNode *v) {
   if (ahc_eval(b)->u.con.contag == FALSE_TAG) {
     fflush(stdout);
-    fputs("ahc: ", stderr);
-    put_list(msg, stderr);
-    fputc('\n', stderr);
-    exit(1);
+    die_msg_list("", msg);
   }
   return v;
 }
@@ -1433,9 +1490,10 @@ static AhcNode *io_readfile(AhcNode **env, AhcNode *w) {
   sb_ch(&pb, 0);
   f = fopen(pb.p, "r");
   if (!f) {
+    char eb[512];
     fflush(stdout);
-    fprintf(stderr, "ahc: %s: openFile: does not exist\n", pb.p);
-    exit(1);
+    snprintf(eb, sizeof eb, "%s: openFile: does not exist", pb.p);
+    ahc_die(eb);
   }
   free(pb.p);
   while ((ch = fgetc(f)) != EOF) {
@@ -1483,9 +1541,10 @@ static FILE *ahc_handles[AHC_MAX_HANDLES];
 static FILE *ahc_handle(long i, const char *what) {
   FILE *f = (i >= 0 && i < AHC_MAX_HANDLES) ? ahc_handles[i] : NULL;
   if (!f) {
+    char eb[512];
     fflush(stdout);
-    fprintf(stderr, "ahc: %s: handle is closed\n", what);
-    exit(1);
+    snprintf(eb, sizeof eb, "%s: handle is closed", what);
+    ahc_die(eb);
   }
   return f;
 }
@@ -1502,10 +1561,11 @@ static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
   if (m < 0 || m > 3) ahc_die("openFile: bad IOMode");
   f = fopen(pb.p, modes[m]);
   if (!f) {
+    char eb[512];
     fflush(stdout);
-    fprintf(stderr, "ahc: %s: openFile: %s\n", pb.p,
-            m == 0 ? "does not exist" : "cannot open");
-    exit(1);
+    snprintf(eb, sizeof eb, "%s: openFile: %s", pb.p,
+             m == 0 ? "does not exist" : "cannot open");
+    ahc_die(eb);
   }
   free(pb.p);
   for (i = 3; i < AHC_MAX_HANDLES && ahc_handles[i]; i++)
@@ -2025,10 +2085,12 @@ static AhcNode *p_check_range_d(AhcNode *lo, AhcNode *hi, AhcNode *x) {
   double h = ahc_eval(hi)->u.d;
   AhcNode *v = ahc_eval(x);
   if (v->u.d < l || v->u.d > h) {
+    char eb[512];
     fflush(stdout);
-    fprintf(stderr, "refinement violation: %g not in %g .. %g\n",
-            v->u.d, l, h);
-    exit(1);
+    snprintf(eb, sizeof eb,
+             "refinement violation: %g not in %g .. %g",
+             v->u.d, l, h);
+    ahc_die_raw(eb);
   }
   return v;
 }
@@ -2058,18 +2120,20 @@ static AhcNode *p_check_pred(AhcNode *p, AhcNode *x) {
   AhcNode *v = ahc_eval(x);
   AhcNode *r = ahc_eval(ahc_apply(p, v));
   if (r->u.con.contag == FALSE_TAG) {
+    char eb[512];
     fflush(stdout);
     if (v->tag == AHC_INT)
-      fprintf(stderr, "refinement violation: predicate rejected %ld\n",
-              v->u.i);
+      snprintf(eb, sizeof eb,
+               "refinement violation: predicate rejected %ld",
+               v->u.i);
     else if (v->tag == AHC_CHAR)
-      fprintf(stderr,
-              "refinement violation: predicate rejected '%c'\n",
-              (char)v->u.c);
+      snprintf(eb, sizeof eb,
+               "refinement violation: predicate rejected '%c'",
+               (char)v->u.c);
     else
-      fprintf(stderr,
-              "refinement violation: predicate rejected the value\n");
-    exit(1);
+      snprintf(eb, sizeof eb,
+               "refinement violation: predicate rejected the value");
+    ahc_die_raw(eb);
   }
   return v;
 }
@@ -2089,10 +2153,12 @@ static AhcNode *p_check_range(AhcNode *lo, AhcNode *hi, AhcNode *x) {
   AhcNode *v = ev->tag == AHC_BIGINT
                  ? ahc_mk_int(long_clamp(ev)) : ev;
   if (v->u.i < l || v->u.i > h) {
+    char eb[512];
     fflush(stdout);
-    fprintf(stderr, "refinement violation: %ld not in %ld .. %ld\n",
-            v->u.i, l, h);
-    exit(1);
+    snprintf(eb, sizeof eb,
+             "refinement violation: %ld not in %ld .. %ld",
+             v->u.i, l, h);
+    ahc_die_raw(eb);
   }
   return v;
 }

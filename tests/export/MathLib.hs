@@ -18,3 +18,9 @@ greet name = "hello, " ++ name ++ "!"
 foreign export ccall sumTo :: Int -> IO Int
 sumTo :: Int -> IO Int
 sumTo n = return (sum [1 .. n])
+
+-- Boundary error propagation: a runtime error inside the library
+-- becomes ahc_last_error() at the entry, not a host-process exit.
+foreign export ccall boom :: Int -> Int
+boom :: Int -> Int
+boom n = if n > 0 then error ("boom: " ++ show n) else n
