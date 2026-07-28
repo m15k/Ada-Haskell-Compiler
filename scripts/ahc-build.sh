@@ -29,19 +29,32 @@ builddir="$out.build"
 cache="$builddir/cache"
 mkdir -p "$cache"
 
+# AHC_GC selects the memory manager (collector-design-note.md):
+#   boehm (default) - the shipped collector
+#   own             - the campaign's block allocator (C1: leak mode)
+#   none            - plain malloc, no collection
 gc_cflags=""
 gc_ldflags=""
-if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
-  # Green threads need the coroutine API (GC_set_stackbottom,
-  # gc >= 8.2); an older collector falls back to no-GC rather than
-  # miscompile the runtime.
-  if grep -qs GC_set_stackbottom "$prefix/include/gc/gc.h"; then
-    # GC_THREADS: B1 spark workers allocate; gc.h also intercepts
-    # pthread_create so workers register with the collector.
-    gc_cflags="-I$prefix/include -DAHC_USE_BOEHM -DGC_THREADS"
-    gc_ldflags="-L$prefix/lib -lgc"
-  fi
-fi
+case "${AHC_GC:-boehm}" in
+  own)
+    gc_cflags="-DAHC_GC_OWN"
+    ;;
+  none)
+    ;;
+  *)
+    if prefix=$(brew --prefix bdw-gc 2>/dev/null) && [ -d "$prefix" ]; then
+      # Green threads need the coroutine API (GC_set_stackbottom,
+      # gc >= 8.2); an older collector falls back to no-GC rather
+      # than miscompile the runtime.
+      if grep -qs GC_set_stackbottom "$prefix/include/gc/gc.h"; then
+        # GC_THREADS: B1 spark workers allocate; gc.h also
+        # intercepts pthread_create so workers register.
+        gc_cflags="-I$prefix/include -DAHC_USE_BOEHM -DGC_THREADS"
+        gc_ldflags="-L$prefix/lib -lgc"
+      fi
+    fi
+    ;;
+esac
 
 # FFI plumbing: AHC_CFLAGS/AHC_LDFLAGS come from the environment;
 # {-# OPTIONS_AHC_LINK ... #-} pragmas arrive via OUT.build/link_flags.

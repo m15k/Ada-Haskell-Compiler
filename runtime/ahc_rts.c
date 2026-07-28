@@ -21,7 +21,13 @@
 #include <limits.h>
 #include <string.h>
 
-#ifdef AHC_USE_BOEHM
+#if defined(AHC_GC_OWN)
+/* The collector campaign's own allocator (C1, leak mode -
+   docs/collector-design-note.md). Kinds: 0 node, 1 ptr-array,
+   2 misc, 3 large. */
+static void *own_alloc(int kind, size_t n);
+#define AHC_ALLOC(n) own_alloc(2, (n))
+#elif defined(AHC_USE_BOEHM)
 #include <gc.h>
 #define AHC_ALLOC(n) GC_MALLOC(n)
 #else
@@ -156,6 +162,12 @@ static void sched_switch(int requeue_self) {
   if (!nxt)
     ahc_die("deadlock: all green threads blocked");
   if (nxt == self) return;
+#ifdef AHC_GC_OWN
+  /* The own collector reads parked extents directly; no
+     registration calls, just the bookkeeping. */
+  if (self->state < 2)
+    self->parked_lo = (char *)&self - 1024;    /* slack below sp */
+#endif
 #ifdef AHC_USE_BOEHM
   {
     struct GC_stack_base sb;
@@ -235,6 +247,240 @@ static void die_msg_list(const char *prefix, AhcNode *cell) {
   ahc_die(buf);
 }
 
+#ifdef AHC_GC_OWN
+/* ----- the own allocator, stage C1 (leak mode) -------------------
+   docs/collector-design-note.md section 2. One large virtual
+   reservation carved into 64KB-aligned blocks; each block header
+   records kind and size class (C2's tracer will read both, and
+   block alignment makes pointer-to-header a mask). Every mutator
+   thread bump-allocates from its own active block per kind and
+   class - the fast path is three instructions and takes no lock;
+   the pool lock is paid once per 64KB. No collection yet: C1
+   exists to prove the allocation story (parallel scaling AND
+   sequential parity) before a single mark bit exists. Fresh
+   commits are zero pages and leak mode never recycles, so the
+   zeroed-memory invariant holds for free. */
+
+#define OWN_BLOCK (64u * 1024)
+#define OWN_HDR 64
+#define OWN_CHUNK (16u * 1024 * 1024)
+#define OWN_RESERVE (64ul << 30)        /* virtual; committed lazily */
+#define OWN_MAX_SMALL 128
+#define OWN_NCLASS 16
+#define OWN_NKIND 4                     /* node, ptrarr, misc, large */
+
+typedef struct OwnBlock {
+  uint32_t kind;
+  uint32_t size_class;                  /* object bytes; large: total */
+  uint32_t bump;                        /* next free offset */
+  uint32_t nblocks;                     /* run length (large > 1) */
+  uint32_t gc_active;                   /* being bumped: sweep skips */
+  uint32_t free_count;                  /* slots on free_head */
+  void *free_head;                      /* sweep-built slot list */
+  struct OwnBlock *next;
+} OwnBlock;
+
+static char *own_base, *own_commit, *own_end;
+static OwnBlock *own_pool;           /* fed by the C2 sweep */
+static pthread_mutex_t own_mx = PTHREAD_MUTEX_INITIALIZER;
+static long own_blocks_out[OWN_NKIND];   /* __atomic counters */
+static __thread OwnBlock *own_active[3][OWN_NCLASS];
+/* Each thread carves blocks from a privately-held chunk, so the
+   global lock (and the mprotect inside it) is paid once per 16MB,
+   not once per block - the pool mutex showed up in the first C1
+   profile at 4 workers. */
+static __thread char *own_chunk_ptr, *own_chunk_end;
+
+/* C2 side tables. Block states let the conservative filter and
+   the sweep interpret any candidate address without trusting the
+   64-byte headers (a large run's interior blocks hold payload
+   where a header would be). The mark bitmap is one bit per 8
+   heap bytes, uniform across size classes, committed in lockstep
+   with heap chunks (1/64 of the chunk size - 1.6%). */
+enum {
+  OWN_B_VIRGIN = 0,      /* never handed out (or thread-chunk) */
+  OWN_B_SMALL, OWN_B_LARGE_HEAD, OWN_B_LARGE_TAIL, OWN_B_FREE
+};
+#define OWN_MAX_BLOCKS (OWN_RESERVE / OWN_BLOCK)
+static unsigned char *own_bstate;        /* one byte per block */
+static unsigned char *own_marks;         /* 1 bit / 8 heap bytes */
+static OwnBlock *own_partial[3][OWN_NCLASS];  /* free-slot blocks */
+static __thread void *own_free_tls[3][OWN_NCLASS];
+static long own_since_gc;                /* bytes handed out */
+static long own_live_bytes;              /* after last sweep */
+static long own_gc_count;
+static int own_in_gc;
+
+static void own_maybe_collect(void);     /* fwd, end of file */
+static void own_safepoint(void);         /* fwd, end of file */
+
+static size_t own_block_index(void *p) {
+  return (size_t)((char *)p - own_base) / OWN_BLOCK;
+}
+
+static void own_reserve(void) {
+  size_t sz = OWN_RESERVE + OWN_BLOCK;
+  char *m = (char *)mmap(NULL, sz, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (m == MAP_FAILED) ahc_die("own gc: cannot reserve the heap");
+  own_base = (char *)(((uintptr_t)m + OWN_BLOCK - 1)
+                      & ~(uintptr_t)(OWN_BLOCK - 1));
+  own_commit = own_base;
+  own_end = m + sz;
+  own_bstate = (unsigned char *)calloc(OWN_MAX_BLOCKS, 1);
+  if (!own_bstate) ahc_die("own gc: cannot allocate block table");
+  own_marks = (unsigned char *)mmap(NULL, OWN_RESERVE / 64,
+                                    PROT_NONE,
+                                    MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (own_marks == MAP_FAILED)
+    ahc_die("own gc: cannot reserve the mark bitmap");
+}
+
+/* Both called under own_mx. */
+static char *own_commit_span(size_t sz) {
+  char *p;
+  if (!own_base) own_reserve();
+  if (own_commit + sz > own_end)
+    ahc_die("own gc: reservation exhausted");
+  if (mprotect(own_commit, sz, PROT_READ | PROT_WRITE) != 0)
+    ahc_die("own gc: cannot commit heap pages");
+  /* commit the matching mark-bitmap slice (1/64, rounded out) */
+  {
+    size_t lo = (size_t)(own_commit - own_base) / 64;
+    size_t hi = (size_t)(own_commit + sz - own_base) / 64;
+    size_t pg = stack_guard_pg ? stack_guard_pg : 4096;
+    lo &= ~(pg - 1);
+    hi = (hi + pg - 1) & ~(pg - 1);
+    if (mprotect(own_marks + lo, hi - lo,
+                 PROT_READ | PROT_WRITE) != 0)
+      ahc_die("own gc: cannot commit the mark bitmap");
+  }
+  p = own_commit;
+  own_commit += sz;
+  return p;
+}
+
+static OwnBlock *own_get_block(uint32_t kind, uint32_t cls_bytes) {
+  OwnBlock *b = NULL;
+  own_safepoint();
+  own_maybe_collect();
+  /* the sweep's recycled blocks first (locality is the point);
+     the unlocked pre-check is an atomic load - TSan's second C2
+     finding was this probe racing the sweep's pushes */
+  if (__atomic_load_n(&own_pool, __ATOMIC_RELAXED)) {
+    pthread_mutex_lock(&own_mx);
+    b = (OwnBlock *)__atomic_load_n(&own_pool, __ATOMIC_RELAXED);
+    if (b) __atomic_store_n(&own_pool, b->next, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&own_mx);
+    if (b) memset((char *)b + OWN_HDR, 0, OWN_BLOCK - OWN_HDR);
+  }
+  if (!b) {
+    if (own_chunk_ptr + OWN_BLOCK > own_chunk_end) {
+      pthread_mutex_lock(&own_mx);
+      own_chunk_ptr = own_commit_span(OWN_CHUNK);
+      pthread_mutex_unlock(&own_mx);
+      own_chunk_end = own_chunk_ptr + OWN_CHUNK;
+    }
+    b = (OwnBlock *)own_chunk_ptr;
+    own_chunk_ptr += OWN_BLOCK;
+  }
+  __atomic_fetch_add(&own_blocks_out[kind], 1, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&own_since_gc, OWN_BLOCK, __ATOMIC_RELAXED);
+  b->kind = kind;
+  b->size_class = cls_bytes;
+  b->bump = OWN_HDR;
+  b->nblocks = 1;
+  b->next = NULL;
+  own_bstate[own_block_index(b)] = OWN_B_SMALL;
+  return b;
+}
+
+static void *own_alloc_large(uint32_t kind, size_t n) {
+  size_t nb = (n + OWN_HDR + OWN_BLOCK - 1) / OWN_BLOCK;
+  size_t i, bi;
+  OwnBlock *b;
+  own_safepoint();
+  own_maybe_collect();
+  pthread_mutex_lock(&own_mx);
+  b = (OwnBlock *)own_commit_span(nb * OWN_BLOCK);
+  pthread_mutex_unlock(&own_mx);
+  __atomic_fetch_add(&own_blocks_out[3], 1, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&own_since_gc, (long)(nb * OWN_BLOCK),
+                     __ATOMIC_RELAXED);
+  b->kind = kind;                /* the REAL kind; large is a state */
+  b->size_class = (uint32_t)n;
+  b->bump = OWN_HDR;
+  b->nblocks = (uint32_t)nb;
+  b->next = NULL;
+  bi = own_block_index(b);
+  own_bstate[bi] = OWN_B_LARGE_HEAD;
+  for (i = 1; i < nb; i++) own_bstate[bi + i] = OWN_B_LARGE_TAIL;
+  return (char *)b + OWN_HDR;
+}
+
+static void *own_adopt_partial(int kind, size_t cls) {
+  OwnBlock *b;
+  pthread_mutex_lock(&own_mx);
+  b = own_partial[kind][cls];
+  if (b) own_partial[kind][cls] = b->next;
+  pthread_mutex_unlock(&own_mx);
+  if (!b) return NULL;
+  b->next = NULL;
+  own_free_tls[kind][cls] = b->free_head;
+  b->free_head = NULL;
+  b->free_count = 0;
+  return own_free_tls[kind][cls];
+}
+
+static void *own_alloc(int kind, size_t n) {
+  size_t cls;
+  OwnBlock *b;
+  void *p;
+  n = (n + 7) & ~(size_t)7;
+  if (n == 0) n = 8;
+  if (n > OWN_MAX_SMALL) return own_alloc_large((uint32_t)kind, n);
+  cls = (n >> 3) - 1;
+  /* recycled slots first: object-grain reuse is what keeps RSS
+     at Boehm's scale (block-grain alone ratcheted 50x on b_map) */
+  p = own_free_tls[kind][cls];
+  if (p) {
+    own_free_tls[kind][cls] = *(void **)p;
+    memset(p, 0, n);
+    return p;
+  }
+  b = own_active[kind][cls];
+  if (!b || b->bump + n > OWN_BLOCK) {
+    if ((p = own_adopt_partial(kind, cls)) != NULL) {
+      own_free_tls[kind][cls] = *(void **)p;
+      memset(p, 0, n);
+      return p;
+    }
+    b = own_get_block((uint32_t)kind, (uint32_t)n);
+    own_active[kind][cls] = b;
+  }
+  p = (char *)b + b->bump;
+  b->bump += (uint32_t)n;
+  return p;
+}
+
+static void own_stats(void) {
+  fprintf(stderr,
+          "own gc: blocks node %ld ptrarr %ld misc %ld large %ld"
+          " (%.1f MB committed)\n",
+          own_blocks_out[0], own_blocks_out[1],
+          own_blocks_out[2], own_blocks_out[3],
+          (double)(own_commit - own_base) / (1024.0 * 1024.0));
+  fprintf(stderr, "own gc: %ld collections, %.1f MB live\n",
+          own_gc_count,
+          (double)own_live_bytes / (1024.0 * 1024.0));
+}
+#endif /* AHC_GC_OWN */
+
+#if defined(AHC_GC_OWN)
+#define AHC_ALLOC_NODE() own_alloc(0, sizeof(AhcNode))
+#define AHC_ALLOC_ENV(k) own_alloc(1, sizeof(AhcNode *) * (size_t)(k))
+#endif
+
 /* Per-thread free lists refilled by GC_malloc_many. The installed
    collector takes a GLOBAL mutex in GC_malloc (no thread-local
    allocation in the brew build), and a graph reducer allocates on
@@ -285,16 +531,21 @@ static void *ahc_hot_alloc(size_t n) {
 #define AHC_ALLOC_HOT(n) AHC_ALLOC(n)
 #endif
 
+#ifndef AHC_ALLOC_NODE
+#define AHC_ALLOC_NODE() AHC_ALLOC_HOT(sizeof(AhcNode))
+#define AHC_ALLOC_ENV(k) \
+  AHC_ALLOC_HOT(sizeof(AhcNode *) * (size_t)(k))
+#endif
+
 static AhcNode *alloc_node(void) {
-  AhcNode *n = (AhcNode *)AHC_ALLOC_HOT(sizeof(AhcNode));
+  AhcNode *n = (AhcNode *)AHC_ALLOC_NODE();
   if (!n) ahc_die("out of memory");
   return n;
 }
 
 AhcNode **ahc_env(int n) {
   if (n == 0) return NULL;
-  AhcNode **e =
-    (AhcNode **)AHC_ALLOC_HOT(sizeof(AhcNode *) * (size_t)n);
+  AhcNode **e = (AhcNode **)AHC_ALLOC_ENV(n);
   if (!e) ahc_die("out of memory");
   return e;
 }
@@ -339,7 +590,15 @@ AhcNode *ahc_mk_con(int contag, int arity) {
    then. B1 spins are bounded: a blackhole's owner is always making
    progress on some OS thread (pure evaluation cannot block), so a
    spin ends when the owner updates. */
+static int ahc_spark_help(void);   /* fwd: sparks section below */
+#ifdef AHC_GC_OWN
+static void own_safepoint(void);
+#endif
+
 static void spin_pause(unsigned long *iters) {
+#ifdef AHC_GC_OWN
+  own_safepoint();
+#endif
 #if defined(__x86_64__)
   __builtin_ia32_pause();
 #else
@@ -419,8 +678,14 @@ AhcNode *ahc_eval(AhcNode *n) {
            what keeps them deadlock-free by construction (7.3).
            The cost, documented: with workers live, a genuinely
            CYCLIC cross-task dependency spins instead of reporting
-           deadlock; without par the Phase A reports are intact. */
-        spin_pause(&spins);
+           deadlock; without par the Phase A reports are intact.
+           A spinner HELPS first (GHC's move): run another spark
+           instead of burning the wait - each help is a fresh CAS
+           claim, so it always makes global progress, and the C1
+           profile showed join-spins were the residual scaling
+           gap. */
+        if (!ahc_spark_help())
+          spin_pause(&spins);
         break;
       }
       /* No workers exist: pure Phase A, one OS thread. Park until
@@ -1989,6 +2254,12 @@ static __thread int my_deque;    /* 0 = main thread */
 int ahc_bump_slot_hint(void) { return my_deque; }
 #endif
 static AhcTask worker_shells[AHC_MAX_WORKERS];
+#ifdef AHC_GC_OWN
+static char *worker_stack_top[AHC_MAX_WORKERS];
+static char *worker_parked_sp[AHC_MAX_WORKERS];
+static OwnBlock
+  *gc_pub_active[AHC_MAX_WORKERS + 1][3][OWN_NCLASS];
+#endif
 static pthread_mutex_t idle_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t idle_cv = PTHREAD_COND_INITIALIZER;
 static long sparks_created, sparks_converted, sparks_fizzled,
@@ -2096,12 +2367,48 @@ static void run_spark(AhcNode *x) {
   __atomic_fetch_add(&sparks_converted, 1, __ATOMIC_RELAXED);
 }
 
+/* Run one spark if any exists anywhere: own deque first, then a
+   round of the others. Returns 1 if a spark was run. Called from
+   blackhole spins - the waiter turns wait into work. Helping
+   NESTS (the helped spark can block and help again) and each
+   nested run_spark arms an error frame, so the depth is capped
+   well inside AHC_ERR_DEPTH - past the cap the spinner just
+   spins, which stays live because some spark owner is always
+   running. (Found by par_shared under the C2 soak: eight nested
+   helps died "entry functions nested too deeply".) */
+static __thread int help_depth;
+
+static int ahc_spark_help(void) {
+  AhcNode *x;
+  if (help_depth >= 4) return 0;
+  x = spark_pop(&spark_deques[my_deque]);
+  if (!x) {
+    int v;
+    int nw = __atomic_load_n(&n_workers, __ATOMIC_RELAXED);
+    for (v = 0; v <= nw && !x; v++)
+      if (v != my_deque) x = spark_steal(&spark_deques[v]);
+  }
+  if (!x) return 0;
+  help_depth++;
+  run_spark(x);
+  help_depth--;
+  return 1;
+}
+
 static void *worker_main(void *arg) {
   int me = (int)(intptr_t)arg;
   cur_task = &worker_shells[me];
   my_deque = me + 1;
+#ifdef AHC_GC_OWN
+  worker_stack_top[me] =
+    (char *)pthread_get_stackaddr_np(pthread_self());
+#endif
   for (;;) {
-    AhcNode *x = spark_pop(&spark_deques[my_deque]);
+    AhcNode *x;
+#ifdef AHC_GC_OWN
+    own_safepoint();
+#endif
+    x = spark_pop(&spark_deques[my_deque]);
     if (!x) {
       int v;
       for (v = 0; v <= n_workers && !x; v++)
@@ -2179,6 +2486,362 @@ static AhcNode *p_pseq(AhcNode *a, AhcNode *b) {
   ahc_eval(a);
   return b;
 }
+
+#ifdef AHC_GC_OWN
+/* ----- the own collector, stage C2: STW mark-sweep ---------------
+   collector-design-note.md sections 2 and 4. The world is main
+   plus the B1 workers; rendezvous is cooperative at three
+   safepoint families - the allocation slow path (every 64KB of
+   allocation), blackhole spins, and the worker loop top - so a
+   worker is caught within one block of allocation or one spin
+   iteration. Only the main OS thread triggers and runs the
+   collection, which keeps determinism trivially: a pause is
+   invisible to the green scheduler's switch points.
+
+   Roots: every thread stack's live extent (conservatively,
+   through the block-table filter), the executable's data segment
+   (conservatively - this covers the prim table, the registries,
+   funptr slots, and every generated g_Module_* global with zero
+   codegen changes; the note's precise root arrays are deferred to
+   C3, recorded as an errata), and the spark deques. The heap
+   itself is traced BY TAG - precisely - with misc-kind objects
+   (runtime structs) scanned conservatively, exactly as Boehm
+   scanned them.
+
+   Sweep is block-grain: an unmarked block returns to the pool
+   (zeroed on reuse - which also restores the allocation locality
+   leak mode lost), a partly-live block is retired whole. */
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <mach-o/getsect.h>
+#endif
+
+static int gc_want;                       /* atomic */
+static int gc_parked;                     /* atomic */
+
+static AhcNode **gc_mark_stack;
+static size_t gc_msp, gc_mcap;
+
+static int own_marked(void *o) {
+  size_t i = (size_t)((char *)o - own_base) >> 3;
+  return own_marks[i >> 3] & (unsigned char)(1u << (i & 7));
+}
+
+static void own_set_mark(void *o) {
+  size_t i = (size_t)((char *)o - own_base) >> 3;
+  own_marks[i >> 3] |= (unsigned char)(1u << (i & 7));
+}
+
+/* The conservative filter: any word -> object base, or NULL. */
+static void *own_find_object(const void *cand, OwnBlock **bout) {
+  char *c = (char *)cand;
+  size_t bi;
+  OwnBlock *b;
+  if (c < own_base || c >= own_commit) return NULL;
+  bi = (size_t)(c - own_base) / OWN_BLOCK;
+  switch (own_bstate[bi]) {
+  case OWN_B_SMALL: {
+    size_t off, slot;
+    b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    if (c < (char *)b + OWN_HDR) return NULL;
+    off = (size_t)(c - ((char *)b + OWN_HDR));
+    slot = off / b->size_class;
+    off = OWN_HDR + slot * b->size_class;
+    if (off + b->size_class > b->bump) return NULL;
+    *bout = b;
+    return (char *)b + off;
+  }
+  case OWN_B_LARGE_TAIL:
+    while (own_bstate[bi] == OWN_B_LARGE_TAIL) bi--;
+    /* fall through to the head */
+  case OWN_B_LARGE_HEAD:
+    b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    if (c >= (char *)b + OWN_HDR + b->size_class) return NULL;
+    if (c < (char *)b + OWN_HDR) return NULL;
+    *bout = b;
+    return (char *)b + OWN_HDR;
+  default:
+    return NULL;
+  }
+}
+
+static void gc_push(const void *cand) {
+  OwnBlock *b;
+  void *o = own_find_object(cand, &b);
+  if (!o || own_marked(o)) return;
+  own_set_mark(o);
+  if (gc_msp == gc_mcap) {
+    gc_mcap = gc_mcap ? gc_mcap * 2 : 65536;
+    gc_mark_stack = (AhcNode **)realloc(gc_mark_stack,
+                                        gc_mcap * sizeof(void *));
+    if (!gc_mark_stack) ahc_die("own gc: mark stack exhausted");
+  }
+  gc_mark_stack[gc_msp++] = (AhcNode *)o;
+}
+
+static void gc_scan_range(const char *lo, const char *hi) {
+  const char *p =
+    (const char *)(((uintptr_t)lo + 7) & ~(uintptr_t)7);
+  for (; p + sizeof(void *) <= hi; p += sizeof(void *))
+    gc_push(*(void *const *)p);
+}
+
+static void gc_trace(AhcNode *o) {
+  OwnBlock *b;
+  void *base = own_find_object(o, &b);
+  size_t sz;
+  (void)base;
+  sz = b->size_class;
+  if (b->kind == 0) {                     /* a node: by tag */
+    switch (o->tag) {
+    case AHC_THUNK:
+    case AHC_CLAIM:                       /* env still in place */
+      gc_push(o->u.thunk.env);
+      break;
+    case AHC_FUN:
+      gc_push(o->u.fun.env);
+      break;
+    case AHC_CON:
+      gc_push(o->u.con.fields);
+      break;
+    case AHC_IND:
+      gc_push(o->u.ind);
+      break;
+    case AHC_BLACKHOLE:
+      gc_push(o->u.bh.owner);            /* a task struct, or */
+      gc_push(o->u.bh.waiters);          /* static - filtered */
+      break;
+    case AHC_BIGINT:
+      gc_push(o->u.big.d);
+      break;
+    default:                              /* INT DOUBLE CHAR PTR */
+      break;
+    }
+  } else {
+    /* ptr-array: homogeneous node pointers; misc: conservative.
+       Either way every word goes through the filter. */
+    gc_scan_range((const char *)o, (const char *)o + sz);
+  }
+}
+
+static void gc_mark_from_roots(int nw) {
+  int i;
+  jmp_buf jb;
+  setjmp(jb);                             /* spill my registers */
+  /* my own stack (main OS thread; possibly a green task's). The
+     floor is the spill buffer itself: register-held node pointers
+     land in jb, and jb must be inside the scanned range - a
+     worker-soak corruption taught this the hard way. */
+  gc_scan_range((const char *)&jb, cur_task->stack_top);
+  if (cur_task != &main_task && main_task.state < 2)
+    gc_scan_range(main_task.parked_lo, main_task.stack_top);
+  /* parked green tasks */
+  for (i = 0; i < task_n; i++) {
+    AhcTask *t = task_reg[i];
+    if (t && t != cur_task && t->state < 2 && t->parked_lo)
+      gc_scan_range(t->parked_lo, t->stack_top);
+  }
+  /* worker stacks, extents published at the rendezvous */
+  for (i = 0; i < nw; i++)
+    gc_scan_range(worker_parked_sp[i], worker_stack_top[i]);
+  /* the executable's data segment: prims, registries, funptr
+     slots, every generated g_Module_* - one conservative sweep */
+  {
+#ifdef __APPLE__
+    unsigned long sz = 0;
+    uint8_t *d = getsegmentdata(
+      (const struct mach_header_64 *)_dyld_get_image_header(0),
+      "__DATA", &sz);
+    if (d) gc_scan_range((const char *)d, (const char *)d + sz);
+#else
+    extern char __data_start[], _end[];
+    gc_scan_range(__data_start, _end);
+#endif
+  }
+  /* in-flight sparks */
+  for (i = 0; i <= nw; i++) {
+    SparkDeque *d = &spark_deques[i];
+    long t = __atomic_load_n(&d->top, __ATOMIC_RELAXED);
+    long bt = __atomic_load_n(&d->bottom, __ATOMIC_RELAXED);
+    for (; t < bt; t++) gc_push(d->ring[t % SPARK_CAP]);
+  }
+  while (gc_msp > 0) gc_trace(gc_mark_stack[--gc_msp]);
+}
+
+static void gc_sweep(void) {
+  size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK;
+  size_t bi;
+  long live = 0;
+  int k, c, w;
+  /* flag the blocks threads are actively bumping */
+  for (w = 0; w <= AHC_MAX_WORKERS; w++)
+    for (k = 0; k < 3; k++)
+      for (c = 0; c < OWN_NCLASS; c++)
+        if (gc_pub_active[w][k][c])
+          gc_pub_active[w][k][c]->gc_active = 1;
+  for (bi = 0; bi < nblocks; bi++) {
+    OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    switch (own_bstate[bi]) {
+    case OWN_B_SMALL: {
+      size_t mlo = (bi * OWN_BLOCK) >> 6;
+      size_t mhi = ((bi + 1) * OWN_BLOCK) >> 6;
+      uint32_t off, sc = b->size_class;
+      uint32_t nlive = 0, nfree = 0;
+      b->free_head = NULL;
+      for (off = OWN_HDR; off + sc <= b->bump; off += sc) {
+        char *o = (char *)b + off;
+        if (own_marked(o)) {
+          nlive++;
+        } else {
+          *(void **)o = b->free_head;   /* chain through the slot */
+          b->free_head = o;
+          nfree++;
+        }
+      }
+      memset(own_marks + mlo, 0, mhi - mlo);
+      b->free_count = nfree;
+      if (nlive == 0 && !b->gc_active) {
+        own_bstate[bi] = OWN_B_FREE;
+        b->free_head = NULL;
+        b->next =
+          (OwnBlock *)__atomic_load_n(&own_pool, __ATOMIC_RELAXED);
+        __atomic_store_n(&own_pool, b, __ATOMIC_RELAXED);
+#ifdef MADV_FREE_REUSABLE
+        /* hand the pages back; reuse re-zeroes anyway */
+        madvise((char *)b + OWN_HDR, OWN_BLOCK - OWN_HDR,
+                MADV_FREE_REUSABLE);
+#endif
+      } else {
+        live += (long)nlive * sc + OWN_HDR;
+        if (nfree > 0 && !b->gc_active) {
+          b->next = own_partial[b->kind][(sc >> 3) - 1];
+          own_partial[b->kind][(sc >> 3) - 1] = b;
+        }
+      }
+      break;
+    }
+    case OWN_B_LARGE_HEAD: {
+      size_t nb = b->nblocks, j;
+      void *obj = (char *)b + OWN_HDR;
+      if (own_marked(obj)) {
+        live += (long)(nb * OWN_BLOCK);
+        {
+          size_t i2 = (size_t)((char *)obj - own_base) >> 3;
+          own_marks[i2 >> 3] &=
+            (unsigned char)~(1u << (i2 & 7));
+        }
+      } else {
+        for (j = 0; j < nb; j++) {
+          OwnBlock *fb = (OwnBlock *)(own_base
+                                      + (bi + j) * OWN_BLOCK);
+          own_bstate[bi + j] = OWN_B_FREE;
+          fb->next =
+            (OwnBlock *)__atomic_load_n(&own_pool, __ATOMIC_RELAXED);
+          __atomic_store_n(&own_pool, fb, __ATOMIC_RELAXED);
+        }
+      }
+      bi += nb - 1;
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  for (w = 0; w <= AHC_MAX_WORKERS; w++)
+    for (k = 0; k < 3; k++)
+      for (c = 0; c < OWN_NCLASS; c++)
+        if (gc_pub_active[w][k][c]) {
+          gc_pub_active[w][k][c]->gc_active = 0;
+          gc_pub_active[w][k][c] = NULL;
+        }
+  own_live_bytes = live;
+}
+
+static void own_collect(void) {
+  int nw;
+  unsigned long spins = 0;
+  own_in_gc = 1;
+  nw = __atomic_load_n(&n_workers, __ATOMIC_ACQUIRE);
+  memcpy(gc_pub_active[0], own_active, sizeof own_active);
+  __atomic_store_n(&gc_want, 1, __ATOMIC_RELEASE);
+  while (__atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE) != nw) {
+    if ((spins++ & 4095) == 0) pthread_cond_broadcast(&idle_cv);
+    spin_pause(&spins);
+  }
+  gc_mark_from_roots(nw);
+  /* pool/partial mutations always under own_mx - uncontended
+     here (workers parked), but the uniform discipline is what
+     TSan can verify */
+  pthread_mutex_lock(&own_mx);
+  memset(own_partial, 0, sizeof own_partial);
+  memset(own_free_tls, 0, sizeof own_free_tls);   /* my own */
+  gc_sweep();
+  pthread_mutex_unlock(&own_mx);
+  __atomic_store_n(&own_since_gc, 0, __ATOMIC_RELAXED);
+  own_gc_count++;
+  __atomic_store_n(&gc_want, 0, __ATOMIC_RELEASE);
+  while (__atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE) != 0)
+    spin_pause(&spins);
+  own_in_gc = 0;
+}
+
+static void own_maybe_collect(void) {
+  static long floor_bytes = -1;
+  long thr;
+  if (cur_task->is_worker || own_in_gc) return;  /* worker test
+     FIRST: own_in_gc is main's private flag, and a worker reading
+     it was TSan's first C2 finding */
+  if (floor_bytes < 0) {
+    /* AHC_OWN_MIN: collection-trigger floor in bytes. The soak
+       harness sets it tiny to force collections constantly. */
+    /* 12MB default: the floor-sweep on b_map measured RSS 2.2x /
+       3.0x / 4.7x of Boehm at 16/24/48MB floors while own stayed
+       FASTER at every setting - the floor only dominates while
+       the live set is small, which is exactly when absolute RSS
+       matters least; live*2 takes over as programs grow. */
+    const char *e = getenv("AHC_OWN_MIN");
+    floor_bytes = e ? atol(e) : (12l << 20);
+    if (floor_bytes < (long)OWN_CHUNK) floor_bytes = OWN_CHUNK;
+  }
+  thr = own_live_bytes * 2;
+  if (thr < floor_bytes) thr = floor_bytes;
+  if (__atomic_load_n(&own_since_gc, __ATOMIC_RELAXED) < thr)
+    return;
+  own_collect();
+}
+
+/* Workers park here; called from the allocation slow path, the
+   blackhole spin loop, and the worker loop top. */
+static void own_safepoint(void) {
+  if (!__atomic_load_n(&gc_want, __ATOMIC_ACQUIRE)) return;
+  if (!cur_task->is_worker) return;       /* main runs the GC */
+  {
+    int me = -(cur_task->id) - 1;
+    jmp_buf jb;
+    setjmp(jb);                           /* registers -> stack */
+    worker_parked_sp[me] = (char *)&jb - 256;
+    memcpy(gc_pub_active[me + 1], own_active, sizeof own_active);
+    __atomic_fetch_add(&gc_parked, 1, __ATOMIC_ACQ_REL);
+    /* RAW pause here - spin_pause would call back into this
+       function (it is a safepoint) and recurse the stack away */
+    {
+      unsigned long s = 0;
+      while (__atomic_load_n(&gc_want, __ATOMIC_ACQUIRE)) {
+#if defined(__x86_64__)
+        __builtin_ia32_pause();
+#endif
+        if ((++s & 1023) == 0) sched_yield();
+      }
+    }
+    /* the sweep re-chained every free slot: stale lists dangle */
+    memset(own_free_tls, 0, sizeof own_free_tls);
+    __atomic_fetch_sub(&gc_parked, 1, __ATOMIC_ACQ_REL);
+  }
+}
+#else
+/* Boehm / no-GC builds: the hooks cost nothing. */
+#endif
 
 /* ----- globals ---------------------------------------------------- */
 
@@ -3369,6 +4032,10 @@ void ahc_rts_init(void) {
     main_task.stack_top = (char *)sb.mem_base;
   }
 #endif
+#ifdef AHC_GC_OWN
+  main_task.stack_top =
+    (char *)pthread_get_stackaddr_np(pthread_self());
+#endif
   stack_guard_pg = (size_t)sysconf(_SC_PAGESIZE);
   {
     /* Guard-page hits must be caught on their own stack (the
@@ -3438,6 +4105,9 @@ void ahc_rts_init(void) {
   ahc_prim_par = mk_prim2(p_par);
   ahc_prim_pseq = mk_prim2(p_pseq);
   if (getenv("AHC_SPARK_STATS")) atexit(spark_stats);
+#ifdef AHC_GC_OWN
+  if (getenv("AHC_OWN_STATS")) atexit(own_stats);
+#endif
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);

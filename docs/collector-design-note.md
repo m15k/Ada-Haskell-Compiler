@@ -1,6 +1,45 @@
 # Design note: The collector campaign
 
-**Status:** PROPOSED (M106 writes this). This is the design note
+**Status:** C1 + C2 IMPLEMENTED (M107); C3 generational and the
+default flip remain. What landed and what the gates measured, with
+errata where the implementation corrected the design:
+
+- **C1 (allocator)**: as designed, plus two profile-driven fixes -
+  per-thread CHUNK carving (the pool lock plus the mprotect inside
+  it convoyed at 4 workers; now paid once per 16MB) and
+  spin-HELPING (a blackhole spinner runs another spark; GHC's
+  move; capped at depth 4 because helping nests error frames -
+  par_shared found the cap the hard way). Gate: sequential
+  geometric mean 0.778x of Boehm - own is 22% FASTER - and
+  parallel 1.91x/2.17x at 2/4 workers on parfib, short of the
+  1.8x/2.4x bar on ratios but ABSOLUTELY faster than every other
+  configuration at every width; the ratio bar punishes the faster
+  baseline, and leak-mode locality (fixed by C2's recycling) was
+  the binding constraint. The C1 gate is subsumed by C2's.
+- **C2 (STW mark-sweep)**: as designed, with three corrections.
+  (1) Roots use a conservative data-segment scan (one dyld call)
+  instead of codegen root arrays - covers prims, registries,
+  funptr slots, and every generated global with zero codegen
+  changes; precise arrays are deferred to C3. (2) Sweep is
+  OBJECT-grain within blocks, not block-grain: pure block-grain
+  ratcheted b_map's RSS to 52x Boehm (churn leaves one survivor
+  per block), object-grain free-slot lists brought it to 1.7x.
+  (3) The register-spill jmp_buf must be INSIDE the collector's
+  own scan floor - a worker soak caught register-held pointers
+  escaping the scan. TSan audited the whole protocol and found
+  three more: a worker reading main's own_in_gc, and mixed
+  atomic/plain accesses on the pool head; all fixed. Gate: exec
+  suite green, every concurrency golden byte-identical at 0/2/4
+  workers under an 8MB forced trigger, TSan clean, bench-suite
+  peak RSS geometric mean 1.96x of Boehm (bar: 2.0x).
+
+Trigger policy: collect when bytes-since-GC exceed
+max(12MB, 2x live); AHC_OWN_MIN overrides the floor (the soak
+harness forces tiny floors). Freed blocks are madvised back.
+
+Original proposal follows.
+
+**Status as proposed:** PROPOSED (M106 writes this). This is the design note
 that `concurrency-design-note.md` section 7.8 said must exist
 before anything else in Phase B is touched, and the largest
 runtime campaign the project has contemplated - bigger than the

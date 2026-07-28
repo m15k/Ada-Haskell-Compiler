@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ThreadSanitizer acceptance for the B1 thunk protocol (design note
-# 7.3): the memory model gets a sanitizer, not just a benchmark.
-# Builds the par exec tests WITHOUT the collector (TSan and Boehm's
-# stop-the-world do not mix) and with -fsanitize=thread, runs each
+# 7.3) AND the own allocator's lock paths (collector note, C1):
+# builds the par exec tests with AHC_GC=own (TSan and Boehm's
+# stop-the-world do not mix; the own allocator is TSan-friendly
+# and gets audited for free) and -fsanitize=thread, runs each
 # several times under a full worker pool, and fails on any TSan
 # report. The par tests never switch green contexts, so TSan's
 # non-understanding of ucontext never comes up.
@@ -16,7 +17,7 @@ for hs in tests/exec/par_fib.hs tests/exec/par_shared.hs \
           tests/exec/par_error.hs; do
   base=$(basename "$hs" .hs)
   ./bin/ahc emit "$hs" "$tmp/$base" >/dev/null || { echo "EMIT-FAIL $hs"; fail=1; continue; }
-  clang -O1 -g -fsanitize=thread \
+  clang -O1 -g -fsanitize=thread -DAHC_GC_OWN \
     -Wno-incompatible-library-redeclaration -Wno-deprecated-declarations \
     -I runtime -I "$tmp/$base.build" \
     runtime/ahc_rts.c "$tmp/$base.build"/*.c -o "$tmp/$base" \

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+The own collector arrives (M107, campaign stages C1+C2): AHC_GC=
+own builds against the project's own memory manager - a
+block-structured, non-moving, Immix-shaped allocator-plus-
+collector designed in docs/collector-design-note.md. C1: 64KB
+blocks from one 64GB virtual reservation, per-thread bump
+allocation per size class and kind (node / pointer-array / misc),
+per-thread chunk carving (global lock once per 16MB), and
+spin-helping (a blackhole spinner runs another spark, capped at
+depth 4 - the cap is a war story). C2: stop-the-world mark-sweep
+with cooperative rendezvous at three safepoint families, live-
+extent conservative stack scanning (the M102 bookkeeping,
+rescanned by our own tracer), a conservative data-segment root
+scan (zero codegen changes; precise root arrays deferred to C3),
+by-tag precise heap tracing with misc structs scanned
+conservatively, and OBJECT-grain sweep via per-block free-slot
+lists - block-grain alone ratcheted b_map to 52x Boehm's RSS;
+object-grain brought the bench-suite geometric mean to 1.96x
+(gate: 2.0x). Sequential wall time beats the Boehm build (0.778x
+geometric mean at C1; still ahead with collections on). Every
+exec golden byte-identical under AHC_GC=own at 0/2/4 workers
+with collections forced every 8MB; TSan audits the rendezvous
+and found five real bugs across the campaign (a recursing
+safepoint, a register spill outside the scan floor, a worker
+reading the collector's private flag, mixed-atomicity pool
+accesses, and the help-depth frame exhaustion). Boehm remains
+the default until C3 and a full green release, per the note.
+
 Sparks land opt-in; the gate returns a finding (M105, Phase B1):
 Control.Parallel (par/pseq) over a multi-threaded thunk protocol -
 CAS claim via a transient tag, release/acquire IND updates, worker
