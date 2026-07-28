@@ -1,41 +1,83 @@
 # Design note: The collector campaign
 
-**Status:** C1 + C2 IMPLEMENTED (M107); C3 generational and the
-default flip remain. What landed and what the gates measured, with
-errata where the implementation corrected the design:
+**Status:** C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND
+DECLINED** - its own precondition failed, and the profile that
+failed it found something better. What landed, with errata where
+the implementation corrected the design:
 
 - **C1 (allocator)**: as designed, plus two profile-driven fixes -
   per-thread CHUNK carving (the pool lock plus the mprotect inside
   it convoyed at 4 workers; now paid once per 16MB) and
   spin-HELPING (a blackhole spinner runs another spark; GHC's
   move; capped at depth 4 because helping nests error frames -
-  par_shared found the cap the hard way). Gate: sequential
-  geometric mean 0.778x of Boehm - own is 22% FASTER - and
-  parallel 1.91x/2.17x at 2/4 workers on parfib, short of the
-  1.8x/2.4x bar on ratios but ABSOLUTELY faster than every other
-  configuration at every width; the ratio bar punishes the faster
-  baseline, and leak-mode locality (fixed by C2's recycling) was
-  the binding constraint. The C1 gate is subsumed by C2's.
+  par_shared found the cap the hard way). Sequential geometric
+  mean 0.778x of Boehm - own is 22% FASTER.
 - **C2 (STW mark-sweep)**: as designed, with three corrections.
   (1) Roots use a conservative data-segment scan (one dyld call)
   instead of codegen root arrays - covers prims, registries,
   funptr slots, and every generated global with zero codegen
-  changes; precise arrays are deferred to C3. (2) Sweep is
-  OBJECT-grain within blocks, not block-grain: pure block-grain
-  ratcheted b_map's RSS to 52x Boehm (churn leaves one survivor
-  per block), object-grain free-slot lists brought it to 1.7x.
-  (3) The register-spill jmp_buf must be INSIDE the collector's
-  own scan floor - a worker soak caught register-held pointers
-  escaping the scan. TSan audited the whole protocol and found
-  three more: a worker reading main's own_in_gc, and mixed
-  atomic/plain accesses on the pool head; all fixed. Gate: exec
-  suite green, every concurrency golden byte-identical at 0/2/4
-  workers under an 8MB forced trigger, TSan clean, bench-suite
-  peak RSS geometric mean 1.96x of Boehm (bar: 2.0x).
+  changes; precise arrays deferred. (2) Sweep is OBJECT-grain
+  within blocks, not block-grain: pure block-grain ratcheted
+  b_map's RSS to 52x Boehm (churn leaves one survivor per block),
+  object-grain free-slot lists brought it to 1.7x. (3) The
+  register-spill jmp_buf must be INSIDE the collector's own scan
+  floor - a worker soak caught register-held pointers escaping
+  the scan. TSan found three more: a worker reading main's
+  own_in_gc, and mixed atomic/plain accesses on the pool head.
+- **C3 (generational)**: sticky mark bits with per-block epochs;
+  minor collections sweep only blocks allocated into this cycle,
+  majors clear the whole bitmap and re-mark. The write barrier is
+  the single hot site requirement 4 promised (the thunk IND
+  update, twice) plus one cold one (channel tail append), feeding
+  per-thread sequential store buffers. Bounded runtime structures
+  (tasks, scopes, chans, protected values) are re-walked every
+  cycle instead of barriered - the remembered set for everything
+  that is not the pure graph. Two errata: `live` is a MAJOR-only
+  measurement (letting minors count undirty blocks wholesale fed
+  the trigger a runaway threshold - 832MB committed on b_map
+  before that line existed), and see the construction-order
+  invariant below, which is the campaign's sharpest lesson.
+- **C4 (parallel mark)**: NOT BUILT. Section 4 admitted it "ONLY
+  if a measured profile shows mark time dominating after C3."
+  The collector was taught to time its own phases; mark is 4-21%
+  of wall time (45-89% of GC time, but GC is only 5-24% of wall).
+  A perfect 4-way parallel mark could return at most 3-16% of
+  wall before its own costs - CAS'd mark bits instead of plain
+  ORs, work-stealing mark stacks, termination detection. The bar
+  is not met, so the stage does not land. See the profile section
+  below for what the same measurement DID find.
 
-Trigger policy: collect when bytes-since-GC exceed
-max(12MB, 2x live); AHC_OWN_MIN overrides the floor (the soak
-harness forces tiny floors). Freed blocks are madvised back.
+Trigger policy: collect when bytes-since-GC exceed max(12MB,
+2x live); a major every 4 minors or when live triples.
+AHC_OWN_MIN / AHC_OWN_MAJOR_EVERY override; AHC_OWN_STATS prints
+the phase breakdown; AHC_OWN_PARANOID=1 verifies the generational
+invariant (=2 hunts referrers); AHC_OWN_MADVISE=1 trades speed
+for RSS.
+
+## 0. The C4 profile: what measuring for one thing found
+
+Two bugs, both found because C4's precondition demanded a
+phase-level profile that had never been taken:
+
+1. **`madvise` cost 24% of wall time and bought nothing.** Freed
+   blocks were handed back with MADV_FREE_REUSABLE - a syscall
+   PER BLOCK. Removing it took parfib from 4.72s to 3.58s at 4
+   workers. Peak RSS changed by 0-1MB, because the pool recycles
+   those blocks immediately anyway: the high-water mark never
+   noticed. Now off by default, behind AHC_OWN_MADVISE.
+2. **The sweep walked every slot of blocks that were entirely
+   garbage.** A block's mark bits are one contiguous 1KB bitmap
+   slice; if every word is zero the block is free, and no slot
+   needs touching. On low-survival programs that is nearly every
+   block. Sweep time on parfib: 2.35s -> 0.17s.
+
+Together: parfib 16.7s -> 11.5s sequential, 6.19s -> 3.41s at 4
+workers - and the 4-worker figure is now **3.37x its own
+sequential**, which clears the original B1 parallel bar (2.5x at
+4) that Phase B could never reach on Boehm. The lesson is the
+M74 rule with a sharper edge: *profile the phase you are about
+to optimize, because it may not be the phase that is costing
+you.* C4 was the question; the answer was in the sweep.
 
 Original proposal follows.
 
@@ -210,3 +252,51 @@ scheduling risk: this campaign is large, its payoff is gated on
 hardware behavior already measured once (the plain-malloc
 control), and B1's opt-in machinery loses nothing by waiting -
 there is no deadline pressure, only the note's own gates.
+
+## 8. The construction-order invariant (C3's war story)
+
+The sharpest lesson of the campaign, found by a verifier written
+for the purpose after b_sumfold started dying with
+"non-exhaustive patterns in function" - the classic shape of a
+freed-but-referenced object.
+
+**The rule**: *an object must never gain a pointer to something
+allocated after it, without a write barrier.*
+
+The violation was in `ahc_mk_con`, which had stood unchanged for
+a hundred milestones:
+
+    AhcNode *n = alloc_node();          /* owner FIRST  */
+    n->u.con.fields = ahc_env(arity);   /* child SECOND */
+
+Under a non-generational collector this is unimpeachable. Under a
+generational one it is a liveness bug, because a collection can
+run *between the two allocations*: `ahc_env` reaches the
+allocation slow path, the collector runs, conservatively finds
+the half-built `n` on the C stack and marks it - and `n` is now
+STICKY-marked old. The `fields` array it receives a moment later
+is young and unreferenced by anything the next minor collection
+traces, because the next minor does not re-trace old objects. It
+is swept. The constructor's own child is freed underneath it.
+
+The fix is one line - allocate the components first, then the
+owner - applied at `ahc_mk_con` and `mk_sparked_die`:
+
+    AhcNode **fields = arity ? ahc_env(arity) : NULL;
+    AhcNode *n = alloc_node();
+    n->u.con.fields = fields;           /* stores an OLDER object */
+
+**The tool that found it** is worth as much as the fix, and it
+stays: `AHC_OWN_PARANOID=1` runs a full mark into a shadow bitmap
+after every minor collection and reports any object the shadow
+says is live that the sticky view would free - i.e. exactly the
+objects a generational bug is about to lose, named at the moment
+of the bug rather than at the crash. `=2` additionally hunts
+referrers (an O(heap^2) scan) and prints the object holding the
+edge, which is what identified the constructor. The whole exec
+suite runs clean under it, and any future runtime code that
+allocates a child after its owner will be caught the same way.
+
+The generalizable form, for whoever writes the next runtime
+allocation site: **in a generational collector, allocation order
+is a correctness property, not a style choice.**

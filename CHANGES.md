@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+Generational collection, and a stage that measured itself out of
+existence (M108, campaign stages C3+C4):
+
+C3 makes the own collector generational. Sticky mark bits plus a
+per-block epoch mean a minor collection sweeps only the blocks
+allocated into this cycle; a major clears the bitmap and re-marks
+everything. The write barrier is the single hot site the design
+note promised - the thunk IND update - plus one cold one, feeding
+per-thread sequential store buffers; bounded runtime structures
+(tasks, scopes, channels, protected values) are re-walked each
+cycle instead, which is the remembered set for everything that is
+not the pure graph. Workers default ON under AHC_GC=own.
+
+C3 also produced the campaign's sharpest lesson, now an invariant
+with a tool to enforce it: **in a generational collector,
+allocation order is a correctness property**. ahc_mk_con had
+allocated the owner before its fields for a hundred milestones; a
+collection landing between those two allocations marks the
+half-built owner sticky-old, and the young fields array it then
+receives is invisible to the next minor - freed while referenced.
+AHC_OWN_PARANOID=1 shadow-marks after every minor and names any
+object the sticky view would lose (=2 hunts the referrer that
+holds the edge, which is what found this one); the exec suite
+runs clean under it.
+
+C4 (parallel marking) was MEASURED AND DECLINED. The design note
+admitted it only if a profile showed mark time dominating after
+C3, so the collector was taught to time its own phases - and mark
+is 4-21% of wall (45-89% of GC time, but GC is only 5-24% of
+wall). The bar is not met and the stage does not land. The same
+profile, however, found two real defects: MADV_FREE_REUSABLE was
+costing a syscall per freed block - 24% of parfib's wall time -
+while moving peak RSS by 0-1MB (now opt-in via AHC_OWN_MADVISE),
+and the sweep walked every slot of blocks that were entirely
+garbage when their mark-bitmap slice is one contiguous 1KB read
+(sweep on parfib: 2.35s -> 0.17s). Together: parfib 16.7s ->
+11.5s sequential and 6.19s -> 3.41s at 4 workers, which is 3.37x
+its own sequential - clearing the original B1 parallel bar that
+Phase B could never reach on Boehm. Profile the phase you are
+about to optimize; it may not be the one costing you.
+
 The own collector arrives (M107, campaign stages C1+C2): AHC_GC=
 own builds against the project's own memory manager - a
 block-structured, non-moving, Immix-shaped allocator-plus-

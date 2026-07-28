@@ -657,3 +657,16 @@ design note - now written: `docs/collector-design-note.md`
 block-structured, non-moving, Immix-shaped design with staged
 gates. Nothing else in Phase B is worth touching until its C2+C3
 gates hold.
+
+**Resolved (M108).** They held, and this postmortem's diagnosis
+was correct: on AHC's own block allocator - per-thread bump,
+recycling sweep, generational - `b_parfib` reaches **3.37x its
+own sequential time at 4 workers**, clearing the 7.6 B1 gate
+(>= 2.5x at 4) that no Boehm configuration could approach. B1's
+machinery never needed a fix; it needed an allocator. Workers
+therefore default ON under `AHC_GC=own` and remain opt-in under
+Boehm, which is the honest split: the same runtime, two memory
+managers, and the parallelism is only real on the one that can
+feed it. What is still unbuilt is B2 (SMP green-thread
+scheduling), whose gate and war-story requirement stand
+unchanged.

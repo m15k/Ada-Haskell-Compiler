@@ -275,6 +275,7 @@ typedef struct OwnBlock {
   uint32_t bump;                        /* next free offset */
   uint32_t nblocks;                     /* run length (large > 1) */
   uint32_t gc_active;                   /* being bumped: sweep skips */
+  uint32_t epoch;                       /* last GC cycle with allocs */
   uint32_t free_count;                  /* slots on free_head */
   void *free_head;                      /* sweep-built slot list */
   struct OwnBlock *next;
@@ -309,10 +310,65 @@ static __thread void *own_free_tls[3][OWN_NCLASS];
 static long own_since_gc;                /* bytes handed out */
 static long own_live_bytes;              /* after last sweep */
 static long own_gc_count;
+static int own_paranoid_level;
+static int own_madvise;          /* AHC_OWN_MADVISE=1: RSS over speed */
+/* Phase timing: the C4 precondition. The design note admits
+   parallel marking ONLY if a measured profile shows mark time
+   dominating after C3 - so the collector measures itself, and the
+   numbers decide. AHC_OWN_STATS prints them. */
+static double own_t_mark, own_t_sweep, own_t_rendezvous;
+static double own_t_start;
+
+static double own_now(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static long own_minors_since_major;
+static long own_live_at_major;
+static long own_minor_count;
 static int own_in_gc;
 
 static void own_maybe_collect(void);     /* fwd, end of file */
 static void own_safepoint(void);         /* fwd, end of file */
+
+/* C3: the write barrier. Laziness's gift (design note, req. 4):
+   the only PURE-graph mutation is the thunk IND update, so this
+   is the single hot barrier site (plus the channel tail append,
+   cold). An old (marked) object that gains an edge is logged in
+   a per-thread sequential store buffer and re-traced by the next
+   minor collection. */
+#define AHC_OWN_NSLOTS (33 + 1)
+static void *own_ssb_seg[AHC_OWN_NSLOTS];
+static size_t own_ssb_n[AHC_OWN_NSLOTS],
+  own_ssb_cap[AHC_OWN_NSLOTS];
+
+static void own_remember(void *o) {
+  int s = 0;                     /* patched below: my_deque TLS */
+  extern int ahc_bump_slot_hint(void);
+  s = ahc_bump_slot_hint();
+  if (own_ssb_n[s] == own_ssb_cap[s]) {
+    own_ssb_cap[s] = own_ssb_cap[s] ? own_ssb_cap[s] * 2 : 4096;
+    own_ssb_seg[s] = realloc(own_ssb_seg[s],
+                             own_ssb_cap[s] * sizeof(void *));
+    if (!own_ssb_seg[s]) ahc_die("own gc: remembered set");
+  }
+  ((void **)own_ssb_seg[s])[own_ssb_n[s]++] = o;
+}
+
+static void own_write_barrier(void *o) {
+  size_t i;
+  char *lim;
+  if (!own_base) return;
+  /* own_commit moves under own_mx; the barrier reads it lock-free
+     (atomic - TSan finding). A stale limit is harmless: barrier
+     targets are existing heap objects, always below the frontier. */
+  lim = (char *)__atomic_load_n(&own_commit, __ATOMIC_RELAXED);
+  if ((char *)o < own_base || (char *)o >= lim) return;
+  i = (size_t)((char *)o - own_base) >> 3;
+  if (own_marks[i >> 3] & (unsigned char)(1u << (i & 7)))
+    own_remember(o);
+}
 
 static size_t own_block_index(void *p) {
   return (size_t)((char *)p - own_base) / OWN_BLOCK;
@@ -356,7 +412,7 @@ static char *own_commit_span(size_t sz) {
       ahc_die("own gc: cannot commit the mark bitmap");
   }
   p = own_commit;
-  own_commit += sz;
+  __atomic_store_n(&own_commit, own_commit + sz, __ATOMIC_RELAXED);
   return p;
 }
 
@@ -391,6 +447,7 @@ static OwnBlock *own_get_block(uint32_t kind, uint32_t cls_bytes) {
   b->bump = OWN_HDR;
   b->nblocks = 1;
   b->next = NULL;
+  b->epoch = (uint32_t)own_gc_count;
   own_bstate[own_block_index(b)] = OWN_B_SMALL;
   return b;
 }
@@ -412,6 +469,7 @@ static void *own_alloc_large(uint32_t kind, size_t n) {
   b->bump = OWN_HDR;
   b->nblocks = (uint32_t)nb;
   b->next = NULL;
+  b->epoch = (uint32_t)own_gc_count;
   bi = own_block_index(b);
   own_bstate[bi] = OWN_B_LARGE_HEAD;
   for (i = 1; i < nb; i++) own_bstate[bi + i] = OWN_B_LARGE_TAIL;
@@ -426,6 +484,7 @@ static void *own_adopt_partial(int kind, size_t cls) {
   pthread_mutex_unlock(&own_mx);
   if (!b) return NULL;
   b->next = NULL;
+  b->epoch = (uint32_t)own_gc_count;    /* it is about to be dirty */
   own_free_tls[kind][cls] = b->free_head;
   b->free_head = NULL;
   b->free_count = 0;
@@ -470,9 +529,20 @@ static void own_stats(void) {
           own_blocks_out[0], own_blocks_out[1],
           own_blocks_out[2], own_blocks_out[3],
           (double)(own_commit - own_base) / (1024.0 * 1024.0));
-  fprintf(stderr, "own gc: %ld collections, %.1f MB live\n",
-          own_gc_count,
-          (double)own_live_bytes / (1024.0 * 1024.0));
+  {
+    double wall = own_now() - own_t_start;
+    double gc = own_t_mark + own_t_sweep + own_t_rendezvous;
+    fprintf(stderr,
+            "own gc: %ld collections (%ld minor), %.1f MB live\n",
+            own_gc_count, own_minor_count,
+            (double)own_live_bytes / (1024.0 * 1024.0));
+    fprintf(stderr,
+            "own gc: wall %.3fs | gc %.3fs (%.1f%%) = mark %.3fs"
+            " (%.1f%% of gc) + sweep %.3fs + rendezvous %.3fs\n",
+            wall, gc, wall > 0 ? 100.0 * gc / wall : 0.0,
+            own_t_mark, gc > 0 ? 100.0 * own_t_mark / gc : 0.0,
+            own_t_sweep, own_t_rendezvous);
+  }
 }
 #endif /* AHC_GC_OWN */
 
@@ -578,10 +648,21 @@ AhcNode *ahc_mk_ptr(void *p) {
   AhcNode *n = alloc_node(); n->tag = AHC_PTR; n->u.p = p; return n;
 }
 
+/* THE CONSTRUCTION-ORDER INVARIANT (generational collector): an
+   object must never gain a pointer to something allocated AFTER
+   it without a write barrier. A collection can run between any
+   two allocations, conservatively mark the half-built owner, and
+   the sticky-marked owner's later-assigned child is then invisible
+   to the next minor - it gets freed while referenced. (Found by
+   AHC_OWN_PARANOID on b_sumfold: an old CON, fields young, fields
+   freed.) So: components are allocated BEFORE their owner, and
+   slot-fills store only values that already existed. The paranoid
+   shadow-mark verifier is the enforcement tool. */
 AhcNode *ahc_mk_con(int contag, int arity) {
+  AhcNode **fields = arity ? ahc_env(arity) : NULL;
   AhcNode *n = alloc_node();
   n->tag = AHC_CON; n->u.con.contag = contag; n->u.con.arity = arity;
-  n->u.con.fields = arity ? ahc_env(arity) : NULL;
+  n->u.con.fields = fields;
   return n;
 }
 
@@ -649,6 +730,9 @@ AhcNode *ahc_eval(AhcNode *n) {
         AhcTask *w = (AhcTask *)n->u.bh.waiters;
         __atomic_store_n(&n->u.ind, v, __ATOMIC_RELEASE);
         __atomic_store_n(&n->tag, AHC_IND, __ATOMIC_RELEASE);
+#ifdef AHC_GC_OWN
+        own_write_barrier(n);
+#endif
         while (w) {
           AhcTask *nx = w->qnext;
           wake(w);
@@ -2015,6 +2099,9 @@ static AhcNode *io_chan_send(AhcNode **env, AhcNode *w) {
     if (!cell) ahc_die("out of memory");
     cell->v = v;
     cell->next = NULL;
+#ifdef AHC_GC_OWN
+    if (c->tail) own_write_barrier(c->tail);
+#endif
     if (c->tail) c->tail->next = cell;
     else c->head = cell;
     c->tail = cell;
@@ -2250,7 +2337,7 @@ typedef struct {
 static SparkDeque spark_deques[AHC_MAX_WORKERS + 1];
 static __thread int my_deque;    /* 0 = main thread */
 
-#ifdef AHC_USE_BOEHM
+#if defined(AHC_USE_BOEHM) || defined(AHC_GC_OWN)
 int ahc_bump_slot_hint(void) { return my_deque; }
 #endif
 static AhcTask worker_shells[AHC_MAX_WORKERS];
@@ -2326,11 +2413,13 @@ static AhcNode *sparked_die_code(AhcNode **env) {
 static AhcNode *mk_sparked_die(const char *msg) {
   size_t l = strlen(msg);
   char *m = (char *)AHC_ALLOC(l + 1);
+  AhcNode *pn;
   AhcNode **e;
   if (!m) ahc_die("out of memory");
   memcpy(m, msg, l + 1);
+  pn = ahc_mk_ptr(m);          /* child BEFORE owner (invariant) */
   e = ahc_env(1);
-  e[0] = ahc_mk_ptr(m);
+  e[0] = pn;
   return ahc_mk_thunk(sparked_die_code, e);
 }
 
@@ -2363,6 +2452,9 @@ static void run_spark(AhcNode *x) {
     }
     __atomic_store_n(&x->u.ind, v, __ATOMIC_RELEASE);
     __atomic_store_n(&x->tag, AHC_IND, __ATOMIC_RELEASE);
+#ifdef AHC_GC_OWN
+    own_write_barrier(x);
+#endif
   }
   __atomic_fetch_add(&sparks_converted, 1, __ATOMIC_RELAXED);
 }
@@ -2441,7 +2533,15 @@ static void start_workers(void) {
      time, so the honest default is off until the collector
      campaign (design note 7.6, the gate's return clause). */
   const char *cfg = getenv("AHC_WORKERS");
+#ifdef AHC_GC_OWN
+  /* C3 flips the default ON for the own collector: the B1 gate
+     is re-run against an allocator that can feed the workers. */
+  long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+  long want = cfg ? atol(cfg)
+                  : (ncpu > 1 ? (ncpu - 1 < 4 ? ncpu - 1 : 4) : 0);
+#else
   long want = cfg ? atol(cfg) : 0;
+#endif
   int i;
   if (want < 0) want = 0;
   if (want > AHC_MAX_WORKERS) want = AHC_MAX_WORKERS;
@@ -2625,6 +2725,54 @@ static void gc_trace(AhcNode *o) {
   }
 }
 
+/* Bounded runtime structures are re-walked every collection
+   instead of barriered: tasks, scopes, protected values, channel
+   HEADS (cell chains are covered by the tail-append barrier).
+   They mutate constantly and their population is small - this is
+   the remembered set for everything that is not the pure graph. */
+static void gc_walk_runtime(void) {
+  int i;
+  for (i = 0; i < task_n; i++)
+    if (task_reg[i])
+      gc_scan_range((const char *)task_reg[i],
+                    (const char *)task_reg[i] + sizeof(AhcTask));
+  gc_scan_range((const char *)&main_task,
+                (const char *)(&main_task + 1));
+  for (i = 0; i < scope_n; i++)
+    if (scope_reg[i]) {
+      AhcScope *sc = scope_reg[i];
+      gc_scan_range((const char *)sc, (const char *)(sc + 1));
+      if (sc->kids)
+        gc_scan_range((const char *)sc->kids,
+                      (const char *)(sc->kids + sc->n));
+    }
+  for (i = 0; i < chan_n; i++)
+    if (chan_reg[i])
+      gc_scan_range((const char *)chan_reg[i],
+                    (const char *)(chan_reg[i] + 1));
+  for (i = 0; i < prot_n; i++)
+    if (prot_reg[i]) {
+      AhcProt *pr = prot_reg[i];
+      AhcProtWaiter *w;
+      gc_scan_range((const char *)pr, (const char *)(pr + 1));
+      for (w = pr->waiters; w; w = w->next)
+        gc_scan_range((const char *)w, (const char *)(w + 1));
+    }
+}
+
+/* Drain the remembered set: entries are OLD objects whose edges
+   changed; trace them directly (gc_push would skip their sticky
+   marks). */
+static void gc_drain_remembered(void) {
+  int s;
+  size_t i;
+  for (s = 0; s < AHC_OWN_NSLOTS; s++) {
+    for (i = 0; i < own_ssb_n[s]; i++)
+      gc_trace((AhcNode *)((void **)own_ssb_seg[s])[i]);
+    own_ssb_n[s] = 0;
+  }
+}
+
 static void gc_mark_from_roots(int nw) {
   int i;
   jmp_buf jb;
@@ -2669,25 +2817,63 @@ static void gc_mark_from_roots(int nw) {
   while (gc_msp > 0) gc_trace(gc_mark_stack[--gc_msp]);
 }
 
-static void gc_sweep(void) {
+static long gc_sweep(int major) {
   size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK;
   size_t bi;
   long live = 0;
   int k, c, w;
-  /* flag the blocks threads are actively bumping */
+  /* flag the blocks threads are actively bumping; they also stay
+     dirty (their bumps continue into the next cycle) */
   for (w = 0; w <= AHC_MAX_WORKERS; w++)
     for (k = 0; k < 3; k++)
       for (c = 0; c < OWN_NCLASS; c++)
-        if (gc_pub_active[w][k][c])
+        if (gc_pub_active[w][k][c]) {
           gc_pub_active[w][k][c]->gc_active = 1;
+          gc_pub_active[w][k][c]->epoch = (uint32_t)own_gc_count;
+        }
   for (bi = 0; bi < nblocks; bi++) {
     OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
     switch (own_bstate[bi]) {
     case OWN_B_SMALL: {
-      size_t mlo = (bi * OWN_BLOCK) >> 6;
-      size_t mhi = ((bi + 1) * OWN_BLOCK) >> 6;
       uint32_t off, sc = b->size_class;
       uint32_t nlive = 0, nfree = 0;
+      /* minor: only DIRTY blocks (allocated into this cycle) are
+         swept; everything else keeps its sticky marks and its
+         standing free list. Marks are never cleared here - the
+         next major clears the whole bitmap before it marks. */
+      if (!major && b->epoch != (uint32_t)own_gc_count) {
+        live += OWN_BLOCK;
+        break;
+      }
+      /* Fast path: the block's mark bits live in one contiguous
+         1KB bitmap slice. If every word is zero the whole block
+         is garbage - free it without touching a single slot. On
+         high-churn/low-survival programs (parfib retains ~0) this
+         is nearly every block, and it turns the sweep from
+         O(slots) into O(block/512). */
+      {
+        size_t mlo = (bi * OWN_BLOCK) >> 6;
+        size_t mhi = ((bi + 1) * OWN_BLOCK) >> 6;
+        const uint64_t *mw = (const uint64_t *)(own_marks + mlo);
+        size_t nw = (mhi - mlo) / 8, wi;
+        int any = 0;
+        for (wi = 0; wi < nw && !any; wi++)
+          if (mw[wi]) any = 1;
+        if (!any && !b->gc_active) {
+          own_bstate[bi] = OWN_B_FREE;
+          b->free_head = NULL;
+          b->free_count = 0;
+          b->next =
+            (OwnBlock *)__atomic_load_n(&own_pool, __ATOMIC_RELAXED);
+          __atomic_store_n(&own_pool, b, __ATOMIC_RELAXED);
+#ifdef MADV_FREE_REUSABLE
+          if (own_madvise)
+            madvise((char *)b + OWN_HDR, OWN_BLOCK - OWN_HDR,
+                    MADV_FREE_REUSABLE);
+#endif
+          break;
+        }
+      }
       b->free_head = NULL;
       for (off = OWN_HDR; off + sc <= b->bump; off += sc) {
         char *o = (char *)b + off;
@@ -2699,7 +2885,6 @@ static void gc_sweep(void) {
           nfree++;
         }
       }
-      memset(own_marks + mlo, 0, mhi - mlo);
       b->free_count = nfree;
       if (nlive == 0 && !b->gc_active) {
         own_bstate[bi] = OWN_B_FREE;
@@ -2708,9 +2893,14 @@ static void gc_sweep(void) {
           (OwnBlock *)__atomic_load_n(&own_pool, __ATOMIC_RELAXED);
         __atomic_store_n(&own_pool, b, __ATOMIC_RELAXED);
 #ifdef MADV_FREE_REUSABLE
-        /* hand the pages back; reuse re-zeroes anyway */
-        madvise((char *)b + OWN_HDR, OWN_BLOCK - OWN_HDR,
-                MADV_FREE_REUSABLE);
+        /* Handing pages back costs a SYSCALL PER BLOCK, and the
+           C4 profile priced it at 24% of parfib's wall time
+           (4.72s -> 3.58s without). It buys RSS on block-churning
+           programs, so it stays - as an opt-in knob, off by
+           default, throughput first. */
+        if (own_madvise)
+          madvise((char *)b + OWN_HDR, OWN_BLOCK - OWN_HDR,
+                  MADV_FREE_REUSABLE);
 #endif
       } else {
         live += (long)nlive * sc + OWN_HDR;
@@ -2724,13 +2914,13 @@ static void gc_sweep(void) {
     case OWN_B_LARGE_HEAD: {
       size_t nb = b->nblocks, j;
       void *obj = (char *)b + OWN_HDR;
+      if (!major && b->epoch != (uint32_t)own_gc_count) {
+        live += (long)(nb * OWN_BLOCK);   /* sticky: floats */
+        bi += nb - 1;
+        break;
+      }
       if (own_marked(obj)) {
         live += (long)(nb * OWN_BLOCK);
-        {
-          size_t i2 = (size_t)((char *)obj - own_base) >> 3;
-          own_marks[i2 >> 3] &=
-            (unsigned char)~(1u << (i2 & 7));
-        }
       } else {
         for (j = 0; j < nb; j++) {
           OwnBlock *fb = (OwnBlock *)(own_base
@@ -2755,31 +2945,143 @@ static void gc_sweep(void) {
           gc_pub_active[w][k][c]->gc_active = 0;
           gc_pub_active[w][k][c] = NULL;
         }
-  own_live_bytes = live;
+  return live;
 }
 
-static void own_collect(void) {
+static unsigned char *own_shadow;   /* paranoid-mode bitmap */
+
+static int shadow_marked(void *o) {
+  size_t i = (size_t)((char *)o - own_base) >> 3;
+  return own_shadow[i >> 3] & (unsigned char)(1u << (i & 7));
+}
+
+static void own_paranoid_check(int nw) {
+  size_t bytes = ((size_t)(own_commit - own_base) / 64);
+  size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK;
+  size_t bi;
+  unsigned char *real;
+  if (!own_shadow)
+    own_shadow = (unsigned char *)malloc(OWN_RESERVE / 64 / 16);
+  /* swap: run a FULL mark into a fresh bitmap */
+  real = own_marks;
+  own_marks = own_shadow;
+  memset(own_marks, 0, bytes);
+  gc_walk_runtime();
+  gc_mark_from_roots(nw);
+  own_shadow = own_marks;
+  own_marks = real;
+  /* every shadow-live object in a DIRTY block must be really
+     marked - those are the slots the minor sweep will free */
+  for (bi = 0; bi < nblocks; bi++) {
+    OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    uint32_t off, sc;
+    if (own_bstate[bi] != OWN_B_SMALL) continue;
+    if (b->epoch != (uint32_t)own_gc_count) continue;
+    sc = b->size_class;
+    for (off = OWN_HDR; off + sc <= b->bump; off += sc) {
+      char *o = (char *)b + off;
+      if (shadow_marked(o) && !own_marked(o)) {
+        fprintf(stderr,
+                "own gc PARANOID: losing %p kind=%u sc=%u "
+                "tag=%d epoch=%u gc=%ld\n",
+                (void *)o, b->kind, sc,
+                b->kind == 0 ? (int)((AhcNode *)o)->tag : -1,
+                b->epoch, own_gc_count);
+        /* AHC_OWN_PARANOID=2 additionally hunts referrers - an
+           O(heap^2) scan that names the object holding the edge,
+           which is what identifies the violating construction
+           site. Worth every second when it is needed. */
+        if (own_paranoid_level >= 2) {
+          size_t bj;
+          for (bj = 0; bj < nblocks; bj++) {
+            OwnBlock *rb = (OwnBlock *)(own_base + bj * OWN_BLOCK);
+            uint32_t roff, rsc;
+            if (own_bstate[bj] != OWN_B_SMALL) continue;
+            rsc = rb->size_class;
+            for (roff = OWN_HDR; roff + rsc <= rb->bump;
+                 roff += rsc) {
+              char *r = (char *)rb + roff;
+              size_t w;
+              if (!shadow_marked(r)) continue;
+              for (w = 0; w + 8 <= rsc; w += 8)
+                if (*(void **)(r + w) == (void *)o) {
+                  fprintf(stderr,
+                          "  referrer %p kind=%u sc=%u tag=%d "
+                          "marked=%d epoch=%u word=%zu\n",
+                          (void *)r, rb->kind, rsc,
+                          rb->kind == 0
+                            ? (int)((AhcNode *)r)->tag : -1,
+                          own_marked(r), rb->epoch, w / 8);
+                }
+            }
+          }
+        }
+        ahc_die("own gc: generational invariant violated"
+                " (see AHC_OWN_PARANOID output)");
+      }
+    }
+  }
+}
+
+static void own_collect(int major) {
   int nw;
   unsigned long spins = 0;
   own_in_gc = 1;
   nw = __atomic_load_n(&n_workers, __ATOMIC_ACQUIRE);
   memcpy(gc_pub_active[0], own_active, sizeof own_active);
-  __atomic_store_n(&gc_want, 1, __ATOMIC_RELEASE);
-  while (__atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE) != nw) {
-    if ((spins++ & 4095) == 0) pthread_cond_broadcast(&idle_cv);
-    spin_pause(&spins);
+  {
+    double t0 = own_now();
+    __atomic_store_n(&gc_want, 1, __ATOMIC_RELEASE);
+    while (__atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE) != nw) {
+      if ((spins++ & 4095) == 0) pthread_cond_broadcast(&idle_cv);
+      spin_pause(&spins);
+    }
+    own_t_rendezvous += own_now() - t0;
   }
+  {
+    double t_mark0 = own_now();
+  if (major) {
+    /* the whole bitmap resets; every sticky mark is re-earned */
+    size_t bytes = ((size_t)(own_commit - own_base) / 64);
+    memset(own_marks, 0, bytes);
+    {
+      int s;
+      for (s = 0; s < AHC_OWN_NSLOTS; s++) own_ssb_n[s] = 0;
+    }
+  } else {
+    gc_drain_remembered();
+  }
+  gc_walk_runtime();
   gc_mark_from_roots(nw);
+  own_t_mark += own_now() - t_mark0;
+  }
+  if (!major && own_paranoid_level) own_paranoid_check(nw);
   /* pool/partial mutations always under own_mx - uncontended
      here (workers parked), but the uniform discipline is what
      TSan can verify */
   pthread_mutex_lock(&own_mx);
-  memset(own_partial, 0, sizeof own_partial);
+  if (major) memset(own_partial, 0, sizeof own_partial);
   memset(own_free_tls, 0, sizeof own_free_tls);   /* my own */
-  gc_sweep();
+  {
+    /* live is a MAJOR-only measurement: a minor counts undirty
+       blocks wholesale, and letting that inflate own_live_bytes
+       fed the trigger a runaway threshold (832MB committed on
+       b_map before this line existed) */
+    double t_sweep0 = own_now();
+    long live = gc_sweep(major);
+    own_t_sweep += own_now() - t_sweep0;
+    if (major) own_live_bytes = live;
+  }
   pthread_mutex_unlock(&own_mx);
   __atomic_store_n(&own_since_gc, 0, __ATOMIC_RELAXED);
   own_gc_count++;
+  if (major) {
+    own_minors_since_major = 0;
+    own_live_at_major = own_live_bytes;
+  } else {
+    own_minors_since_major++;
+    own_minor_count++;
+  }
   __atomic_store_n(&gc_want, 0, __ATOMIC_RELEASE);
   while (__atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE) != 0)
     spin_pause(&spins);
@@ -2808,7 +3110,20 @@ static void own_maybe_collect(void) {
   if (thr < floor_bytes) thr = floor_bytes;
   if (__atomic_load_n(&own_since_gc, __ATOMIC_RELAXED) < thr)
     return;
-  own_collect();
+  /* a major when minors have piled up float, or live has grown
+     well past the last major's baseline; minor otherwise */
+  {
+    static long major_every = -1;
+    long base = own_live_at_major;
+    if (major_every < 0) {
+      const char *e = getenv("AHC_OWN_MAJOR_EVERY");
+      major_every = e ? atol(e) : 4;
+      if (major_every < 1) major_every = 1;
+    }
+    if (base < (24l << 20)) base = 24l << 20;
+    own_collect(own_minors_since_major >= major_every
+                || own_live_bytes > base * 3);
+  }
 }
 
 /* Workers park here; called from the allocation slow path, the
@@ -4106,6 +4421,12 @@ void ahc_rts_init(void) {
   ahc_prim_pseq = mk_prim2(p_pseq);
   if (getenv("AHC_SPARK_STATS")) atexit(spark_stats);
 #ifdef AHC_GC_OWN
+  {
+    const char *pv = getenv("AHC_OWN_PARANOID");
+    own_paranoid_level = pv ? atoi(pv) : 0;
+    own_madvise = getenv("AHC_OWN_MADVISE") != NULL;
+    own_t_start = own_now();
+  }
   if (getenv("AHC_OWN_STATS")) atexit(own_stats);
 #endif
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);

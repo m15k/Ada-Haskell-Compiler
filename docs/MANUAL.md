@@ -1187,6 +1187,59 @@ allocation batches through `GC_malloc_many` free lists, one
 global-lock acquisition per ~150 objects instead of one per
 node.)
 
+### The own collector
+
+So AHC grew its own — `AHC_GC=own` selects it, `boehm` remains the
+default, and `docs/collector-design-note.md` is the argument. Three
+facts about *this* runtime dictated the whole design before a line
+was written: evaluation is C recursion with no stack maps, so
+**roots are conservative, forever**; the FFI hands node addresses
+to C, so the heap is **non-moving, permanently** (which happily
+deletes all pinning machinery from the design space); and a node's
+pointer fields follow from its tag, so the heap is **precisely
+traceable** — except that env arrays carry no length header, a gap
+that closes for free once size-segregated pages make an object's
+size a property of its page.
+
+The result is Immix-shaped: 64KB blocks in one 64GB virtual
+reservation, per-thread bump allocation per size class, a
+conservative filter that turns any candidate word into an object
+base by masking to a block header and rounding down to a slot, and
+stop-the-world mark-sweep whose pauses are invisible to the green
+scheduler (its switch points are IO binds only — determinism costs
+nothing here, which is why a concurrent collector was refused).
+Generational collection came next: sticky mark bits with per-block
+epochs, so a minor sweeps only blocks touched this cycle, and the
+write barrier is *one hot site* — the thunk update — because
+laziness confines mutation almost entirely to it.
+
+Two lessons outlived their milestones. The first is an invariant:
+**in a generational collector, allocation order is a correctness
+property.** `ahc_mk_con` had allocated the constructor node before
+its fields array since the beginning; a collection landing between
+those two allocations conservatively marks the half-built node
+*old*, and the young array it receives a moment later is invisible
+to the next minor — freed while referenced. Components before
+owners, now and forever, with `AHC_OWN_PARANOID` shadow-marking
+after every minor to catch the next violation at the moment it
+happens rather than at the crash three seconds later.
+
+The second is about measurement. The campaign's last stage,
+parallel marking, was admitted only on condition that a profile
+show mark time dominating. So the collector was taught to time its
+own phases — and mark turned out to be 4–21% of wall, while the
+profile pointed hard at *sweep*: a `madvise` syscall per freed
+block costing 24% of one benchmark's runtime while moving peak RSS
+by a single megabyte, and a sweep loop walking every slot of blocks
+whose mark bitmap could have been dismissed in one 1KB read.
+Fixing those took parfib from 16.7s to 11.5s sequential and 6.19s
+to 3.41s on four workers — 3.37× its own sequential, finally
+clearing the parallel bar that Phase B could never reach on the
+old collector. The stage that never shipped paid for itself twice
+over, which is the M74 rule with a sharper edge: profile the phase
+you are about to optimize, because it may not be the one costing
+you.
+
 ---
 
 ## 10. Numbers
@@ -1919,6 +1972,25 @@ order that ships. (The second scar in the same milestone: an 8MB
 green-thread stack overflowed silently under deep lazy evaluation
 and scribbled the heap - hence the guard page and the 64MB virtual
 reservation of chapter 9.)
+
+**The constructor that was correct for a hundred milestones.**
+`ahc_mk_con` allocated the node, then its fields array — the
+obvious order, and unimpeachable under a non-moving,
+non-generational collector. The day AHC's own collector became
+generational it became a liveness bug: a collection landing
+*between* the two allocations conservatively finds the half-built
+node on the C stack and marks it, which under sticky marks means
+*old*; the fields array allocated a moment later is young, is
+referenced only by an old object the next minor won't re-trace,
+and is swept while live. It surfaced as `b_sumfold` dying with
+"non-exhaustive patterns in function" — a freed-but-referenced
+object wearing someone else's tag. Rule: **allocation order is a
+correctness property in a generational collector** — components
+before owners. The corollary rule is about tooling: when a bug's
+symptom is three seconds downstream of its cause, write the
+verifier that fires at the cause (`AHC_OWN_PARANOID` shadow-marks
+after every minor and names the object about to be lost), because
+you will need it again.
 
 ---
 
