@@ -652,5 +652,8 @@ byte-identical at every worker count.
 The path forward, when a collector campaign is worth it: a
 per-thread nursery design (bump-allocated, scavenged into the
 shared heap) or a different collector entirely. That is its own
-design note; nothing else in Phase B is worth touching until it
-exists.
+design note - now written: `docs/collector-design-note.md`
+(M106), which turns this postmortem's constraints into a
+block-structured, non-moving, Immix-shaped design with staged
+gates. Nothing else in Phase B is worth touching until its C2+C3
+gates hold.
