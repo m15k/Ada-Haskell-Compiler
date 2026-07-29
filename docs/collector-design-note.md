@@ -354,7 +354,9 @@ claimed thunk (same answer, by purity) and race to update, which
 never blocks and never deadlocks. That is not possible today only
 because claiming overwrites `u.thunk.code/env` with the owner and
 waiter fields - preserving them is a node-layout question, and
-its own milestone.
+its own milestone. **Built and measured in section 10: it works,
+and it is 1.16x SLOWER. The constraint turned out to be deeper
+than the choice of waiting strategy.**
 
 **C2: FAIL** on peak RSS - geometric mean 2.31x of Boehm against
 a 2.0x bar (correctness halves all pass: exec suite, forced-
@@ -371,3 +373,65 @@ lowered by collecting EARLIER - never by releasing later. The fix
 is therefore a growth-aware trigger (collect on committed-bytes
 velocity, not just a multiple of live), plus size-class
 fragmentation work. Also its own milestone.
+
+## 10. Thunk re-evaluation: tried, measured, not merged
+
+Section 9 named re-evaluation as the promising exit from the
+blocked-thread problem: let a thread that finds a thunk claimed by
+another simply evaluate it again and race to publish. Purity makes
+the answer identical, so nobody ever has to wait. It was built.
+It does not pay, and the reasons are worth keeping.
+
+**The enabling change** is real and works: the blackhole owner
+moves out of the node's union into the four bytes of padding that
+already sat beside the tag, so `thunk.code`/`thunk.env` survive
+blackholing and remain available to a second evaluator. The node
+stays 24 bytes. Tearing is prevented by publishing through a
+CAS to a transient CLAIM state, so a re-evaluator that re-reads
+an unchanged BLACKHOLE tag knows the code/env pair it captured
+was consistent. Correctness held throughout: both exec suites
+green, `<<loop>>` still reported (a per-thread stack of nodes
+under re-evaluation catches self-loops reached that way), output
+byte-identical at 0/2/4 workers.
+
+**The measurement, interleaved A/B against M109:**
+
+    parfib  workers=0   spin 11754ms   re-eval 13629ms   1.16x
+    parfib  workers=2   spin  5562ms   re-eval  6519ms   1.17x
+    parsort workers=4   re-eval 0.66-0.80x - slower than its
+                        own sequential run
+
+Two independent costs, and it is worth separating them:
+
+1. **Layout, ~16%, paid even at zero workers** where
+   re-evaluation never fires. `owner` is a 4-byte store into the
+   same 8-byte word as the tag, on the most executed write in a
+   graph reducer. The obvious repair - a packed 64-bit
+   `{tag, owner}` header written in a single store, with readers
+   masking - is untried and would need every `->tag` access
+   revisited.
+2. **Policy, and this is the deeper one.** Re-evaluation's cost
+   scales with the SIZE of the duplicated thunk, and the thunks
+   that attract contention are exactly the large ones. parfib's
+   many small thunks tolerate duplication; parsort's 31 huge
+   `forceList` thunks are destroyed by it. Spinning has precisely
+   the mirror-image profile - cheap for long thunks (the owner is
+   about to finish), ruinous for short ones spread across cores.
+   A bounded spin-then-duplicate hybrid was tried at several
+   thresholds and beat neither pure strategy on both benchmarks.
+
+So the honest summary of the blocked-thread problem after three
+attempts: **helping deadlocks, spinning wastes a core,
+re-evaluation duplicates work, and which of the last two is worse
+depends on a property of the thunk that the runtime cannot see.**
+Every option is bad because AHC's evaluator is C recursion and
+cannot suspend a partially-evaluated computation - that, not the
+choice among the three, is the actual constraint. Anything that
+genuinely fixes the parallel gate has to attack it: a explicit
+evaluation stack for thunk forcing (so a blocked computation can
+be set aside and resumed), which is a reducer redesign and
+substantially larger than this entire collector campaign.
+
+The implementation is preserved on the `experiment/thunk-reeval`
+branch rather than deleted, because the layout half is the
+prerequisite for any future attempt.
