@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+Gate verdicts on the fixed collector, and a rounding bug (M117).
+Both gates re-run after M115 - the first numbers in this campaign
+from a collector that does not lose live data.
+
+C3 sequential PASSES at geometric mean 0.844: own is 16% faster
+than Boehm and faster on five of six workloads. That settles two
+open questions - M115's fourteen construction-order fixes are
+performance-neutral, and unclamping the trigger floor did not cost
+the sequential margin.
+
+C3 parallel FAILS and is not currently decidable. b_parmap, which
+had cleared both bars at 2.60x, reads 2.31x - but the machine
+degraded 30-55% across the session (the same gate measured Boehm's
+b_map at 7015ms against 4466ms earlier the same day, unchanged
+code), and thermal throttling penalises high-worker
+configurations asymmetrically in a way rotation cannot correct.
+The sequential half is immune because both builds are
+single-threaded and interleaved. Re-measure on a cool machine.
+
+C2 reported PASS at 2.00x and had actually FAILED at 2.00408x: the
+harness printed the geometric mean to two decimals and then
+compared THE PRINTED STRING to the bar, so "2.00" <= 2.0 passed a
+value 0.20% over it. Both gates now decide on full precision and
+display rounded. This is the third harness defect of the campaign
+after non-interleaved timing (M112) and single-sample RSS (M113),
+and all three share a shape: the measuring apparatus quietly
+deciding something the numbers did not support. A gate that can
+report PASS on a failing value is worse than no gate, because it
+is trusted.
+
+Worth recording beside the failure: C2 has gone 2.31x -> 2.00408x
+purely from unclamping the floor, missing now by 0.2% rather than
+15%, with 0.844 against a 1.00 bar on the sequential side to pay
+for a further reduction. Section 13's C2/C3 floor tension looks
+solvable rather than genuine - a change of view resting on
+measurements from a degraded machine, so confirm before acting.
+
 The collector gets a CI job, and the runtime gets Linux back
 (M116). M115 argued that an invariant enforced by remembering is a
 habit, and that the checker is what makes it real. This wires that

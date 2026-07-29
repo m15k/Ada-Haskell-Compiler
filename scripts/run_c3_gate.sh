@@ -67,11 +67,12 @@ for hs in tests/bench/b_fib.hs tests/bench/b_sumfold.hs \
   ratios="$ratios $r"
   echo "$base: boehm ${bb}ms | own ${bo}ms (${r})"
 done
+# full precision for the decision, rounded for the eye (M117)
 gm=$(python3 -c "
 import math
 rs = [float(x) for x in '''$ratios'''.split()]
-print(f'{math.exp(sum(map(math.log, rs)) / len(rs)):.3f}')")
-echo "sequential geometric mean own/boehm: $gm (gate: <= 1.00)"
+print(repr(math.exp(sum(map(math.log, rs)) / len(rs))))")
+printf 'sequential geometric mean own/boehm: %.3f (gate: <= 1.00)\n' "$gm"
 python3 -c "exit(0 if $gm <= 1.00 else 1)" || seq_ok=0
 
 echo "== parallel half (own build, the original B1 gate) =="

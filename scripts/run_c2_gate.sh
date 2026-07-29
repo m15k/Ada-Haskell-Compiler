@@ -69,11 +69,15 @@ for hs in tests/bench/b_fib.hs tests/bench/b_sumfold.hs \
   ratios="$ratios $r"
   echo "$base: own $((ro/1048576))MB boehm $((rb/1048576))MB (${r}x)"
 done
+# Decide on FULL PRECISION, display rounded. Deciding on the
+# rounded value let a geometric mean of 2.00408 report PASS
+# against a 2.0 bar, because the string "2.00" was what got
+# compared (M117).
 gm=$(python3 -c "
 import math
 rs = [float(x) for x in '''$ratios'''.split()]
-print(f'{math.exp(sum(map(math.log, rs)) / len(rs)):.2f}')")
-echo "geometric mean: ${gm}x (gate: <= 2.0x)"
+print(repr(math.exp(sum(map(math.log, rs)) / len(rs))))")
+printf 'geometric mean: %.2fx (gate: <= 2.0x)\n' "$gm"
 python3 -c "exit(0 if $gm <= 2.0 else 1)" || fail=1
 
 if [ $fail = 0 ]; then echo "C2 GATE: PASS"; else echo "C2 GATE: FAIL"; fi

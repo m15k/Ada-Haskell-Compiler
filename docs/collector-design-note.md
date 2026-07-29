@@ -729,3 +729,56 @@ property mechanically and finds every violation in one pass. It
 should run in CI alongside the soak, and any future runtime
 allocation site is now cheap to validate rather than expensive to
 audit.
+
+
+## 16. Gate verdicts on the fixed collector, and a rounding bug (M117)
+
+Both gates re-run after M115 fixed the live-data loss. The numbers
+are the first ones in this campaign measured on a collector that
+does not lose live data.
+
+**C3 sequential: PASS, geometric mean 0.844** - own is 16% faster
+than Boehm, and faster on five of six workloads (b_map 0.604,
+b_sort 0.736, b_sumfold 0.755, b_strictfold 0.859, b_fib 0.959;
+only b_bignum loses, at 1.303, because it barely allocates). This
+settles two open questions: M115's fourteen construction-order
+fixes are performance-neutral, and unclamping the trigger floor
+did not cost the sequential margin.
+
+**C3 parallel: FAIL, and NOT CURRENTLY DECIDABLE.** parfib
+2.29x/1.91x, parsort 1.58x/1.74x, parmap 2.11x/2.31x - where
+parmap had previously cleared both bars at 2.60x. The machine
+degraded across the session: the same gate measured Boehm's b_map
+at 7015ms against 4466ms earlier the same day, on unchanged code.
+Thermal throttling penalises high-worker configurations
+asymmetrically and rotation cannot correct for that, since a
+4-worker run simply heats the package more than a sequential one.
+The sequential half is immune (both builds single-threaded and
+interleaved, so they throttle together), which is why it is
+reported as solid and this is not. Re-measure the parallel half on
+a cool machine before treating parmap's drop as real.
+
+**C2: reported PASS at 2.00x, actually FAIL at 2.00408x.** The
+harness computed the geometric mean, printed it to two decimals,
+and then compared THE PRINTED STRING against the bar - so "2.00"
+<= 2.0 passed a value that is over the bar by 0.20%. Both gates
+now decide on full precision and display rounded. Correctness
+halves all passed (exec suite under own, forced-collection soak at
+0/2/4 workers, TSan); RSS was b_fib 3.61x, b_sumfold 0.98x,
+b_strictfold 1.10x, b_sort 3.52x, b_map 2.36x.
+
+That is the third harness defect this campaign, after
+non-interleaved timing (M112) and single-sample RSS (M113), and
+all three have the same shape: **the measuring apparatus quietly
+deciding something the numbers did not support.** A gate that can
+report PASS on a failing value is worse than no gate, because it
+is trusted.
+
+The trajectory is worth recording alongside the failure: C2 has
+gone 2.31x -> 2.00408x purely from unclamping the trigger floor,
+so it now misses by 0.2% rather than 15%, and the sequential half
+has 0.844 against a 1.00 bar to pay for a modest further
+reduction. The C2/C3 floor tension of section 13 therefore looks
+like a solvable tuning question rather than a genuine conflict -
+which is a change of view, and rests on measurements taken on a
+degraded machine, so it should be confirmed before being acted on.
