@@ -49,8 +49,22 @@ for hs in tests/bench/b_fib.hs tests/bench/b_sumfold.hs \
   base=$(basename "$hs" .hs)
   AHC_GC=own scripts/ahc-build.sh "$hs" "$tmp/${base}_o" >/dev/null 2>&1
   AHC_GC=boehm scripts/ahc-build.sh "$hs" "$tmp/${base}_b" >/dev/null 2>&1
-  ro=$(/usr/bin/time -l "$tmp/${base}_o" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
-  rb=$(/usr/bin/time -l "$tmp/${base}_b" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+  # Peak RSS is a single number per run, but it is not a constant:
+  # it depends on where collections fall relative to peak live data,
+  # so one sample per binary is not a measurement. Take three each,
+  # ALTERNATING the two builds so any drift in system memory
+  # pressure lands on both, and keep the minimum - the cleanest
+  # reproducible figure, applied identically to both sides.
+  # (Timing gates need interleaving for thermal drift; this is the
+  # same discipline applied to the quantity this gate actually
+  # measures - see collector-design-note.md section 11.)
+  ro=999999999999; rb=999999999999
+  for _i in 1 2 3; do
+    _v=$(/usr/bin/time -l "$tmp/${base}_o" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    [ "$_v" -lt "$ro" ] && ro=$_v
+    _v=$(/usr/bin/time -l "$tmp/${base}_b" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    [ "$_v" -lt "$rb" ] && rb=$_v
+  done
   r=$(python3 -c "print(f'{$ro/$rb:.2f}')")
   ratios="$ratios $r"
   echo "$base: own $((ro/1048576))MB boehm $((rb/1048576))MB (${r}x)"

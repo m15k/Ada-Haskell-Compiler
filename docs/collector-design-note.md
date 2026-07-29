@@ -494,3 +494,52 @@ is recorded here as a proposal and not acted on.
 The sequential half passes comfortably and repeatedly: geometric
 mean 0.883, 0.892, 0.906 and 0.929 across four independent runs -
 own is consistently 7-12% faster than Boehm.
+
+
+## 12. C2 re-measured: the RSS failure is real (M113)
+
+The timing gates were measuring badly (section 11), so the C2 gate
+was re-run with its own methodology tightened: peak RSS is now
+sampled three times per binary, ALTERNATING the two builds so any
+drift in system memory pressure lands on both, keeping the minimum
+for each. The result barely moved - geometric mean **2.29x**
+against the 2.0x bar, versus 2.31x from the old single-sample
+version.
+
+That 0.02 shift is the useful part. Peak RSS was already being
+measured soundly; unlike wall time it does not drift with
+temperature, so the C2 failure is a REAL property of the
+collector, not an artifact of how it was measured. The two
+failures this campaign has recorded are therefore of different
+kinds, and should be treated differently.
+
+    b_fib        own  22MB | boehm   5MB   4.47x
+    b_sumfold    own 793MB | boehm 731MB   1.08x
+    b_strictfold own 616MB | boehm 513MB   1.20x
+    b_sort       own 149MB | boehm  35MB   4.27x
+    b_map        own 116MB | boehm  46MB   2.54x
+
+The shape is consistent across every run: large heaps are at
+parity or better, small and medium heaps are 2.5-4.5x. The
+correctness halves (exec suite, forced-collection soak at 0/2/4
+workers, TSan) pass every time.
+
+What has been ruled out by measurement, so nobody re-tries it:
+
+- **`madvise`** - RSS-neutral even on large heaps (797 vs 796MB),
+  while costing 24% of wall (section 0).
+- **The collection trigger floor** - b_fib and b_sort are
+  unchanged between a 4MB and a 12MB floor.
+- **The 16MB per-thread chunk** - a plausible fixed floor, but
+  wrong: hello-world under the own collector peaks below 1MB, so
+  chunks are reserved lazily and commit only on touch.
+
+So b_fib holding 22MB with a live set near zero is real, touched
+memory that none of the obvious levers move, and its cause is
+still unidentified. The standing diagnosis remains the structural
+one - peak RSS *is* the committed high-water mark, so only
+collecting EARLIER can lower it, which points at a growth-aware
+trigger (collect on committed-bytes velocity rather than a
+multiple of live) plus size-class fragmentation work. But that is
+a hypothesis, not a finding, and the next person on this should
+profile where those 22MB actually are before building anything.
