@@ -52,10 +52,17 @@ for hs in $progs; do
     || { echo "BUILD-FAIL own $base"; fail=1; continue; }
   ref=$("$tmp/${base}_b" 2>&1)
   bad=""
+  # AHC_OWN_VERIFY makes each run prove that the mark set is CLOSED
+  # under points-to, rather than only that the output happened to
+  # come out right. Output equality catches a lost object once it
+  # changes an answer; closure catches the missed EDGE at the
+  # collection that missed it, which is how M115's bug was found.
+  # Costs 20-50% of run time - cheap for what it proves.
   for fl in $FLOORS; do
-    got=$(AHC_OWN_MIN=$fl "$tmp/${base}_o" 2>&1)
+    got=$(AHC_OWN_VERIFY=1 AHC_OWN_MIN=$fl "$tmp/${base}_o" 2>&1)
     [ "$got" = "$ref" ] || bad="$bad $((fl/1000000))MB"
-    got=$(AHC_OWN_MIN=$fl AHC_OWN_MAJOR_EVERY=1 "$tmp/${base}_o" 2>&1)
+    got=$(AHC_OWN_VERIFY=1 AHC_OWN_MIN=$fl AHC_OWN_MAJOR_EVERY=1 \
+          "$tmp/${base}_o" 2>&1)
     [ "$got" = "$ref" ] || bad="$bad $((fl/1000000))MB/major"
   done
   if [ -n "$bad" ]; then

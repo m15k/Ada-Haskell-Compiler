@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+The collector gets a CI job, and the runtime gets Linux back
+(M116). M115 argued that an invariant enforced by remembering is a
+habit, and that the checker is what makes it real. This wires that
+conclusion in.
+
+scripts/run_own_soak.sh now sets AHC_OWN_VERIFY on every run, so
+each one proves the mark set is CLOSED under points-to rather than
+only that the output happened to come out right - output equality
+notices a lost object once it changes an answer, closure notices
+the missed EDGE at the collection that missed it. It costs 20-50%
+of run time, which is cheap for what it proves.
+
+.github/workflows/ci.yml gains a `collector` job running the soak,
+the whole exec suite under AHC_GC=own with AHC_OWN_VERIFY=1 and
+collections forced every 4MB, and the thread sanitiser. None of
+these had ever been in CI - the own collector had no automated
+coverage at all, which is the process half of why M114's bug
+survived five milestones.
+
+The job runs on macOS because AHC_GC=own is Darwin-only today: it
+reads thread stack bounds with pthread_get_stackaddr_np and the
+data segment through dyld. Both have Linux equivalents and neither
+is written, because writing them untested from a Mac is how this
+project acquires bugs. The Linux port of the collector is its own
+piece of work and is named as such in the workflow.
+
+Found while checking that: the runtime had not compiled on Linux
+AT ALL since M105. worker_main's idle nap used
+pthread_cond_timedwait_relative_np, a Darwin-only call, outside
+any guard - so the parked CI would have been entirely red, on the
+default Boehm build too, and nobody noticed because it is parked.
+Replaced with plain POSIX pthread_cond_timedwait on an absolute
+deadline, which works on both platforms and is tested here.
+
 The fourteen sites (M115). M114's live-data-loss bug is FIXED, and
 its cause was this project's own declared invariant, half-applied.
 

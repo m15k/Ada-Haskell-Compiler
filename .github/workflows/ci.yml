@@ -83,3 +83,52 @@ jobs:
 
       - name: Fuzz (50 seeds)
         run: scripts/run_fuzz.sh 50 1
+
+  # The own collector (AHC_GC=own) is Darwin-only today: it reads
+  # thread stack bounds with pthread_get_stackaddr_np and the data
+  # segment through dyld. Both have Linux equivalents
+  # (pthread_getattr_np, __data_start/_end) and neither is written,
+  # because writing them untested is how this project acquires
+  # bugs. So the collector is gated on macOS and the Linux port is
+  # its own piece of work.
+  #
+  # These two steps exist because of M114/M115: a live-data-loss
+  # bug survived five milestones of "soak clean" runs, because
+  # every one of them used a single collection cadence and only
+  # ever compared final OUTPUT. The soak now varies the cadence,
+  # and AHC_OWN_VERIFY proves the mark set is closed under
+  # points-to at every collection - which is what actually found
+  # the bug, in one run.
+  collector:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: alire-project/setup-alire@v4
+
+      - name: Select GNAT toolchain
+        run: alr -n toolchain --select gnat_native gprbuild
+
+      - name: Build (validation - contracts on)
+        run: alr -n build --validation
+
+      - name: Boehm collector (default) still green
+        run: scripts/run_exec.sh
+
+      - name: Own collector - correctness across GC cadences
+        # five trigger floors x minor and major, each run proving
+        # mark-set closure, all compared against the Boehm build
+        run: scripts/run_own_soak.sh
+
+      - name: Own collector - exec suite, verified, tight trigger
+        # the whole exec suite under AHC_GC=own with collections
+        # forced often and closure checked at every one of them
+        env:
+          AHC_GC: own
+          AHC_OWN_VERIFY: "1"
+          AHC_OWN_MIN: "4000000"
+        run: scripts/run_exec.sh
+
+      - name: Thread sanitizer (spark protocol + own allocator)
+        run: scripts/run_tsan.sh

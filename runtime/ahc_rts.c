@@ -2507,12 +2507,20 @@ static void *worker_main(void *arg) {
       run_spark(x);
     } else {
       /* 1ms naps instead of a wake protocol: robust against lost
-         wakeups by construction, and the idle cost is noise. */
+         wakeups by construction, and the idle cost is noise.
+         Plain POSIX pthread_cond_timedwait with an ABSOLUTE
+         deadline - the relative _np variant used here until M116
+         is Darwin-only and silently made the whole runtime
+         non-portable, which nobody noticed because CI is parked. */
       struct timespec ts;
       pthread_mutex_lock(&idle_mx);
-      ts.tv_sec = 0;
-      ts.tv_nsec = 1000000;
-      pthread_cond_timedwait_relative_np(&idle_cv, &idle_mx, &ts);
+      clock_gettime(CLOCK_REALTIME, &ts);
+      ts.tv_nsec += 1000000;
+      if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_nsec -= 1000000000L;
+        ts.tv_sec += 1;
+      }
+      pthread_cond_timedwait(&idle_cv, &idle_mx, &ts);
       pthread_mutex_unlock(&idle_mx);
     }
   }
