@@ -1,17 +1,18 @@
 # Design note: The collector campaign
 
 **Status:** C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND
-DECLINED** - its own precondition failed, and the profile that
-failed it found something better. What landed, with errata where
-the implementation corrected the design:
+DECLINED**; **both perf gates currently FAIL** (M109 re-ran them
+end-to-end - see section 9 for the verdicts and the livelock they
+uncovered). The own collector is correct and sequentially faster
+than Boehm; it is not yet ready to become the default. What
+landed, with errata where the implementation corrected the
+design:
 
-- **C1 (allocator)**: as designed, plus two profile-driven fixes -
-  per-thread CHUNK carving (the pool lock plus the mprotect inside
-  it convoyed at 4 workers; now paid once per 16MB) and
-  spin-HELPING (a blackhole spinner runs another spark; GHC's
-  move; capped at depth 4 because helping nests error frames -
-  par_shared found the cap the hard way). Sequential geometric
-  mean 0.778x of Boehm - own is 22% FASTER.
+- **C1 (allocator)**: as designed, plus per-thread CHUNK carving
+  (the pool lock plus the mprotect inside it convoyed at 4
+  workers; now paid once per 16MB). Sequential geometric mean
+  0.778x of Boehm - own is 22% FASTER. A second fix, spin-HELPING,
+  was added here and REMOVED in M109: it livelocks (section 9).
 - **C2 (STW mark-sweep)**: as designed, with three corrections.
   (1) Roots use a conservative data-segment scan (one dyld call)
   instead of codegen root arrays - covers prims, registries,
@@ -71,10 +72,13 @@ phase-level profile that had never been taken:
    needs touching. On low-survival programs that is nearly every
    block. Sweep time on parfib: 2.35s -> 0.17s.
 
-Together: parfib 16.7s -> 11.5s sequential, 6.19s -> 3.41s at 4
-workers - and the 4-worker figure is now **3.37x its own
-sequential**, which clears the original B1 parallel bar (2.5x at
-4) that Phase B could never reach on Boehm. The lesson is the
+Together: parfib 16.7s -> 11.5s sequential and 6.19s -> 3.41s at
+4 workers. **CORRECTION (M109):** that 4-worker figure was
+measured with spin-helping enabled, which the C3 gate later
+proved unsafe (it livelocks - see section 9); with helping
+removed parfib reaches 2.06-2.26x at 4 workers and the original
+B1 parallel bar (2.5x at 4) remains UNCLEARED. The sequential
+gains stand. The lesson is the
 M74 rule with a sharper edge: *profile the phase you are about
 to optimize, because it may not be the phase that is costing
 you.* C4 was the question; the answer was in the sweep.
@@ -300,3 +304,70 @@ allocates a child after its owner will be caught the same way.
 The generalizable form, for whoever writes the next runtime
 allocation site: **in a generational collector, allocation order
 is a correctness property, not a style choice.**
+
+
+## 9. The gate verdicts, and the livelock helping hid (M109)
+
+Re-running both gates end-to-end against the committed M108
+runtime produced two failures and one bug. Recorded here because
+the campaign's rule is that gates report, not decorate.
+
+**C3 sequential: PASS.** Geometric mean 0.892x of Boehm across
+six workloads (bar <= 1.00) - the generational write barrier did
+not eat the allocator's margin. own is faster on every
+allocation-heavy program (b_map 0.726, b_sumfold 0.760, b_sort
+0.880) and marginally slower on the two that barely allocate.
+
+**C3 parallel: FAIL,** and the failure exposed a livelock in
+shipped code. `b_parsort` at 2 workers hung at 98% CPU for 45
+minutes; thread stacks showed main spinning on a blackhole in
+`ahc_eval` while a worker spun on a different blackhole inside
+`run_spark`. The cause was spin-HELPING, added in C1 to close a
+scaling gap: **a thread that is WAITING must not ACQUIRE.** The
+spark a spinner helps with blackholes fresh thunks, which the
+thread it is waiting for may then demand - a dependency cycle the
+program never contained. Plain spinning is safe for the
+mirror-image reason: ownership follows the program's own
+dependency graph, so a cycle there really is a `<<loop>>`. C1's
+own code comment had dismissed this as "a genuinely CYCLIC
+cross-task dependency", i.e. a program bug; b_parsort is a
+correct program, and that dismissal was wrong.
+
+Helping is removed. The cost is the scaling it was buying:
+
+    parfib  2w/4w   with helping 2.21x/3.01x (deadlock-prone)
+                    without      2.22x/2.06x
+    parsort 2w/4w   with helping  hangs
+                    without      1.54x/2.08x
+
+So the B1 parallel bar (1.6x at 2, 2.5x at 4) is not met, and was
+only ever "met" by an unsafe mechanism. Note also that four
+workers are SLOWER than two on parfib - a spinning waiter burns a
+core to no purpose, which is the honest shape of the remaining
+problem.
+
+The real fix is structural, not tuning. GHC lets a thread that
+blocks on a blackhole suspend its computation; AHC's evaluator is
+C recursion and cannot. The promising direction is the other one
+purity allows: let the blocked thread simply RE-EVALUATE the
+claimed thunk (same answer, by purity) and race to update, which
+never blocks and never deadlocks. That is not possible today only
+because claiming overwrites `u.thunk.code/env` with the owner and
+waiter fields - preserving them is a node-layout question, and
+its own milestone.
+
+**C2: FAIL** on peak RSS - geometric mean 2.31x of Boehm against
+a 2.0x bar (correctness halves all pass: exec suite, forced-
+collection soak at 0/2/4 workers, TSan). The mean is dominated by
+small and medium heaps: b_fib 4.48x (22MB vs 5MB - trivial in
+absolute terms), b_sort 4.27x (149MB vs 35MB), while the large-
+heap programs are at parity (b_sumfold 1.09x, b_strictfold
+1.20x). Two hypotheses were measured and REJECTED: `madvise` is
+RSS-neutral even on large heaps (797 vs 796MB), and the trigger
+floor is not the lever (b_fib and b_sort are unchanged between a
+4MB and a 12MB floor). The structural cause is that own's peak
+RSS *is* its committed high-water mark, and a peak can only be
+lowered by collecting EARLIER - never by releasing later. The fix
+is therefore a growth-aware trigger (collect on committed-bytes
+velocity, not just a multiple of live), plus size-class
+fragmentation work. Also its own milestone.

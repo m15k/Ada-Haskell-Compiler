@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+Both collector gates re-run end-to-end, and a livelock removed
+(M109). The C2 and C3 gate scripts had not been run to completion
+against the M108 runtime; running them produced two failures and
+one real bug, all recorded in collector-design-note.md section 9.
+
+The bug: spin-HELPING, added in C1 to close a scaling gap, can
+livelock. b_parsort at 2 workers hung at 98% CPU for 45 minutes -
+main spinning on a blackhole in ahc_eval while a worker spun on a
+different blackhole inside run_spark. **A thread that is WAITING
+must not ACQUIRE**: the spark a spinner helps with blackholes
+fresh thunks that the thread it waits for may then demand, which
+is a dependency cycle the program never contained. Plain spinning
+is safe for the mirror-image reason - ownership follows the
+program's own dependency graph, so a cycle there really is a
+<<loop>>. C1's own comment had dismissed this case as a program
+bug; b_parsort is a correct program. Helping is removed.
+
+C3 sequential gate: PASS - geometric mean 0.892x of Boehm across
+six workloads (bar <= 1.00); the generational write barrier did
+not eat the allocator's margin.
+
+C3 parallel gate: FAIL - parfib 2.22x/2.06x and parsort
+1.54x/2.08x at 2/4 workers against 1.6x/2.5x bars, so the B1 bar
+remains uncleared and the earlier 3.37x reading is withdrawn (it
+depended on the unsafe helping). Four workers are slower than two
+on parfib: a spinning waiter burns a core to no purpose. The exit
+is structural - let a blocked thread re-evaluate the claimed
+thunk and race to update (safe by purity, never blocks), which
+requires the node layout to stop overwriting u.thunk.code/env at
+claim time.
+
+C2 gate: FAIL on peak RSS - geometric mean 2.31x of Boehm against
+a 2.0x bar, though every correctness half passes (exec suite,
+forced-collection soak at 0/2/4 workers, TSan). Two hypotheses
+were measured and rejected: madvise is RSS-neutral even on large
+heaps, and the trigger floor is not the lever. Peak RSS *is* the
+committed high-water mark, so it can only be lowered by
+collecting earlier - a growth-aware trigger, plus size-class
+fragmentation work.
+
 Generational collection, and a stage that measured itself out of
 existence (M108, campaign stages C3+C4):
 
@@ -38,10 +78,11 @@ while moving peak RSS by 0-1MB (now opt-in via AHC_OWN_MADVISE),
 and the sweep walked every slot of blocks that were entirely
 garbage when their mark-bitmap slice is one contiguous 1KB read
 (sweep on parfib: 2.35s -> 0.17s). Together: parfib 16.7s ->
-11.5s sequential and 6.19s -> 3.41s at 4 workers, which is 3.37x
-its own sequential - clearing the original B1 parallel bar that
-Phase B could never reach on Boehm. Profile the phase you are
-about to optimize; it may not be the one costing you.
+11.5s sequential and 6.19s -> 3.41s at 4 workers. (The 4-worker
+figure was measured with spin-helping, which M109 then removed as
+unsafe; see below - the B1 parallel bar is NOT cleared. The
+sequential gains stand.) Profile the phase you are about to
+optimize; it may not be the one costing you.
 
 The own collector arrives (M107, campaign stages C1+C2): AHC_GC=
 own builds against the project's own memory manager - a

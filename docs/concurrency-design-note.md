@@ -658,15 +658,25 @@ block-structured, non-moving, Immix-shaped design with staged
 gates. Nothing else in Phase B is worth touching until its C2+C3
 gates hold.
 
-**Resolved (M108).** They held, and this postmortem's diagnosis
-was correct: on AHC's own block allocator - per-thread bump,
-recycling sweep, generational - `b_parfib` reaches **3.37x its
-own sequential time at 4 workers**, clearing the 7.6 B1 gate
-(>= 2.5x at 4) that no Boehm configuration could approach. B1's
-machinery never needed a fix; it needed an allocator. Workers
-therefore default ON under `AHC_GC=own` and remain opt-in under
-Boehm, which is the honest split: the same runtime, two memory
-managers, and the parallelism is only real on the one that can
-feed it. What is still unbuilt is B2 (SMP green-thread
-scheduling), whose gate and war-story requirement stand
-unchanged.
+**Partly resolved (M108), corrected (M109).** The collector
+campaign confirmed this postmortem's *diagnosis* - on AHC's own
+block allocator the same spark machinery goes from anti-scaling
+to genuinely scaling, and the sequential runtime is now 11%
+FASTER than the Boehm build (collector note section 9). But the
+7.6 B1 bar (>= 1.6x at 2, >= 2.5x at 4) is **still not met**:
+parfib reaches 2.22x/2.06x and parsort 1.54x/2.08x. An earlier
+3.37x figure was measured with a spin-helping optimisation that
+the C3 gate then proved livelocks, and which is now removed.
+
+So B1's verdict stands where 7.8 left it, one layer deeper: the
+machinery is correct, the allocator was indeed the blocker, and
+what remains is that a thread which blocks on another thread's
+thunk has nothing useful to do - AHC's C-recursion evaluator
+cannot suspend it the way GHC's STG machine can, and it must not
+help (that is the livelock). The promising exit is to let a
+blocked thread re-evaluate the claimed thunk and race to update -
+safe by purity, never blocking - which needs the node layout to
+stop overwriting `u.thunk.code/env` at claim time. Workers
+default ON under `AHC_GC=own` and stay opt-in under Boehm. B2
+(SMP green-thread scheduling) remains unbuilt, its gate and
+war-story requirement unchanged.

@@ -671,7 +671,6 @@ AhcNode *ahc_mk_con(int contag, int arity) {
    then. B1 spins are bounded: a blackhole's owner is always making
    progress on some OS thread (pure evaluation cannot block), so a
    spin ends when the owner updates. */
-static int ahc_spark_help(void);   /* fwd: sparks section below */
 #ifdef AHC_GC_OWN
 static void own_safepoint(void);
 #endif
@@ -763,13 +762,18 @@ AhcNode *ahc_eval(AhcNode *n) {
            The cost, documented: with workers live, a genuinely
            CYCLIC cross-task dependency spins instead of reporting
            deadlock; without par the Phase A reports are intact.
-           A spinner HELPS first (GHC's move): run another spark
-           instead of burning the wait - each help is a fresh CAS
-           claim, so it always makes global progress, and the C1
-           profile showed join-spins were the residual scaling
-           gap. */
-        if (!ahc_spark_help())
-          spin_pause(&spins);
+
+           A spinner MUST NOT help (run another spark) while it
+           waits, however tempting the idle cycles are. Helping
+           was tried in C1 and had to be removed in M109: a thread
+           that is WAITING must not ACQUIRE, because the spark it
+           helps with blackholes fresh thunks that the thread it
+           is waiting for may then need - a dependency cycle the
+           program never contained. Plain spinning is safe for the
+           opposite reason: ownership follows the program's own
+           dependency graph, so a cycle there IS a <<loop>>.
+           b_parsort at 2 workers deadlocked on exactly this. */
+        spin_pause(&spins);
         break;
       }
       /* No workers exist: pure Phase A, one OS thread. Park until
@@ -2457,34 +2461,6 @@ static void run_spark(AhcNode *x) {
 #endif
   }
   __atomic_fetch_add(&sparks_converted, 1, __ATOMIC_RELAXED);
-}
-
-/* Run one spark if any exists anywhere: own deque first, then a
-   round of the others. Returns 1 if a spark was run. Called from
-   blackhole spins - the waiter turns wait into work. Helping
-   NESTS (the helped spark can block and help again) and each
-   nested run_spark arms an error frame, so the depth is capped
-   well inside AHC_ERR_DEPTH - past the cap the spinner just
-   spins, which stays live because some spark owner is always
-   running. (Found by par_shared under the C2 soak: eight nested
-   helps died "entry functions nested too deeply".) */
-static __thread int help_depth;
-
-static int ahc_spark_help(void) {
-  AhcNode *x;
-  if (help_depth >= 4) return 0;
-  x = spark_pop(&spark_deques[my_deque]);
-  if (!x) {
-    int v;
-    int nw = __atomic_load_n(&n_workers, __ATOMIC_RELAXED);
-    for (v = 0; v <= nw && !x; v++)
-      if (v != my_deque) x = spark_steal(&spark_deques[v]);
-  }
-  if (!x) return 0;
-  help_depth++;
-  run_spark(x);
-  help_depth--;
-  return 1;
 }
 
 static void *worker_main(void *arg) {
