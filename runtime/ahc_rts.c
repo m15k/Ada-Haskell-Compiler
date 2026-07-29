@@ -3080,7 +3080,15 @@ static void own_maybe_collect(void) {
        matters least; live*2 takes over as programs grow. */
     const char *e = getenv("AHC_OWN_MIN");
     floor_bytes = e ? atol(e) : (12l << 20);
-    if (floor_bytes < (long)OWN_CHUNK) floor_bytes = OWN_CHUNK;
+    /* NO CLAMP TO OWN_CHUNK. There used to be one, raising any
+       floor below the 16MB chunk size up to it - which tied the
+       collection POLICY to an allocation IMPLEMENTATION detail,
+       made the documented 12MB default really 16MB, and silently
+       ignored every AHC_OWN_MIN below 16MB. That last part is how
+       "the trigger floor is not the lever" got recorded as a
+       measured fact in M113: the knob under test did nothing.
+       A chunk is a unit of address space, not a unit of garbage. */
+    if (floor_bytes < (long)OWN_BLOCK) floor_bytes = OWN_BLOCK;
   }
   thr = own_live_bytes * 2;
   if (thr < floor_bytes) thr = floor_bytes;

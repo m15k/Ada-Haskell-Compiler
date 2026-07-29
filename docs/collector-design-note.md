@@ -1,12 +1,25 @@
 # Design note: The collector campaign
 
-**Status:** C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND
-DECLINED**; **both perf gates currently FAIL** (M109 re-ran them
-end-to-end - see section 9 for the verdicts and the livelock they
-uncovered). The own collector is correct and sequentially faster
-than Boehm; it is not yet ready to become the default. What
-landed, with errata where the implementation corrected the
-design:
+**Status: THE OWN COLLECTOR LOSES LIVE DATA. DO NOT USE
+`AHC_GC=own` FOR ANYTHING BUT COLLECTOR WORK.** (M114, section 14.)
+Deep lazy chains produce WRONG ANSWERS at most collection
+cadences - `foldl (+) 0 [1..100000]` returns a different wrong sum
+at each trigger floor. The bug is pre-existing across M107-M113
+and was hidden by a clamp that pinned every soak and gate to one
+accidental cadence, which happens to be one where it does not
+bite. The default build is Boehm and is unaffected.
+
+Everything below was written before that was known. The
+performance findings stand (the allocator and sweep work is real
+and measured); every CORRECTNESS claim in this note - "exec suite
+green", "soak clean", "TSan clean" - should be read as "at one
+trigger setting", which is not a correctness claim at all.
+
+C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND DECLINED**;
+**both perf gates FAIL** (M109; section 9), though C2 passes at a
+4MB floor once the clamp is gone (1.80x vs the 2.0x bar - section
+13). What landed, with errata where the implementation corrected
+the design:
 
 - **C1 (allocator)**: as designed, plus per-thread CHUNK carving
   (the pool lock plus the mprotect inside it convoyed at 4
@@ -528,8 +541,13 @@ What has been ruled out by measurement, so nobody re-tries it:
 
 - **`madvise`** - RSS-neutral even on large heaps (797 vs 796MB),
   while costing 24% of wall (section 0).
-- **The collection trigger floor** - b_fib and b_sort are
-  unchanged between a 4MB and a 12MB floor.
+- ~~**The collection trigger floor**~~ - **THIS ENTRY WAS WRONG,
+  see section 13.** The experiment behind it compared AHC_OWN_MIN
+  =4MB against 12MB, but a clamp raised any floor below the 16MB
+  chunk size up to it, so both arms ran at 16MB and the knob under
+  test did nothing. With the clamp gone the floor is the strongest
+  lever there is: b_fib moves from 22.2MB to 7.7MB across a 2-16MB
+  sweep.
 - **The 16MB per-thread chunk** - a plausible fixed floor, but
   wrong: hello-world under the own collector peaks below 1MB, so
   chunks are reserved lazily and commit only on touch.
@@ -543,3 +561,111 @@ trigger (collect on committed-bytes velocity rather than a
 multiple of live) plus size-class fragmentation work. But that is
 a hypothesis, not a finding, and the next person on this should
 profile where those 22MB actually are before building anything.
+
+
+## 13. Where b_fib's 22MB was, and the clamp that hid it (M114)
+
+Section 12 asked the next attempt to profile before building. Doing
+so found the memory immediately and, in the process, invalidated
+one of that section's own conclusions.
+
+**The memory is the collector's own heap.** b_fib reports 32MB
+committed with ~0MB live across 32 collections, of which 22.9MB is
+resident. Not the mark bitmap, not the block-state table, not
+thread stacks, not the binary - the heap, holding garbage it had
+not got round to collecting.
+
+Two causes, both of them policy rather than physics:
+
+1. **Chunk granularity.** Committed address space grows a whole
+   `OWN_CHUNK` at a time, so a program needing slightly more than
+   one chunk commits two. At `OWN_CHUNK` = 1MB or 4MB, b_fib
+   commits 16MB instead of 32MB and RSS falls 22.9 -> 18.6MB, with
+   no measurable change in run time.
+2. **A clamp that disabled the trigger knob.** The floor logic read
+
+       floor_bytes = e ? atol(e) : (12l << 20);
+       if (floor_bytes < (long)OWN_CHUNK) floor_bytes = OWN_CHUNK;
+
+   which raised any floor below 16MB up to 16MB. Three consequences,
+   all invisible: the documented 12MB default was really 16MB; every
+   `AHC_OWN_MIN` below 16MB was silently ignored, including the
+   8MB used by the "forced collection" soaks in the C2 gate and in
+   this campaign's ad-hoc soak loops, which therefore ran at a
+   coarser trigger than their labels claim (they still passed);
+   and section 12's finding that "the trigger floor is not the
+   lever" was measured with the lever disconnected.
+
+A chunk is a unit of ADDRESS SPACE; a collection trigger is a
+budget for GARBAGE. Tying one to the other was a category error.
+The clamp is gone, floored now only at one block.
+
+With the knob connected, b_fib trades RSS against time smoothly
+(Boehm: 5MB, ~515ms):
+
+    floor  2MB    7.7MB   737ms
+    floor  4MB    9.9MB   677ms
+    floor  8MB   14.1MB   652ms
+    floor 12MB   18.4MB   645ms
+    floor 16MB   22.2MB   636ms
+
+Which exposes something the campaign had not noticed: **the two
+gates pull on the same knob in opposite directions.** C2 bounds
+peak RSS and wants a low floor; C3's sequential half requires own
+to be no slower than Boehm and wants a high one. They were treated
+as independent verdicts, and they are not. Whatever floor ships is
+a declared position on that trade, and it should be argued rather
+than inherited from a clamp - which is how the current value was
+in fact chosen.
+
+
+## 14. The collector loses live data (M114)
+
+Removing the trigger clamp (section 13) let the collection cadence
+be varied for the first time. It immediately produced wrong
+answers.
+
+    foldl (+) 0 [1..2000000]     correct: 2000001000000
+      floor  2MB   2034353722102
+      floor  4MB   <<loop>>
+      floor  8MB   2017175984757
+      floor 12MB   2000001000000   <- the accidental default
+      floor 16MB   2021554721071
+      floor 32MB   2017178352661
+
+Deterministic per floor, different across floors: the signature of
+live data being reclaimed and its storage reused. `<<loop>>` at 4MB
+is the same fault wearing a different hat - a freed node reused as
+a blackhole owned by the task that reads it.
+
+**It is pre-existing, not a regression.** The committed M113
+runtime does the same thing at any floor above the clamp
+(20/24/40MB all wrong). The clamp forced every floor below 16MB up
+to exactly 16777216 bytes, so every soak, every gate and every
+exec-suite run in this campaign used one cadence - and that cadence
+survives. Nothing was ever tested at a second one.
+
+**Where it is.** Marking is not the problem; reclamation is. With
+the tracer untouched and the sweep made to reclaim nothing, every
+answer is correct at every floor. So the tracer is failing to mark
+objects that are live, and the sweep then threads free-list
+pointers through them (`*(void **)o = b->free_head`), overwriting
+the first word of live data. The root scan is not the gap: the
+deep-chain case scans a 213MB conservative stack range and the
+range is verified correct. The missed edges are therefore in
+`gc_trace` or in the `own_find_object` filter, and finding them is
+the next milestone.
+
+**A minimal reproducer**, sub-second:
+
+    main = print (foldl (+) 0 [1 .. 100000 :: Int])
+    AHC_GC=own ... ; AHC_OWN_MIN=2000000 ./prog
+
+**The harness that should have existed** is now
+`scripts/run_own_soak.sh`: it runs deep-chain programs under
+`AHC_GC=own` at five trigger floors and both collection cadences,
+and requires byte-identical output against the Boehm build. It
+fails today, on `deep_foldl`, as it should. A collector is not
+correct at one trigger setting; it is correct at every setting or
+it is broken - and no soak in this campaign varied the setting,
+which is the process failure underneath the technical one.

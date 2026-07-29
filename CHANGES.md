@@ -1,5 +1,90 @@
 # AHC Changelog
 
+## Unreleased
+
+**THE OWN COLLECTOR LOSES LIVE DATA (M114).** `AHC_GC=own`
+produces WRONG ANSWERS on deep lazy chains at most collection
+cadences: `foldl (+) 0 [1..2000000]` returns a different wrong sum
+at each trigger floor (2MB, 8MB, 16MB, 32MB all wrong; 4MB dies
+<<loop>>; 12MB happens to be right). It is pre-existing across
+M107-M113, not a regression - the committed M113 runtime does the
+same at any floor above the clamp described below. The default
+build is Boehm and is unaffected; do not use AHC_GC=own for
+anything but collector work.
+
+Marking is not the problem, reclamation is: with the tracer
+untouched and the sweep made to reclaim nothing, every answer is
+correct at every floor. The tracer misses live objects and the
+sweep then threads free-list pointers through them. The root scan
+is not the gap (the deep case scans a verified 213MB stack range).
+Reproducer, sub-second: foldl (+) 0 [1..100000] with
+AHC_OWN_MIN=2000000.
+
+The reason this survived a five-milestone campaign is the process
+failure, not the bug: every soak, gate and exec run used ONE
+collection cadence, because a clamp pinned them all to it. A
+collector is not correct at one trigger setting. New harness
+scripts/run_own_soak.sh runs deep-chain programs at five floors
+and both cadences against the Boehm build and requires identical
+output; it fails today on deep_foldl, as it should. Every
+correctness claim previously recorded for this collector - "exec
+suite green", "soak clean", "TSan clean" - should be read as "at
+one trigger setting".
+
+Where b_fib's 22MB was, and the clamp that hid it (M114). M113
+closed by asking the next attempt to profile before building
+anything. Profiling took one command and found the memory in the
+collector's own heap: b_fib commits 32MB with ~0MB live across 32
+collections, 22.9MB of it resident. Not the mark bitmap, the
+block-state table, thread stacks, or the binary - garbage the
+collector had not got round to reclaiming.
+
+Two causes, both policy rather than physics. Committed address
+space grows a whole OWN_CHUNK at a time, so a program needing
+slightly more than one chunk commits two (at 1-4MB chunks b_fib
+commits 16MB instead of 32MB, RSS 22.9 -> 18.6MB, no measurable
+time cost). And the collection trigger carried
+
+    if (floor_bytes < (long)OWN_CHUNK) floor_bytes = OWN_CHUNK;
+
+which raised any floor below the 16MB chunk size up to it. A chunk
+is a unit of address space; a collection trigger is a budget for
+garbage. Tying them together was a category error, and it hid
+three things: the documented 12MB default was really 16MB, every
+AHC_OWN_MIN below 16MB was silently ignored - including the 8MB
+used by the C2 gate's "forced collection" soak and this campaign's
+ad-hoc soak loops, which therefore ran coarser than their labels
+claimed (they still passed) - and M113's own conclusion that "the
+trigger floor is not the lever" was measured with the lever
+disconnected. THAT CONCLUSION IS WITHDRAWN: with the clamp gone
+the floor is the strongest lever available, moving b_fib from
+22.2MB to 7.7MB across a 2-16MB sweep, against Boehm's 5MB.
+
+The sweep also exposes something the campaign had been missing:
+the two gates pull on this one knob in OPPOSITE directions. C2
+bounds peak RSS and wants a low floor; C3's sequential half
+requires own to be no slower than Boehm and wants a high one. They
+had been read as independent verdicts. Collector note section 13
+records the trade and says plainly that whatever floor ships is a
+declared position on it - not something to inherit from a clamp,
+which is how the current value was in fact chosen.
+
+C2 re-measured; the RSS failure is real (M113). With the timing
+gates found unsound (M112), the C2 gate's own methodology was
+tightened - peak RSS sampled three times per binary, alternating
+the two builds so memory-pressure drift lands on both, minimum
+kept. The geometric mean moved from 2.31x to 2.29x against a 2.0x
+bar, which is the informative part: peak RSS does not drift with
+temperature the way wall time does, so that failure is a genuine
+property of the collector rather than an artifact, and the two
+failing gates are different in kind. Large heaps are at parity
+(b_sumfold 1.08x, b_strictfold 1.20x); small and medium heaps are
+not (b_fib 4.47x at 22MB vs 5MB, b_sort 4.27x, b_map 2.54x).
+Correctness halves pass every run. (This entry was written at M113
+but never reached the file - the release commit had renamed the
+section it was anchored to, and the edit silently matched nothing.
+Recorded here with M114's corrections folded in.)
+
 ## v1.6 (2026-07-29)
 
 The embedding release, and the runtime campaign behind it
