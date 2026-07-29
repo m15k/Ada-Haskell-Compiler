@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+The spokes grow up (M111): examples/ffi is now one real Haskell
+library - engine/Engine.hs, an infinite lazy sieve, exact bignum
+factorials, a recursive-descent expression parser whose failures
+cross the boundary, and ranked word frequencies - embedded by five
+programs in C, C++, Rust, Go, and GHC. A new C spoke joins the four
+generated ones (the emitted ahc_exports.h is already the C
+binding). Every example runs the traffic BOTH ways: Engine.hs
+imports host_log and never defines it, so each host supplies that
+symbol in its own language (a C function, an extern "C" C++ one, a
+Rust #[no_mangle] extern "C" fn, a cgo //export, a GHC foreign
+export) and the library calls back out into its embedder while
+computing - in the GHC case, two Haskell runtimes importing from
+and exporting to each other in one process. The library performs no
+I/O of its own, so all output has a single writer and the goldens
+stay deterministic across five runtimes' buffering. Each example
+also provokes a parse failure and shows it arriving as that
+language's own error type before carrying on.
+
 Both collector gates re-run end-to-end, and a livelock removed
 (M109). The C2 and C3 gate scripts had not been run to completion
 against the M108 runtime; running them produced two failures and

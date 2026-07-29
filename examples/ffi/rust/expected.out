@@ -1,6 +1,10 @@
-square(12) = 144
-fib(90) = 2880067194370816120
-hello, Rust!
-sumTo(100) = 5050
-caught: error: boom: 7
-square(6) = 36
+primes(12)   = 2,3,5,7,11,13,17,19,23,29,31,37
+factorial(30)= 265252859812191058636308480000000
+evalExpr     = 9
+wordFreq     = the:4, dog:2, fox:2, and:1, barks:1
+analyze:
+  [rust] engine: 15 words in 2 lines
+  [rust] engine: ranked -> the:4, dog:2, fox:2, and:1, barks:1
+  -> 15 words
+evalExpr(bad): error: expected a number at ''
+still alive  = 42

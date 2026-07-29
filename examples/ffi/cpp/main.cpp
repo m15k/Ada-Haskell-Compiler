@@ -1,20 +1,38 @@
-// Embedding the AHC-compiled MathLib from C++ via the generated
-// RAII wrapper (ahc_exports.hpp). Runtime errors inside the library
-// arrive as std::runtime_error.
+// Embedding the AHC Engine from C++ through the generated RAII
+// wrapper. Both directions: C++ calls the Haskell exports, and the
+// Haskell library calls back out to host_log below.
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 #include "ahc_exports.hpp"
 
+// The symbol Engine.hs imports - C linkage, so AHC can find it.
+extern "C" void host_log(const char *msg) {
+  std::printf("  [c++] %s\n", msg);
+}
+
+static const std::string TEXT =
+  "the quick brown fox jumps over the lazy dog\n"
+  "the dog barks and the fox runs\n";
+
 int main() {
-  ahc::Lib lib;
-  std::printf("square(12) = %ld\n", lib.square(12));
-  std::printf("fib(90) = %ld\n", lib.hs_fib(90));
-  std::printf("%s\n", lib.greet("C++").c_str());
-  std::printf("sumTo(100) = %ld\n", lib.sumTo(100));
+  ahc::Lib eng;
+
+  std::printf("primes(12)   = %s\n", eng.primes(12).c_str());
+  std::printf("factorial(30)= %s\n", eng.factorial(30).c_str());
+  std::printf("evalExpr     = %ld\n", eng.evalExpr("2 * (3 + 4) - 10 / 2"));
+  std::printf("wordFreq     = %s\n", eng.wordFreq(TEXT).c_str());
+
+  std::printf("analyze:\n");
+  std::printf("  -> %d words\n", eng.analyze(TEXT));
+
+  // A parse failure arrives as an exception, not a dead process.
   try {
-    lib.boom(7);
+    eng.evalExpr("2 +");
   } catch (const std::runtime_error &e) {
-    std::printf("caught: %s\n", e.what());
+    std::printf("evalExpr(bad): %s\n", e.what());
   }
-  std::printf("square(6) = %ld\n", lib.square(6));
+
+  std::printf("still alive  = %ld\n", eng.evalExpr("6*7"));
   return 0;
 }

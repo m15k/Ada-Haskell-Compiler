@@ -1010,12 +1010,22 @@ of safe wrappers over a raw `extern "C"` block (no `unsafe` in the
 caller), a cgo package that funnels every call onto one locked OS
 thread (so any goroutine may call it despite the single-threaded
 runtime), or a GHC module of `foreign import`s — two Haskell
-runtimes in one process, talking through C. `examples/ffi/` holds a
-working consumer per language over the shared
-`tests/export/MathLib.hs`, and `scripts/run_bindgen.sh` builds and
-runs whichever ones have their toolchain installed. Any language
-that can call C gets a spoke the same way; the generator is
-~500 lines per language of `src/ahc-bindgen.adb`.
+runtimes in one process, talking through C. Any language that can
+call C gets a spoke the same way; the generator is ~500 lines per
+language of `src/ahc-bindgen.adb`.
+
+`examples/ffi/` is the worked demonstration: one Haskell library
+(`engine/Engine.hs` — an infinite lazy sieve, exact bignums, a
+parser whose failures cross the boundary, word frequencies)
+embedded by five programs in C, C++, Rust, Go, and GHC. Each runs
+the traffic **both ways**: the engine's very first declaration is a
+`foreign import` of `host_log`, which the library never defines —
+every host supplies that symbol in its own language and the linker
+ties the knot, so `analyze` calls back out into its embedder
+mid-computation. C needs no generated wrapper at all; the emitted
+`ahc_exports.h` is already the C binding.
+`scripts/run_bindgen.sh` builds and runs whichever examples have
+their toolchain installed.
 
 ### The layered Prelude
 
