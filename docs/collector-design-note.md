@@ -774,11 +774,67 @@ deciding something the numbers did not support.** A gate that can
 report PASS on a failing value is worse than no gate, because it
 is trusted.
 
-The trajectory is worth recording alongside the failure: C2 has
-gone 2.31x -> 2.00408x purely from unclamping the trigger floor,
-so it now misses by 0.2% rather than 15%, and the sequential half
-has 0.844 against a 1.00 bar to pay for a modest further
-reduction. The C2/C3 floor tension of section 13 therefore looks
-like a solvable tuning question rather than a genuine conflict -
-which is a change of view, and rests on measurements taken on a
-degraded machine, so it should be confirmed before being acted on.
+The trajectory looked encouraging: C2 has gone 2.31x -> 2.00408x
+purely from unclamping the trigger floor, missing now by 0.2%
+rather than 15%. On that basis this section originally called the
+C2/C3 floor tension "a solvable tuning question rather than a
+genuine conflict". **That was wrong - see section 17.** The claim
+looked at what lowering the floor did to RSS without checking what
+the same move did to the parallel half, which is the whole point
+of a tension.
+
+
+## 17. The floor is a genuine conflict (M118)
+
+The gates were re-run after a verified cooldown attempt. Two
+things came out of it: one number that would not move, and a
+correction to section 16.
+
+**The cooldown failed, and that is worth recording.** 36 minutes
+of idling never brought the calibration probe (Boehm b_sort,
+~1500ms this morning) below 1943ms against a 1650ms target, and
+the probe was wildly non-monotonic - 2002ms, then 3008ms, then
+1943ms. That is not thermal decay; something else on the machine
+competes. ABSOLUTE timings from this box are currently worthless.
+Interleaved RATIOS remain sound, which is what everything below
+rests on.
+
+**What did not move: b_parmap.** It read 2.60x at 4 workers in
+M112 and now reads 2.33x hot and 2.33x cool. The M117 guess that
+its drop was thermal is WITHDRAWN - the regression is real. An
+interleaved floor comparison finds the cause:
+
+    b_parmap     floor 16.8MB      floor 12MB     cost
+      0 workers      52281ms         53270ms      1.9%
+      4 workers      20644ms         22640ms      9.7%
+      speedup          2.53x           2.35x
+
+Only the parallel run pays, because only it pays for
+stop-the-world rendezvous frequency. Collecting more often is
+nearly free sequentially and expensive in parallel. So M114's
+clamp removal - a correctness fix, and still right - is what
+pushed b_parmap below the 2.5x bar it used to clear.
+
+**Which makes the floor a genuine conflict, not a tuning
+question:**
+
+    floor     C2 (RSS <= 2.0)      C3 parallel (parmap 4w >= 2.5x)
+     4MB      1.80x   PASS         worse than 2.35x   FAIL
+    12MB      2.008x  FAIL         2.35x              FAIL
+    16.8MB    ~2.29x  FAIL         2.53x              PASS
+
+There is no floor at which both pass. C2 wants <= ~8MB; the
+parallel half wants >= ~16.8MB. Section 16's optimism came from
+reading the RSS trajectory alone.
+
+**But the shape of the conflict names its own fix.** The two gates
+do not want different CONSTANTS, they want different BEHAVIOUR for
+different programs: small-heap programs need frequent collection
+to keep peak RSS near their live set, while allocation-heavy
+parallel programs need infrequent stop-the-world to keep workers
+running. A single fixed floor cannot express that and never could.
+A growth-aware trigger - collecting on committed-bytes velocity
+relative to the live set, rather than on a constant - can, and
+this is the first evidence for it that is not hand-waving. It
+remains unbuilt, and is the natural next milestone for the
+collector alongside the Linux port.

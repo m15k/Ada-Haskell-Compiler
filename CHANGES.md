@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+The floor is a genuine conflict (M118). Both gates re-run after a
+verified cooldown attempt, correcting two claims from M117.
+
+The cooldown FAILED: 36 minutes of idling never brought the
+calibration probe (Boehm b_sort, ~1500ms in the morning) below
+1943ms against a 1650ms target, and it swung non-monotonically to
+3008ms and back. That is not thermal decay - something else on
+this machine competes - so absolute timings from it are currently
+worthless. Interleaved ratios remain sound.
+
+b_parmap did NOT recover: 2.60x at 4 workers in M112, now 2.33x
+hot and 2.33x cool. M117's guess that the drop was thermal is
+WITHDRAWN; the regression is real, and an interleaved floor
+comparison finds the cause. At a 16.8MB floor parmap runs
+52281ms/20644ms = 2.53x; at 12MB it runs 53270ms/22640ms = 2.35x.
+The sequential arm loses 1.9%, the 4-worker arm 9.7% - only
+parallel runs pay for stop-the-world rendezvous frequency. So
+M114's clamp removal, a correctness fix and still right, is what
+pushed parmap below the 2.5x bar.
+
+Which makes M117's other claim wrong too: the C2/C3 floor tension
+is a GENUINE CONFLICT, not "a solvable tuning question". C2 passes
+only at <= ~8MB (1.80x at 4MB), the parallel half only at >=
+~16.8MB (2.53x), and no floor satisfies both. M117 looked at what
+lowering the floor did to RSS without checking what it did to
+parallelism.
+
+The shape of the conflict names the fix, though: the gates do not
+want different constants, they want different behaviour for
+different programs - small heaps need frequent collection for RSS,
+allocation-heavy parallel programs need infrequent STW for
+throughput. A fixed floor cannot express that. A growth-aware
+trigger can, and this is the first non-hand-waving evidence for
+it. Unbuilt; the natural next collector milestone beside the Linux
+port.
+
 Gate verdicts on the fixed collector, and a rounding bug (M117).
 Both gates re-run after M115 - the first numbers in this campaign
 from a collector that does not lose live data.
