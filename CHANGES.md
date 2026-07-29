@@ -1,6 +1,36 @@
 # AHC Changelog
 
-## Unreleased
+## v1.6 (2026-07-29)
+
+The embedding release, and the runtime campaign behind it
+(M98-M112). Two arcs since v1.5.
+
+**The FFI grows up.** v1.5 shipped the interface; v1.6 makes it
+something to build on. A runtime error inside an exported entry no
+longer kills the host process - it unwinds to the boundary and
+arrives as std::runtime_error, Err, error, or IOError in whichever
+language is embedding. A Foreign.Marshal surface (mallocBytes,
+peek/poke at every width, pointer arithmetic, C strings) opens the
+APIs that traffic in arrays and out-parameters - proved by libc's
+qsort sorting through a Haskell comparator, and by ahcsql, a real
+sqlite3 binding in ~80 lines. examples/ffi is now one Haskell
+engine - infinite lazy sieve, exact bignums, an expression parser,
+word frequencies - embedded five ways, each running traffic in
+BOTH directions through a host_log symbol the library imports and
+every host defines in its own language.
+
+**The runtime learns concurrency, and a collector.** Deterministic
+structured concurrency (scope/spawn/await, channels, green threads,
+one reproducible schedule per program), protected values carrying
+contracts into shared state, opt-in SMP sparks, and AHC's own
+block-structured generational collector. All of it is OPT-IN: the
+default build is still Boehm with zero workers, and its output is
+byte-identical to v1.5's. The campaign reports its bars as
+measured, including the two it did not clear - C2 peak RSS at 2.31x
+against a 2.0x bar, and the B1 parallel speedup, whose earlier
+3.37x reading M109 withdrew when it removed the unsafe spin-helping
+that produced it - and the stage that measured itself out of
+existence (C4 parallel marking, declined on its own profile).
 
 The harness lies, and a governor that did not pay (M112). A
 reported "4 workers slower than 2" sent this milestone looking for

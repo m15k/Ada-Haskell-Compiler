@@ -71,15 +71,32 @@ Haskell closures as C function pointers (no libffi), fixed-width C
 types with boundary-enforced widths, and `ahc bindgen` generating
 idiomatic C++, Rust, Go, and GHC bindings; the same AHC-compiled
 library runs embedded from all four (`examples/ffi/`), including
-GHC - two Haskell runtimes in one process, talking through C. v1.6
-in progress adds deterministic structured concurrency (M102):
+GHC - two Haskell runtimes in one process, talking through C.
+
+v1.6 is the embedding release (M98-M112). The FFI became something
+to build on: an error inside an exported entry unwinds to the
+boundary and arrives as the host language's own failure type
+instead of killing the process; a `Foreign.Marshal` surface
+(allocation, peek/poke at every width, pointer arithmetic, C
+strings) opens the APIs that traffic in arrays and out-parameters -
+libc's `qsort` now sorts through a Haskell comparator, and
+`examples/sqlite` binds real sqlite3 in ~80 lines. `examples/ffi`
+is one Haskell engine (lazy sieve, exact bignums, an expression
+parser, word frequencies) embedded five ways - C, C++, Rust, Go,
+GHC - each running traffic in *both* directions through a symbol
+the library imports and every host defines. The same release
+brings deterministic structured concurrency (M102):
 `Control.Concurrent.Scoped` - scope/spawn/await, channels, and
 yield over green threads whose strict round-robin scheduler makes
 every run of a program reproduce the same schedule byte for byte;
 an interleaving is a golden test, a deadlock is a reported
 outcome, and a scope joins its children by construction (Ada's
-master rule; there is deliberately no forkIO). 74 conformance
-programs byte-identical to GHC 9.4.8, thirteen test harnesses.
+master rule; there is deliberately no forkIO) - plus protected
+values, opt-in SMP sparks, and AHC's own block-structured
+generational collector (`AHC_GC=own`). Those runtime additions are
+opt-in; the default build is still Boehm with zero workers. 74
+conformance programs byte-identical to GHC 9.4.8, twenty harnesses
+and gates.
 
 ```haskell
 foreign import ccall "sin" c_sin :: Double -> Double  -- call C
