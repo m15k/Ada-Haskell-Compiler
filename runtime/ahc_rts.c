@@ -817,8 +817,10 @@ static AhcNode *con_collect(AhcNode **env, AhcNode *arg) {
 
 AhcNode *ahc_mk_confun(int contag, int arity) {
   if (arity == 0) return ahc_mk_con(contag, 0);
+  AhcNode *tagn = ahc_mk_int(contag);       /* children first */
+  AhcNode *arn = ahc_mk_int(arity);
   AhcNode **e = ahc_env(2 + arity);
-  e[0] = ahc_mk_int(contag); e[1] = ahc_mk_int(arity);
+  e[0] = tagn; e[1] = arn;
   for (int i = 0; i < arity; i++) e[2 + i] = NULL;
   return ahc_mk_fun(con_collect, e);
 }
@@ -837,14 +839,16 @@ static AhcNode *missing_code(AhcNode **env) {
 }
 
 AhcNode *ahc_mk_missing(const char *what) {
+  AhcNode *w = ahc_mk_int((long)(uintptr_t)what);  /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int((long)(uintptr_t)what);
+  e[0] = w;
   return ahc_mk_thunk(missing_code, e);
 }
 
 AhcNode *ahc_mk_selector(int index) {
+  AhcNode *ix = ahc_mk_int(index);          /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int(index);
+  e[0] = ix;
   return ahc_mk_fun(sel_fn, e);
 }
 
@@ -863,8 +867,9 @@ AhcNode *ahc_mk_string(const char *s) {
   size_t len = strlen(s);
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
   for (size_t i = len; i > 0; i--) {
-    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-    c->u.con.fields[0] = ahc_mk_char((unsigned char)s[i - 1]);
+    AhcNode *ch = ahc_mk_char((unsigned char)s[i - 1]);
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);   /* child first */
+    c->u.con.fields[0] = ch;
     c->u.con.fields[1] = acc;
     acc = c;
   }
@@ -1352,8 +1357,9 @@ static AhcNode *prim2_first(AhcNode **env, AhcNode *a) {
 }
 
 static AhcNode *mk_prim2(Prim2 f) {
+  AhcNode *fn = ahc_mk_int((long)(uintptr_t)f);   /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int((long)(uintptr_t)f);
+  e[0] = fn;
   return ahc_mk_fun(prim2_first, e);
 }
 
@@ -1377,8 +1383,9 @@ static AhcNode *prim3_first(AhcNode **env, AhcNode *a) {
 }
 
 static AhcNode *mk_prim3(Prim3 f) {
+  AhcNode *fn = ahc_mk_int((long)(uintptr_t)f);   /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int((long)(uintptr_t)f);
+  e[0] = fn;
   return ahc_mk_fun(prim3_first, e);
 }
 
@@ -1390,8 +1397,9 @@ static AhcNode *prim1_apply(AhcNode **env, AhcNode *a) {
 }
 
 static AhcNode *mk_prim1(Prim1 f) {
+  AhcNode *fn = ahc_mk_int((long)(uintptr_t)f);   /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int((long)(uintptr_t)f);
+  e[0] = fn;
   return ahc_mk_fun(prim1_apply, e);
 }
 
@@ -1420,9 +1428,13 @@ static AhcNode *primn_collect(AhcNode **env, AhcNode *arg) {
 AhcNode *ahc_mk_primn(int arity, AhcPrimN f) {
   AhcNode **e;
   if (arity < 1) ahc_die("ahc_mk_primn: arity < 1");
-  e = ahc_env(2 + arity);
-  e[0] = ahc_mk_int((long)(uintptr_t)f);
-  e[1] = ahc_mk_int(arity);
+  {                                         /* children first */
+    AhcNode *fn = ahc_mk_int((long)(uintptr_t)f);
+    AhcNode *ar = ahc_mk_int(arity);
+    e = ahc_env(2 + arity);
+    e[0] = fn;
+    e[1] = ar;
+  }
   for (int i = 0; i < arity; i++) e[2 + i] = NULL;
   return ahc_mk_fun(primn_collect, e);
 }
@@ -1671,16 +1683,19 @@ static AhcNode *p_compare_poly(AhcNode *a, AhcNode *b) {
 static AhcNode *enum_from_code(AhcNode **env);
 
 static AhcNode *mk_enum_from(long n) {
+  AhcNode *v = ahc_mk_int(n);               /* child first */
   AhcNode **e = ahc_env(1);
-  e[0] = ahc_mk_int(n);
+  e[0] = v;
   return ahc_mk_thunk(enum_from_code, e);
 }
 
 static AhcNode *enum_from_code(AhcNode **env) {
   long n = env[0]->u.i;
+  AhcNode *hd = ahc_mk_int(n);              /* children first */
+  AhcNode *tl = mk_enum_from(n + 1);
   AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-  c->u.con.fields[0] = ahc_mk_int(n);
-  c->u.con.fields[1] = mk_enum_from(n + 1);
+  c->u.con.fields[0] = hd;
+  c->u.con.fields[1] = tl;
   return c;
 }
 
@@ -1694,17 +1709,21 @@ static AhcNode *p_enum_from(AhcNode *a) {
 static AhcNode *enum_ft_code(AhcNode **env);
 
 static AhcNode *mk_enum_ft(long n, long step) {
+  AhcNode *v = ahc_mk_int(n);               /* children first */
+  AhcNode *st = ahc_mk_int(step);
   AhcNode **e = ahc_env(2);
-  e[0] = ahc_mk_int(n);
-  e[1] = ahc_mk_int(step);
+  e[0] = v;
+  e[1] = st;
   return ahc_mk_thunk(enum_ft_code, e);
 }
 
 static AhcNode *enum_ft_code(AhcNode **env) {
   long n = env[0]->u.i, step = env[1]->u.i;
+  AhcNode *hd = ahc_mk_int(n);              /* children first */
+  AhcNode *tl = mk_enum_ft(n + step, step);
   AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-  c->u.con.fields[0] = ahc_mk_int(n);
-  c->u.con.fields[1] = mk_enum_ft(n + step, step);
+  c->u.con.fields[0] = hd;
+  c->u.con.fields[1] = tl;
   return c;
 }
 
@@ -1724,8 +1743,9 @@ static AhcNode *p_enum_from_then_to(AhcNode *a, AhcNode *b,
   else if (step < 0) count = hi <= lo ? (lo - hi) / (-step) + 1 : 0;
   else return mk_enum_ft(lo, 0);   /* infinite repeat per Report */
   for (long i = count - 1; i >= 0; i--) {
+    AhcNode *v = ahc_mk_int(lo + i * step);  /* child first */
     AhcNode *cc = ahc_mk_con(CONS_TAG, 2);
-    cc->u.con.fields[0] = ahc_mk_int(lo + i * step);
+    cc->u.con.fields[0] = v;
     cc->u.con.fields[1] = acc;
     acc = cc;
   }
@@ -1743,8 +1763,9 @@ static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
   long lo = ahc_eval(a)->u.i, hi = ahc_eval(b)->u.i;
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
   for (long i = hi; i >= lo; i--) {
+    AhcNode *v = ahc_mk_int(i);                 /* child first */
     AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-    c->u.con.fields[0] = ahc_mk_int(i);
+    c->u.con.fields[0] = v;
     c->u.con.fields[1] = acc;
     acc = c;
   }
@@ -2999,6 +3020,84 @@ static void own_paranoid_check(int nw) {
   }
 }
 
+/* Mark-completeness check: the mark set must be CLOSED under the
+   points-to relation. Any marked object holding a pointer to an
+   unmarked heap object is a missed edge - which is precisely the
+   bug class that lets the sweep reclaim live data. Reports the
+   source's kind/tag and the target, then dies. AHC_OWN_VERIFY=1. */
+static int own_verify;
+static long own_verify_bad;
+
+/* one edge: complain if src is marked and dst is an unmarked heap
+   object */
+static void own_vcheck(void *src, const char *what, void *dst) {
+  OwnBlock *tb, *sb;
+  void *t = own_find_object(dst, &tb);
+  if (!t || own_marked(t)) return;
+  if (own_verify_bad++ < 12) {
+    own_find_object(src, &sb);
+    fprintf(stderr,
+            "own gc MISSED EDGE: %-11s src=%p kind=%u tag=%d"
+            " -> dst=%p kind=%u tag=%d\n",
+            what, src, sb ? sb->kind : 99,
+            (sb && sb->kind == 0) ? (int)((AhcNode *)src)->tag : -1,
+            t, tb->kind,
+            tb->kind == 0 ? (int)((AhcNode *)t)->tag : -1);
+  }
+}
+
+static void own_verify_closure(void) {
+  size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK;
+  size_t bi;
+  own_verify_bad = 0;
+
+  for (bi = 0; bi < nblocks; bi++) {
+    OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    uint32_t off, sc;
+    if (own_bstate[bi] == OWN_B_LARGE_TAIL
+        || own_bstate[bi] == OWN_B_FREE
+        || own_bstate[bi] == OWN_B_VIRGIN) continue;
+    if (own_bstate[bi] == OWN_B_LARGE_HEAD) {
+      char *o = (char *)b + OWN_HDR;
+      size_t w;
+      if (own_marked(o))
+        for (w = 0; w + 8 <= b->size_class; w += 8)
+          own_vcheck(o, "large", *(void **)(o + w));
+      bi += b->nblocks - 1;
+      continue;
+    }
+    sc = b->size_class;
+    for (off = OWN_HDR; off + sc <= b->bump; off += sc) {
+      char *o = (char *)b + off;
+      if (!own_marked(o)) continue;
+      if (b->kind == 0) {
+        AhcNode *n = (AhcNode *)o;
+        switch (n->tag) {
+        case AHC_THUNK: case AHC_CLAIM:
+          own_vcheck(o, "thunk.env", n->u.thunk.env); break;
+        case AHC_FUN:   own_vcheck(o, "fun.env", n->u.fun.env); break;
+        case AHC_CON:   own_vcheck(o, "con.fields", n->u.con.fields); break;
+        case AHC_IND:   own_vcheck(o, "ind", n->u.ind); break;
+        case AHC_BLACKHOLE:
+          own_vcheck(o, "bh.owner", n->u.bh.owner);
+          own_vcheck(o, "bh.waiters", n->u.bh.waiters); break;
+        case AHC_BIGINT: own_vcheck(o, "big.d", n->u.big.d); break;
+        default: break;
+        }
+      } else {
+        size_t w;
+        for (w = 0; w + 8 <= sc; w += 8)
+          own_vcheck(o, b->kind == 1 ? "ptrarr" : "misc", *(void **)(o + w));
+      }
+    }
+  }
+  if (own_verify_bad) {
+    fprintf(stderr, "own gc: %ld missed edges at collection %ld\n",
+            own_verify_bad, own_gc_count);
+    ahc_die("own gc: mark set is not closed");
+  }
+}
+
 static void own_collect(int major) {
   int nw;
   unsigned long spins = 0;
@@ -3032,6 +3131,7 @@ static void own_collect(int major) {
   own_t_mark += own_now() - t_mark0;
   }
   if (!major && own_paranoid_level) own_paranoid_check(nw);
+  if (own_verify) own_verify_closure();
   /* pool/partial mutations always under own_mx - uncontended
      here (workers parked), but the uniform discipline is what
      TSan can verify */
@@ -3449,8 +3549,9 @@ static AhcNode *io_peek_cstring_len(AhcNode **env, AhcNode *w) {
   if (n->tag != AHC_INT || n->u.i < 0)
     ahc_die("peekCStringLen: bad length");
   for (i = n->u.i; i > 0; i--) {
-    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-    c->u.con.fields[0] = ahc_mk_char((unsigned char)p[i - 1]);
+    AhcNode *ch = ahc_mk_char((unsigned char)p[i - 1]);
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);   /* child first */
+    c->u.con.fields[0] = ch;
     c->u.con.fields[1] = acc;
     acc = c;
   }
@@ -3802,8 +3903,9 @@ static AhcNode *io_getargs(AhcNode **env, AhcNode *w) {
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
   (void)env; (void)w;
   for (int i = ahc_argc - 1; i >= 1; i--) {
+    AhcNode *sv = ahc_mk_string(ahc_argv[i]);   /* child first */
     AhcNode *cell = ahc_mk_con(CONS_TAG, 2);
-    cell->u.con.fields[0] = ahc_mk_string(ahc_argv[i]);
+    cell->u.con.fields[0] = sv;
     cell->u.con.fields[1] = acc;
     acc = cell;
   }
@@ -4409,6 +4511,7 @@ void ahc_rts_init(void) {
     const char *pv = getenv("AHC_OWN_PARANOID");
     own_paranoid_level = pv ? atoi(pv) : 0;
     own_madvise = getenv("AHC_OWN_MADVISE") != NULL;
+    own_verify = getenv("AHC_OWN_VERIFY") != NULL;
     own_t_start = own_now();
   }
   if (getenv("AHC_OWN_STATS")) atexit(own_stats);

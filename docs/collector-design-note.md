@@ -1,19 +1,17 @@
 # Design note: The collector campaign
 
-**Status: THE OWN COLLECTOR LOSES LIVE DATA. DO NOT USE
-`AHC_GC=own` FOR ANYTHING BUT COLLECTOR WORK.** (M114, section 14.)
-Deep lazy chains produce WRONG ANSWERS at most collection
-cadences - `foldl (+) 0 [1..100000]` returns a different wrong sum
-at each trigger floor. The bug is pre-existing across M107-M113
-and was hidden by a clamp that pinned every soak and gate to one
-accidental cadence, which happens to be one where it does not
-bite. The default build is Boehm and is unaffected.
+**Status: the live-data-loss bug of M114 is FIXED (M115, section
+15).** Its cause was this note's own construction-order invariant,
+declared in M108 and applied to two sites while fourteen others
+went on violating it. All fixed; `foldl (+) 0 [1..2000000]` is now
+correct at every trigger floor, the mark set verifies closed, and
+`scripts/run_own_soak.sh` passes at five floors in both cadences.
 
-Everything below was written before that was known. The
-performance findings stand (the allocator and sweep work is real
-and measured); every CORRECTNESS claim in this note - "exec suite
-green", "soak clean", "TSan clean" - should be read as "at one
-trigger setting", which is not a correctness claim at all.
+Correctness claims in this note should still be read carefully.
+Before M115 they all meant "at one trigger setting", because a
+clamp pinned every soak and gate to a single collection cadence.
+They now mean "at five floors and two cadences, on the programs in
+the soak" - a real claim, but a young one.
 
 C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND DECLINED**;
 **both perf gates FAIL** (M109; section 9), though C2 passes at a
@@ -669,3 +667,65 @@ fails today, on `deep_foldl`, as it should. A collector is not
 correct at one trigger setting; it is correct at every setting or
 it is broken - and no soak in this campaign varied the setting,
 which is the process failure underneath the technical one.
+
+
+## 15. The fourteen sites (M115)
+
+Section 14 localised the bug to reclamation and asked for the
+missed edges. Finding them took one new diagnostic and one run.
+
+**The diagnostic.** The mark set must be CLOSED under points-to:
+any marked object holding a pointer to an unmarked heap object is
+a missed edge, by definition. `AHC_OWN_VERIFY=1` walks every
+allocated object after marking, extracts its outgoing pointers
+with the same by-tag logic the tracer uses, and reports the first
+violations with the kind and tag of both ends. On the reproducer
+it printed one line:
+
+    MISSED EDGE: ptrarr src=... kind=1 tag=-1
+                     -> dst=... kind=0 tag=5    (AHC_INT)
+
+A live env array pointing at an unmarked Int. That is not a tracer
+that mis-reads a node layout; it is a tracer that was never asked
+to look, which means the edge was created after its source had
+already been marked - the generational hazard.
+
+**The cause was the invariant this note already declares.**
+Section 8 states it: *in a generational collector, allocation
+order is a correctness property* - allocate components BEFORE
+their owner, because a collection landing between the two marks
+the half-built owner sticky-old, and the child allocated a moment
+later is young, reachable only from an old object no minor
+re-traces. M108 declared that rule and applied it to exactly two
+places (`ahc_mk_con`, `mk_sparked_die`). Fourteen other sites in
+the runtime were violating it the whole time, the most consequential
+being the one every list literal flows through:
+
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+    c->u.con.fields[0] = ahc_mk_int(n);          /* after c */
+    c->u.con.fields[1] = mk_enum_from(n + 1);    /* after c */
+
+All fourteen are fixed by hoisting the child allocations above the
+container: `enum_from_code`, `enum_ft_code`, `enumFromTo`,
+`enumFromThenTo`, `ahc_mk_string`, `peekCString`, `getArgs`,
+`ahc_mk_confun`, `ahc_mk_primn`, `ahc_mk_selector`,
+`ahc_mk_missing`, `mk_prim1/2/3`, `mk_enum_from`, `mk_enum_ft`.
+
+**Generated code was checked and is clean.** Codegen only READS
+constructor fields (pattern matching) and fills environments with
+values that already exist (`e[0] = env[0]`, `e[0] = l_0`); it
+never allocates into a container it has just built. That is why
+re-ordering is a complete fix and no write barrier was needed in
+the compiler - a barrier would have been the alternative, and a
+much larger change.
+
+**The lesson is about the shape of the rule, not the bug.** An
+invariant that must hold at every allocation site, enforced by
+remembering to hold it, is not an invariant - it is a habit, and
+M108 demonstrated within a single milestone that the habit does
+not survive contact with fourteen call sites. What made the
+difference here was a CHECKER: `AHC_OWN_VERIFY` states the
+property mechanically and finds every violation in one pass. It
+should run in CI alongside the soak, and any future runtime
+allocation site is now cheap to validate rather than expensive to
+audit.

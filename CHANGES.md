@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+The fourteen sites (M115). M114's live-data-loss bug is FIXED, and
+its cause was this project's own declared invariant, half-applied.
+
+Finding it took a new diagnostic: the mark set must be CLOSED
+under points-to, so any marked object pointing at an unmarked heap
+object is a missed edge by definition. AHC_OWN_VERIFY=1 walks
+every allocated object after marking and reports violations with
+both ends' kind and tag. On the reproducer it printed one line - a
+live env array pointing at an unmarked Int - which says the edge
+was created after its source had already been marked.
+
+That is the generational hazard M108 already wrote down as THE
+invariant: allocate components BEFORE their owner, because a
+collection landing between the two marks the half-built owner
+sticky-old while the child allocated a moment later is young and
+reachable only from an old object no minor re-traces. M108
+declared the rule and applied it to two sites. Fourteen others
+were violating it the whole time - most consequentially the one
+every list literal flows through, enum_from_code, which built the
+cons cell and then allocated both of its children into it. All
+fourteen fixed by hoisting the child allocations above their
+container.
+
+Generated code was checked and is clean: codegen only reads
+constructor fields and fills environments from values that already
+exist, never allocating into a container it has just built. That
+is why re-ordering is a complete fix and no compiler-side write
+barrier was needed.
+
+Verified: foldl (+) 0 [1..2000000] correct at every trigger floor
+(2/4/8/12/16/20/32MB - previously wrong at all but one); the mark
+set verifies closed on reproducer and full benchmark; run_own_soak
+passes at five floors in both cadences; Boehm regression green.
+
+The lesson is about the rule's shape. An invariant that must hold
+at every allocation site, enforced by remembering, is a habit
+rather than an invariant - and it failed within one milestone of
+being declared. What fixed it was a mechanical CHECKER, which
+found in one run what five milestones of soaks missed.
+
 **THE OWN COLLECTOR LOSES LIVE DATA (M114).** `AHC_GC=own`
 produces WRONG ANSWERS on deep lazy chains at most collection
 cadences: `foldl (+) 0 [1..2000000]` returns a different wrong sum
