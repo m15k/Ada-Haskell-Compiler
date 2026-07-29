@@ -10,8 +10,14 @@
 #   Sequential: run_bench workloads under AHC_GC=own within 5% of
 #   the AHC_GC=boehm build (geometric mean of ratios).
 #
-# Interleaved best-of-3 everywhere; outputs verified identical
-# before timing. Usage: scripts/run_c1_gate.sh
+# NOTE (M112): this script times each configuration to completion in
+# turn. That is NOT sound for comparing configurations on a machine
+# that drifts - it is how an earlier reading of "4 workers slower
+# than 2" was manufactured. run_c3_gate.sh interleaves AND rotates
+# the starting configuration; use it. The C1 gate is in any case
+# subsumed by C2's (see collector-design-note.md), and is kept only
+# for the historical record.
+# Usage: scripts/run_c1_gate.sh
 set -u
 cd "$(dirname "$0")/.."
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }

@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+The harness lies, and a governor that did not pay (M112). A
+reported "4 workers slower than 2" sent this milestone looking for
+a bad default; it found a bad measurement instead. The three
+collector gate scripts timed each configuration to completion in
+turn, which lets a thermally drifting machine masquerade as a
+difference between configurations - precisely the failure M74
+added interleaving to run_bench.sh to prevent, reproduced because
+these scripts were written without it. run_c3_gate.sh now
+interleaves AND rotates the starting configuration, since
+interleaving alone still penalises whichever config runs last on
+the hottest machine; run_c1_gate.sh (subsumed by C2's) carries a
+warning instead.
+
+Re-measured, the 47% gap becomes ~6% and is specific to b_parfib,
+whose sparked value is demanded almost immediately after being
+sparked; on b_parsort and b_parmap four workers are clearly
+better. The default worker count is unchanged and no fix was
+needed.
+
+A measurement-driven worker governor was built anyway and is a
+NEGATIVE RESULT, kept on experiment/worker-governor. It hill
+climbs the active worker count on allocation rate (useful work in
+a graph reducer is ~proportional to allocation, and a thread
+spinning on a blackhole allocates nothing, so contention shows up
+as a rate drop). It is correct - exec suite, soak at an 11-worker
+pool, TSan, and sequential programs untouched because workers only
+start on the first `par` - but interleaved A/B puts it 4-10%
+BEHIND the fixed default on all three benchmarks: probing parks
+and wakes workers, rebalances deques, and spends time at
+suboptimal counts.
+
+New benchmark b_parmap (embarrassingly parallel, no cross-task
+dependencies) joins the gate as a third parallel shape - and
+refutes the assumption that such workloads want maximum workers:
+it peaks at 4 on 6 physical cores. It is also the FIRST workload
+ever to clear both B1 bars (2.12x at 2 workers, 2.60x at 4). The
+C3 parallel gate still fails overall, because b_parfib and
+b_parsort miss the 4-worker bar for reasons visible in their own
+source (tight spark-then-demand dependency; a sequential merge
+phase). Collector note section 11 records the shape and proposes
+- without acting on - a per-workload bar, since changing a
+threshold because you failed it deserves more care than changing
+code.
+
 The spokes grow up (M111): examples/ffi is now one real Haskell
 library - engine/Engine.hs, an infinite lazy sieve, exact bignum
 factorials, a recursive-descent expression parser whose failures
@@ -44,8 +88,10 @@ not eat the allocator's margin.
 C3 parallel gate: FAIL - parfib 2.22x/2.06x and parsort
 1.54x/2.08x at 2/4 workers against 1.6x/2.5x bars, so the B1 bar
 remains uncleared and the earlier 3.37x reading is withdrawn (it
-depended on the unsafe helping). Four workers are slower than two
-on parfib: a spinning waiter burns a core to no purpose. The exit
+depended on the unsafe helping). (A further claim here, that four
+workers are slower than two on parfib, was qualified in M112: the
+47% magnitude was a harness artifact, the residual difference is
+~6% and parfib-specific.) The exit
 is structural - let a blocked thread re-evaluate the claimed
 thunk and race to update (safe by purity, never blocks), which
 requires the node layout to stop overwriting u.thunk.code/env at

@@ -341,10 +341,32 @@ Helping is removed. The cost is the scaling it was buying:
                     without      1.54x/2.08x
 
 So the B1 parallel bar (1.6x at 2, 2.5x at 4) is not met, and was
-only ever "met" by an unsafe mechanism. Note also that four
+only ever "met" by an unsafe mechanism.
+
+**QUALIFIED (M112).** This section originally added "and four
 workers are SLOWER than two on parfib - a spinning waiter burns a
-core to no purpose, which is the honest shape of the remaining
-problem.
+core to no purpose", citing a 47% gap. The MAGNITUDE was a harness
+artifact: the gate timed each worker count to completion in turn,
+letting machine drift masquerade as a difference between
+configurations - the exact failure M74 added interleaving to
+run_bench.sh to prevent, reproduced here because these gate
+scripts were written without it. The gates now interleave AND
+rotate the starting configuration (interleaving alone still
+penalises whichever config runs last on the hottest machine).
+
+What survives measurement is much smaller and workload-specific:
+
+    parfib   2w 2.20x | 4w 2.07x  - within ~6%, 2w ahead in 3 of
+                                    4 measurement designs
+    parsort  2w 1.52x | 4w 2.13x  - 4w clearly better
+    parmap   2w 2.12x | 4w 2.60x  - 4w clearly better
+
+So four workers are not broadly worse than two; on parfib alone
+they are marginally worse, by an amount this hardware cannot
+resolve confidently. A worker-count governor was built on the
+strength of the original 47% reading and is a NEGATIVE RESULT -
+4-10% behind the fixed default on all three benchmarks (branch
+experiment/worker-governor). The default stands unchanged.
 
 The real fix is structural, not tuning. GHC lets a thread that
 blocks on a blackhole suspend its computation; AHC's evaluator is
@@ -435,3 +457,40 @@ substantially larger than this entire collector campaign.
 The implementation is preserved on the `experiment/thunk-reeval`
 branch rather than deleted, because the layout half is the
 prerequisite for any future attempt.
+
+
+## 11. The parallel gate, honestly (M112)
+
+Interleaved and rotated, the C3 parallel half reads:
+
+    b_parfib   seq 8831ms | 2w 4021 (2.20x) | 4w 4256 (2.07x)
+    b_parsort  seq 21210  | 2w 13961 (1.52x) | 4w 9962 (2.13x)
+    b_parmap   seq 50808  | 2w 23934 (2.12x) | 4w 19523 (2.60x)
+
+The gate demands >= 1.6x at 2 workers AND >= 2.5x at 4, of every
+workload, so the verdict is still FAIL. But the shape is worth
+more than the verdict:
+
+- **b_parmap CLEARS BOTH BARS** - the first workload ever to do
+  so. Independent coarse work with no cross-task dependency
+  scales, and the spark machinery is not the limitation.
+- **b_parfib** is capped by its own dependency structure: it
+  sparks `a` and then immediately demands it after `b`, so the
+  demander often waits for work it could have done itself. That
+  is a granularity property of the program, not a runtime defect.
+- **b_parsort** front-loads 31 coarse sparks and ends in a
+  sequential merge, so Amdahl bounds it near 2x regardless.
+
+Read together: the runtime can deliver the bar when a program
+offers parallelism in the right shape, and the two workloads that
+fail do so for reasons visible in their source. The bar was
+written (7.6) before any of these programs existed, as a single
+threshold applied to every workload; a fairer gate would state a
+per-workload expectation derived from each program's available
+parallelism. That is a change to the GATE, and changing a bar
+because you failed it needs more care than changing code, so it
+is recorded here as a proposal and not acted on.
+
+The sequential half passes comfortably and repeatedly: geometric
+mean 0.883, 0.892, 0.906 and 0.929 across four independent runs -
+own is consistently 7-12% faster than Boehm.
