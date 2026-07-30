@@ -130,5 +130,16 @@ jobs:
           AHC_OWN_MIN: "4000000"
         run: scripts/run_exec.sh
 
+      - name: Spin watchdog fires, and reports the right thing
+        # The watchdog traps a hang that reproduced ONCE in 44
+        # attempts, so it runs essentially never and a refactor
+        # could break it silently - discovered only on the one
+        # occasion it matters. This makes it fire on purpose and
+        # checks the dump identifies the owner, the tag, the GC
+        # rendezvous state and the spark deques. Both M119
+        # watchdogs were wrong on their first attempt; "it
+        # compiles" is not evidence that a trap works.
+        run: scripts/run_watchdog_check.sh
+
       - name: Thread sanitizer (spark protocol + own allocator)
         run: scripts/run_tsan.sh

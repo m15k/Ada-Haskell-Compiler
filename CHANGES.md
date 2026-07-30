@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+Arming the trap instead of hunting the bug (M120). M119 left the
+rare parallel hang unexplained after 24 attempts; twenty more
+targeted runs added nothing. FORTY-FOUR ATTEMPTS, NO REPRODUCTION.
+At ~20s per attempt and a hit rate of at most one in several
+hundred, hunting blind was the wrong use of the machine, so the
+strategy changed from REPRODUCE to CAPTURE.
+
+The spin watchdog now dumps the state that discriminates between
+the candidate explanations: which task owns the blackhole (main, a
+named worker, a named green task, or UNRECOGNISED - itself a
+finding), the GC rendezvous counters, which separate "stuck in
+stop-the-world" from "stuck in the evaluator", and the spark
+counters and deque extents, which say whether the work was stolen,
+queued, or fizzled.
+
+The owner word is never dereferenced: it shares its union slot
+with u.ind, so a racing updater can overwrite it with the payload
+between the tag load and the read. Every use is a pointer COMPARE
+against known task addresses.
+
+The diagnostic was TESTED BY MAKING IT FIRE ON PURPOSE - both
+M119 watchdogs were wrong on their first attempt, and a trap that
+runs once every few thousand runs cannot be debugged after the
+fact. A probe sparks a long computation, keeps main busy until a
+worker claims it, then demands it under AHC_SPIN_LIMIT=1: a
+deliberate false positive on a worker that is genuinely working.
+The default 120s limit does not fire on that program and
+AHC_SPIN_LIMIT=0 disables the check; both still give the right
+answer.
+
+The hang is not fixed and not understood. It is bounded, loud, and
+instrumented well enough that the next occurrence should be the
+last one that needs guessing.
+
 The growth-aware trigger, and two watchdogs (M119). M118 said the
 floor conflict named its own fix - the gates wanted different
 behaviour per program shape, not different constants. Built, and

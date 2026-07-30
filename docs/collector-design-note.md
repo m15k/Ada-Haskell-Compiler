@@ -936,3 +936,58 @@ all four workers sat idle in their nap loop) and has not
 reproduced in 24 targeted attempts, nor in either gate since.
 It is now loud rather than silent, which is the most that can
 honestly be claimed.
+
+## 20. Arming the trap instead of hunting the bug (M120)
+
+Section 19 left the rare parallel hang unexplained after 24
+attempts. Twenty more targeted runs (alternating 2 and 4 workers
+with a short spin limit) added nothing: **44 attempts, no
+reproduction**. At roughly 20 seconds per attempt and a hit rate
+of at most one in several hundred, continuing to hunt blind was
+the wrong use of the machine.
+
+So the strategy changed from REPRODUCE to CAPTURE. The watchdog
+now dumps, at the moment it trips, the state that discriminates
+between the candidate explanations:
+
+    === SPIN WATCHDOG ===
+    node 0x105093028 tag=BLACKHOLE
+    owner=0x10503a260 -> worker #0
+    self=0x104e054d0 -> main_task
+    gc: collections=74  (rendezvous state below)
+      gc_want=0 gc_parked=0 of 2 in_gc=0
+    sparks: created 1 converted 0 fizzled 0
+      deque[0] top=1 bottom=1 pending=0
+      worker[0] addr=0x10503a260 state=0
+    === END ===
+
+Each line answers a specific question. The owner identifies WHO
+is not making progress - main, a named worker, a named green
+task, or `UNRECOGNISED`, which would itself be the finding. The
+rendezvous counters separate "stuck in the collector's
+stop-the-world" from "stuck in the evaluator". The spark counters
+and deque extents say whether the work was stolen, still queued,
+or fizzled.
+
+**The owner word must never be dereferenced.** It shares its
+union slot with `u.ind`, so a racing updater can overwrite it
+with the payload pointer between the tag load and the read.
+Every use is a pointer COMPARE against known task addresses; a
+payload pointer can equal no task's address, which is exactly
+what `UNRECOGNISED` reports.
+
+**The diagnostic was tested by making it fire on purpose.** Both
+watchdogs in section 19 were wrong on their first attempt, and a
+trap that only runs once every few thousand runs cannot be
+debugged after the fact. A probe sparks a long computation, keeps
+main busy long enough for a worker to claim it, then demands it
+under `AHC_SPIN_LIMIT=1` - a deliberate false positive on a
+worker that is genuinely working. That produced the dump above.
+The default limit of 120s does not fire on the same program, and
+`AHC_SPIN_LIMIT=0` disables the check entirely; both still give
+the right answer.
+
+What is claimed here is narrow: the hang is not fixed, and not
+understood. It is bounded in time, loud when it happens, and
+instrumented well enough that the NEXT occurrence should be the
+last one that needs guessing.

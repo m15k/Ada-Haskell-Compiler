@@ -1197,6 +1197,14 @@ allocation batches through `GC_malloc_many` free lists, one
 global-lock acquisition per ~150 objects instead of one per
 node.)
 
+One user-visible consequence arrived later: with workers live, a
+thread waiting on a busy thunk spins rather than parking, and a
+spin that never ends used to be a silent hang. It is now a
+reported outcome — `AHC_SPIN_LIMIT` seconds (default 120, `0`
+disables) and the program dies with a diagnostic naming the task
+that stopped making progress. That is M102's rule, a deadlock is
+an OUTCOME and not a hang, finally reaching the parallel path.
+
 ### The own collector
 
 So AHC grew its own — `AHC_GC=own` selects it, `boehm` remains the

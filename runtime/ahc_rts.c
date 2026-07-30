@@ -715,6 +715,11 @@ static void spin_pause(unsigned long *iters) {
    acquire. Green-vs-green contention parks (Phase A, unchanged);
    any contention involving a worker spins, because workers never
    park and their victims never wait long. */
+#ifdef AHC_GC_OWN
+void ahc_spin_report_gc(int nw);
+#endif
+static void ahc_spin_report(AhcNode *n, void *owner, AhcTask *self);
+
 AhcNode *ahc_eval(AhcNode *n) {
   unsigned long spins = 0;
   double spin_t0 = 0.0;        /* watchdog stamp, set on first spin */
@@ -804,10 +809,12 @@ AhcNode *ahc_eval(AhcNode *n) {
            reproducible in 24 attempts, so it cannot yet be
            fixed - but it can be made loud. AHC_SPIN_LIMIT sets
            the budget in seconds; 0 disables. */
-        if ((spins & 0xFFFFF) == 0 && ahc_spin_expired(&spin_t0))
+        if ((spins & 0xFFFFF) == 0 && ahc_spin_expired(&spin_t0)) {
+          ahc_spin_report(n, owner, cur_task);
           ahc_die("blackhole spin exceeded AHC_SPIN_LIMIT: the"
                   " owning thread is making no progress (see"
                   " collector-design-note.md section 18)");
+        }
         spin_pause(&spins);
         break;
       }
@@ -2601,6 +2608,84 @@ static void start_workers(void) {
   }
 }
 
+/* Everything needed to tell the candidate explanations apart when
+   the spin watchdog fires: who owns the node we are stuck on, what
+   that owner is doing, whether a collection is mid-rendezvous, and
+   whether any spark work is still outstanding. */
+/* Name a tag for the report. The report re-loads the tag, so it can
+   legitimately differ from the one that triggered the trip - a node
+   that reached IND by the time we print says the spin was resolving,
+   which is itself the answer. */
+static const char *ahc_tag_name(int t) {
+  switch (t) {
+  case AHC_IND:       return "IND";
+  case AHC_THUNK:     return "THUNK";
+  case AHC_CLAIM:     return "CLAIM";
+  case AHC_BLACKHOLE: return "BLACKHOLE";
+  default:            return "other/whnf";
+  }
+}
+
+static void ahc_spin_report(AhcNode *n, void *owner, AhcTask *self) {
+  int i, nw = __atomic_load_n(&n_workers, __ATOMIC_RELAXED);
+  char who[64];
+  char me[64];
+  /* owner shares its union slot with the payload, so identify it by
+     COMPARING against known task addresses - never by dereference. */
+  snprintf(who, sizeof who, "UNRECOGNISED (stale payload word?)");
+  if (owner == (void *)&main_task) snprintf(who, sizeof who, "main_task");
+  else if (owner == (void *)self)
+    snprintf(who, sizeof who, "SELF (should have been <<loop>>)");
+  else {
+    int found = 0;
+    for (i = 0; i < AHC_MAX_WORKERS && !found; i++)
+      if (owner == (void *)&worker_shells[i]) {
+        snprintf(who, sizeof who, "worker #%d", i);
+        found = 1;
+      }
+    for (i = 0; i < task_n && !found; i++)
+      if (task_reg[i] && owner == (void *)task_reg[i]) {
+        snprintf(who, sizeof who, "green task #%d", i);
+        found = 1;
+      }
+  }
+  if (self == &main_task) snprintf(me, sizeof me, "main_task");
+  else if (self->is_worker) {
+    snprintf(me, sizeof me, "a worker");
+    for (i = 0; i < AHC_MAX_WORKERS; i++)
+      if (self == &worker_shells[i]) {
+        snprintf(me, sizeof me, "worker #%d", i);
+        break;
+      }
+  } else snprintf(me, sizeof me, "a green task");
+  fprintf(stderr,
+          "\n=== SPIN WATCHDOG ===\n"
+          "node %p tag=%s\nowner=%p -> %s\nself=%p -> %s\n",
+          (void *)n,
+          ahc_tag_name((int)__atomic_load_n(&n->tag, __ATOMIC_ACQUIRE)),
+          owner, who, (void *)self, me);
+#ifdef AHC_GC_OWN
+  fprintf(stderr, "gc: collections=%ld  (rendezvous state below)\n",
+          own_gc_count);
+  ahc_spin_report_gc(nw);
+#endif
+  fprintf(stderr, "sparks: created %ld converted %ld fizzled %ld\n",
+          __atomic_load_n(&sparks_created, __ATOMIC_RELAXED),
+          __atomic_load_n(&sparks_converted, __ATOMIC_RELAXED),
+          __atomic_load_n(&sparks_fizzled, __ATOMIC_RELAXED));
+  for (i = 0; i <= nw && i <= AHC_MAX_WORKERS; i++) {
+    SparkDeque *d = &spark_deques[i];
+    long t = __atomic_load_n(&d->top, __ATOMIC_RELAXED);
+    long b = __atomic_load_n(&d->bottom, __ATOMIC_RELAXED);
+    fprintf(stderr, "  deque[%d] top=%ld bottom=%ld pending=%ld\n",
+            i, t, b, b - t);
+  }
+  for (i = 0; i < nw && i < AHC_MAX_WORKERS; i++)
+    fprintf(stderr, "  worker[%d] addr=%p state=%d\n",
+            i, (void *)&worker_shells[i], worker_shells[i].state);
+  fprintf(stderr, "=== END ===\n");
+}
+
 static void spark_stats(void) {
   fprintf(stderr,
           "sparks: created %ld converted %ld fizzled %ld dropped %ld\n",
@@ -3139,6 +3224,12 @@ static void own_verify_closure(void) {
             own_verify_bad, own_gc_count);
     ahc_die("own gc: mark set is not closed");
   }
+}
+
+void ahc_spin_report_gc(int nw) {
+  fprintf(stderr, "  gc_want=%d gc_parked=%d of %d in_gc=%d\n",
+          __atomic_load_n(&gc_want, __ATOMIC_ACQUIRE),
+          __atomic_load_n(&gc_parked, __ATOMIC_ACQUIRE), nw, own_in_gc);
 }
 
 static void own_collect(int major) {
