@@ -8,7 +8,7 @@ piece of theory is introduced when it is first needed, in plain
 language, before the decision that depends on it. If you read it
 front to back you will understand why every part of AHC is the way
 it is. If you want one thing, the table of contents and the glossary
-(chapter 17) will get you there.
+(chapter 18) will get you there.
 
 ---
 
@@ -29,9 +29,10 @@ it is. If you want one thing, the table of contents and the glossary
 13. [The optimizer: making it faster without changing it](#13-the-optimizer)
 14. [Testing: GHC as the oracle](#14-testing)
 15. [The standard library](#15-the-standard-library)
-16. [War stories: the bugs and what they taught](#16-war-stories)
-17. [Glossary](#17-glossary)
-18. [Map of the source tree](#18-source-map)
+16. [Concurrency: choosing a model](#16-concurrency-choosing-a-model)
+17. [War stories: the bugs and what they taught](#17-war-stories)
+18. [Glossary](#18-glossary)
+19. [Map of the source tree](#19-source-map)
 
 ---
 
@@ -255,7 +256,7 @@ tokens to decide what it is looking at (is `x <- foo` a pattern bind
 or an expression?). Those look-ahead tokens have already been
 processed by the layout engine — so when a parse error then needs a
 block closed, the layout engine's queue is stale. The fix (a late
-war story, chapter 16) exploits a theorem about L: *within a single
+war story, chapter 17) exploits a theorem about L: *within a single
 source line, the algorithm never consults its indentation stack*, so
 the parser may safely synthesize the close itself for same-line
 tokens. Correct-but-subtle code like a nested
@@ -749,7 +750,7 @@ precise homemade GC would be faster and its own multi-month project;
 Boehm is one linker flag (and the runtime falls back to plain
 `malloc` — never freeing — when Boehm isn't installed, which is fine
 for short programs). This was the right scope call, with one scar
-(the stack-size story, chapter 16).
+(the stack-size story, chapter 17).
 
 **Deep chains and the big stack.** Evaluating a value built by a
 million-step `foldl` means a million-deep chain of thunks, each
@@ -1086,6 +1087,10 @@ recompilation-avoidance bugs — the classic sharp edges of the
 interface-file world — at a cost of ~0.3 seconds per build.
 
 ### Green threads: deterministic structured concurrency
+
+*This section explains how the machinery is built. For which of
+the three concurrency surfaces to reach for, and when, see chapter
+16 — and `examples/concurrency/` for a runnable program per model.*
 
 Concurrency arrived in v1.6 (M102) with a design brief that
 started away from AHC entirely: survey what Go, GHC, Rust, and Ada
@@ -1711,7 +1716,7 @@ and failed the truth.*
 | `scripts/run_differential.sh` / `_types.sh` | do AHC and GHC agree on what *parses* and what *typechecks*? |
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
-| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 16) behave identically compiled by AHC and by GHC? |
+| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 17) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
 | `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically; deep parallel campaigns via `run_fuzz_par.sh` — usage, triage, and the menu rule in `docs/fuzzer-guide.md`) |
@@ -1750,7 +1755,7 @@ consed head, recursion is structural). Divergences are saved to
 enough to diagnose by hand, and each confirmed bug is then pinned
 as a permanent conformance test. The very first campaign paid for
 the harness: its third seed exposed a new corner of the
-layout-vs-lookahead bug farm (chapter 16) that the entire
+layout-vs-lookahead bug farm (chapter 17) that the entire
 hand-written suite had never touched.
 
 ---
@@ -1801,7 +1806,7 @@ integer-only prims, and `withFile`, `writeFile`, `appendFile`,
 observable behavior - toList order, Show format, union bias - is
 oracled against the real containers library, written because the
 interpreter's environments asked for it (and whose first compile
-found two more compiler bugs - chapter 16); and
+found two more compiler bugs - chapter 17); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
 methods come from the builtin-class default machinery (enabler E4),
 which builds Report default methods against the instance's own
@@ -1818,7 +1823,268 @@ concurrent program whose output is schedule-independent.
 
 ---
 
-## 16. War stories
+## 16. Concurrency: choosing a model
+
+Chapter 9 explains how the scheduler and the spark pool are
+*built*. This chapter is about which one to reach for, and when.
+
+AHC ships three concurrency surfaces, and they are not
+alternatives to one another — they answer different questions:
+
+| You want to… | Use | Module |
+|---|---|---|
+| run independent activities that wait on things | **structured tasks** | `Control.Concurrent.Scoped` |
+| share mutable state between those tasks | **protected values** | `Control.Concurrent.Protected` |
+| make a *pure* computation finish sooner using more cores | **sparks** | `Control.Parallel` |
+
+### 16.1 The one thing that surprises everyone
+
+**Tasks give you concurrency. Only sparks give you cores.**
+
+Every green task runs on one OS thread. Spawning ten tasks that
+each compute something expensive does not make your program
+faster — it makes it interleave. The only mechanism in AHC that
+uses a second core is `par`, and it only works on *pure* values.
+
+This is measured, not asserted; `examples/concurrency/b2_smp.hs`
+runs identical work both ways:
+
+    workers:            1        2        4
+    par              7.61s    4.14s    1.85s    4.1x
+    spawn            7.02s    6.53s    6.64s    flat
+
+If you came from Go, this is the sharpest difference. `go f()`
+buys you a core; `spawn s act` does not. The reason is Phase B's
+second stage (SMP scheduling) being deliberately unbuilt — the
+reproducible schedule is the headline feature, and a second
+scheduler thread is exactly what it costs. See 16.7.
+
+### 16.2 Structured tasks — `Control.Concurrent.Scoped`
+
+    scope   :: (Scope -> IO a) -> IO a     -- joins all children
+    spawn   :: Scope -> IO a -> IO (Task a)
+    await   :: Task a -> IO a              -- re-raises child death
+    newChan :: IO (Chan a)
+    send    :: Chan a -> a -> IO ()        -- unbounded, never blocks
+    recv    :: Chan a -> IO a              -- parks while empty
+    yield   :: IO ()
+
+    import Control.Concurrent.Scoped
+
+    main :: IO ()
+    main = scope (\s -> do
+      c  <- newChan
+      spawn s (mapM_ (send c) [1, 3, 5 :: Int])
+      spawn s (mapM_ (send c) [2, 4, 6])
+      let grab 0 = return []
+          grab n = recv c >>= \v ->
+                   grab (n - 1) >>= \vs -> return (v : vs)
+      vals <- grab (6 :: Int)
+      print (sum vals))
+
+**Use it when** you have genuinely independent activities —
+especially ones that *wait* (on a channel, on each other, on a
+protected value) — and you want the structure of "these run
+together, and this point is where they are all finished."
+
+`scope` is the whole safety story: it cannot return while a child
+is running, `await` re-raises a child's failure, and a child that
+dies with nobody awaiting it fails the scope at the join point.
+There is no `forkIO`. A leaked task is not a bug you have to avoid
+— it is a program you cannot write.
+
+**Do not use it** to go faster. See 16.1.
+
+**Watch out for:** the scheduler is *cooperative*. Its only
+switch points are IO binds, blocking operations, and `yield`. A
+tight pure loop that allocates nothing will never yield, and every
+other task waits. (This is Go's pre-1.14 problem, accepted
+knowingly.) If you write a long pure computation inside a task,
+either break it up with `yield` or hand it to `par` instead.
+
+The payoff for that restriction is that **the schedule is
+reproducible**: the same program on the same input interleaves the
+same way every run. An interleaving becomes a golden test, a
+concurrency bug reproduces on demand, and a deadlock is a reported
+outcome rather than a hang:
+
+    ahc: deadlock: all green threads blocked
+
+### 16.3 Protected values — `Control.Concurrent.Protected`
+
+    newProtected :: s -> IO (Protected s)
+    reading      :: Protected s -> (s -> a) -> IO a
+    updating     :: Protected s -> (s -> (s, a)) -> IO a
+    entry        :: Protected s -> (s -> Bool) -> (s -> (s, a)) -> IO a
+
+This is Ada's protected object. `reading` observes atomically,
+`updating` transitions, and `entry` parks until its barrier holds
+and then transitions.
+
+    import Control.Concurrent.Protected
+
+    main :: IO ()
+    main = do
+      acc <- newProtected (0 :: Int)
+      -- ... from several tasks:
+      updating acc (\n -> (n + 1, ()))
+      total <- reading acc (\n -> n)
+      print total
+
+**Use it whenever two tasks touch the same state.** It is the only
+sanctioned way to do so, and it is not optional in the way a mutex
+is: there is no raw shared cell to reach for instead.
+
+**The transitions are pure, and that is the point.** `s -> (s, a)`
+has nowhere to put an IO action, so Ada's rule that a protected
+body must not block is not a rule here — it is a type. This does
+not compile:
+
+    updating acc (\n -> do putStrLn "peek"; return (n + 1, ()))
+    error: couldn't match type '(,) ?' with 'IO'
+
+A `Mutex` in Rust or Go cannot say that: those critical sections
+can block, do IO, or take a second lock in the wrong order.
+
+**Use `entry` instead of a spin** when a task must wait for a
+condition. The barrier is re-evaluated after every commit, waiting
+tasks are served first-arrived-first-served, and the queue is
+rescanned from the head — so wake order is deterministic and
+testable like everything else here. A bounded buffer needs
+barriers in both directions:
+
+    notFull  (xs, cap) = length xs < cap
+    notEmpty (xs, _)   = not (null xs)
+
+    entry b notFull  (push i)      -- producer parks when full
+    entry b notEmpty pop           -- consumer parks when empty
+
+**Contracts reach shared state.** Name a transition at top level,
+attach `PRE`/`POST`, and the check fires *inside* the protected
+action — so no other task can observe a state that violated its
+invariant. This is the one thing neither Go, Rust, nor GHC offers:
+
+    {-# POST push \x s r -> length (fst (fst r)) <= snd s #-}
+
+### 16.4 Sparks — `Control.Parallel`
+
+    par  :: a -> b -> b    -- hint: a may be evaluated in parallel
+    pseq :: a -> b -> b    -- evaluate a to WHNF, then return b
+
+    import Control.Parallel
+
+    pfib :: Int -> Int
+    pfib n =
+      if n < 18                      -- granularity threshold
+        then fib n
+        else let a = pfib (n - 2)
+                 b = pfib (n - 1)
+             in a `par` (b `pseq` (a + b))
+
+`par` is *advisory*. A spark may be taken by a worker, evaluated
+by whoever demands it, or dropped — and because the value is pure,
+all three give the same answer. **`par` changes wall time and
+never results**, which is why it needs no synchronisation in your
+source at all. Verified: byte-identical output at `AHC_WORKERS`
+0, 1, 2, 4, and 8.
+
+**Use it when** you have a pure computation, big enough to be
+worth shipping to another core, that you can split into
+independent pieces.
+
+**To actually get a speedup you need two things**, and missing
+either is the usual reason `par` appears to do nothing:
+
+    AHC_GC=own scripts/ahc-build.sh prog.hs prog   # 1. the collector
+    AHC_WORKERS=4 ./prog                           # 2. the pool
+
+Under the **default Boehm build, `par` makes things worse** — not
+merely no better. Measured on the same program, 7.05s → 10.10s →
+12.83s as workers go 1 → 2 → 4. A graph reducer allocates on every
+reduction, and Boehm anti-scales under parallel allocation storms.
+That finding is what caused AHC to grow its own collector, and it
+is why `AHC_WORKERS` defaults to **0** under Boehm and to
+`min(ncpu-1, 4)` under `AHC_GC=own`.
+
+**Watch the fizzle rate, not the clock.** `AHC_SPARK_STATS=1`
+prints to stderr at exit:
+
+    sparks: created 150 converted 19 fizzled 131 dropped 0
+
+A *fizzled* spark was already evaluated by the time a worker got
+to it — the work was done, just not in parallel. That run is ~88%
+fizzle and still runs 0.40s → 0.25s going from one worker to four,
+which tells you the number to watch is trending, not absolute. If
+nearly everything fizzles *and* wall time has not moved, your
+grain is too fine: raise the threshold at which you stop sparking
+(the `n < 18` above) so each spark is worth its overhead.
+
+**These counters are the one non-deterministic output in AHC**, and
+deliberately so. Consecutive runs of the program above reported 131
+and then 133 fizzles: who won the race to a thunk depends on
+timing. That is exactly why `par` is safe — the counters record
+*which* thread did the work, and purity makes that unobservable in
+the answer. Never golden-test spark statistics; golden-test the
+result, which does not move.
+
+### 16.5 Choosing, by scenario
+
+| Scenario | Reach for |
+|---|---|
+| Fan out work, collect results, one join point | `scope` + `spawn` + `await` |
+| Producer/consumer pipeline | `Chan` |
+| A counter, cache, or config several tasks touch | `Protected` |
+| "Wait until the buffer has room" | `entry` with a barrier |
+| A big pure fold/map/search you want on 4 cores | `par` + `AHC_GC=own` |
+| A CPU-bound job expressed as tasks | rewrite it as sparks — tasks won't parallelize |
+| Overlapping slow IO | `spawn`; cores aren't the constraint |
+| Enforcing an invariant on shared state | `POST` on the transition |
+
+The two mistakes worth naming. **Reaching for `spawn` to go
+faster** — it will not, and 16.1 has the numbers. **Reaching for
+`par` on something impure** — it takes an `a`, so effects cannot
+be sparked; the type stops you.
+
+### 16.6 Runtime knobs
+
+| Variable | Default | Does |
+|---|---|---|
+| `AHC_WORKERS` | `0` (Boehm), `min(ncpu-1,4)` (own) | Size the spark pool. `0` disables. |
+| `AHC_SPARK_STATS` | off | Print created/converted/fizzled/dropped at exit. |
+| `AHC_SPIN_LIMIT` | `120` | Seconds before an unbounded blackhole spin is reported instead of hanging. `0` disables. |
+| `AHC_GC` (build) | `boehm` | `own` enables the collector that lets sparks scale. Darwin-only. |
+
+### 16.7 What is not here
+
+Four deliberate absences, each argued in
+`docs/concurrency-design-note.md`:
+
+- **SMP for task-shaped work** (Phase B stage 2). Green tasks
+  never use a second core. Not an oversight — `--deterministic`
+  is the default profile and a second scheduler thread is what it
+  costs. It would have to arrive as an opt-in mode with a weaker
+  guarantee.
+- **STM.** `Protected` covers the ground with a deterministic wake
+  order; retry-based composition is the piece not attempted.
+- **Async exceptions.** No `throwTo`, no `timeout`. A task fails
+  its own `Task`, and `await` re-raises at the join.
+- **Preemption.** Cooperative only (16.2).
+
+One caveat worth stating plainly, because it is the one place
+adding workers *weakens* a guarantee. With `AHC_WORKERS > 0`, a
+thread waiting on a thunk another thread is evaluating spins
+rather than parking — that is what keeps workers deadlock-free by
+construction. Green-thread deadlock is still reported, and a
+self-referential value still dies `<<loop>>`, both verified at
+every worker count. But a *cyclic dependency across tasks* that
+Phase A would report as a deadlock will instead spin until
+`AHC_SPIN_LIMIT` fires. You get a diagnostic naming the task that
+stopped making progress rather than a deadlock report — bounded
+and loud, but a different message.
+
+---
+
+## 17. War stories
 
 Each of these cost real debugging time and produced a rule now
 followed everywhere in the codebase.
@@ -2012,7 +2278,7 @@ you will need it again.
 
 ---
 
-## 17. Glossary
+## 18. Glossary
 
 **Arena** — tree storage as an array of nodes addressed by integer
 ids instead of pointers. *Chapter 2.*
@@ -2121,7 +2387,7 @@ in metavariables, or fails. *Chapter 5.*
 
 ---
 
-## 18. Source map
+## 19. Source map
 
 Where to look for anything, in pipeline order:
 

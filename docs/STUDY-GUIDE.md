@@ -313,7 +313,7 @@ capstone you could have written station 8 yourself.
 
 | Always open | Why |
 |---|---|
-| `docs/MANUAL.md` ch. 17-18 | glossary + source map - the lookup tables |
+| `docs/MANUAL.md` ch. 18-19 | glossary + source map - the lookup tables |
 | a scratch `.hs` file + the five dump commands | the microscope |
 | `tests/golden/` | worked examples with pinned answers |
-| MANUAL ch. 16 | when something seems needlessly careful, a war story usually explains the scar |
+| MANUAL ch. 17 | when something seems needlessly careful, a war story usually explains the scar |

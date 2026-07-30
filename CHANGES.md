@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+Concurrency, documented as a user guide (M123). The MANUAL
+explained how the scheduler and spark pool are BUILT but never said
+which of the three surfaces to reach for. New chapter 16,
+"Concurrency: choosing a model", does that: a decision table, one
+subsection per surface with signatures, a runnable example, when to
+use it and when not, the runtime knobs, and what is deliberately
+absent.
+
+The lead is the thing that surprises everyone and was written down
+nowhere: TASKS GIVE YOU CONCURRENCY, ONLY SPARKS GIVE YOU CORES.
+Every green task shares one OS thread, so spawning ten expensive
+computations interleaves them rather than speeding them up, with
+b2_smp's measured table as the evidence. Second most useful: `par`
+needs AHC_GC=own to help at all, and under the default Boehm build
+it makes things actively WORSE (7.05s -> 12.83s as workers go 1 ->
+4) - the usual reason par appears to do nothing.
+
+Every code snippet in the chapter was compiled and run before being
+written down, including the claim that IO in a protected transition
+is a type error rather than a runtime rule. Two claims were
+corrected by measuring rather than asserting: the fizzle example now
+carries the wall times proving an 88%-fizzle run still speeds up,
+and a new note records that SPARK COUNTERS ARE THE ONE
+NON-DETERMINISTIC OUTPUT IN AHC (consecutive runs reported 131 then
+133 fizzles) - which is precisely why par is safe, and why the
+statistics must never be golden-tested even though the result must.
+
+Renumbering: war stories 16 -> 17, glossary 17 -> 18, source map
+18 -> 19. Ten stale cross-references updated, and the second sweep
+is the lesson: the first pass fixed only the six inside MANUAL.md
+and declared the job done. Four more lived in OTHER files
+(STUDY-GUIDE's lookup table, the concurrency design note's status
+line, and an older entry in this changelog), all silently pointing
+at the wrong chapter. Renumbering is a repo-wide edit, not a
+file-local one. The concurrency design note's status line now also
+records that the collector campaign shipped and points at the new
+chapter and examples.
+
 Arming the trap instead of hunting the bug (M120). M119 left the
 rare parallel hang unexplained after 24 attempts; twenty more
 targeted runs added nothing. FORTY-FOUR ATTEMPTS, NO REPRODUCTION.
@@ -585,7 +623,7 @@ goldens; schedule-independent programs differential-tested against
 GHC via tests/shim (runghc -i tests/shim). Design and the
 four-language survey behind it: docs/concurrency-design-note.md.
 War stories: the 56-byte ucontext stub and the silent 8MB stack
-overflow (MANUAL chapter 16).
+overflow (MANUAL chapter 17).
 
 The dogfood binding (M101): examples/sqlite - ahcsql binds the
 OS-shipped sqlite3 in ~80 lines and runs a full session against an

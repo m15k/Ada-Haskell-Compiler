@@ -7,7 +7,7 @@ guard page with live-extent-only GC registration (GC_add_roots of
 [sp, top] at switch-out; GC_set_stackbottom retargets the running
 stack) - the GC_MALLOC'd-stack idea scanned too much and guarded
 nothing; and Darwin's ucontext_t compiles as a 56-byte stub unless
-_XOPEN_SOURCE precedes every include (MANUAL chapter 16, both).
+_XOPEN_SOURCE precedes every include (MANUAL chapter 17, both).
 Channels landed as unbounded FIFO (GHC's Chan semantics), which
 keeps the GHC shim (tests/shim) a direct wrapper. Protected
 values are designed and implemented in section 6 (M103). Phase B
@@ -16,7 +16,15 @@ correct, TSan-clean, byte-deterministic machinery - but OPT-IN
 (AHC_WORKERS=N), because the 7.6 gate found the shipped collector
 anti-scales under parallel graph reduction while plain malloc
 scales to 2.96x: the allocator is the missing sixth subsystem,
-and Phase B's future is a collector campaign (7.8).
+and Phase B's future is a collector campaign (7.8). That campaign
+ran and shipped (docs/collector-design-note.md): AHC_GC=own turns
+sparks from a 0.55x anti-scaling liability into 4.1x on four
+workers, and the worker default is on under it. B2 (SMP
+scheduling) remains UNBUILT by choice - see MANUAL 16.7.
+
+**Using any of this** is MANUAL chapter 16 (which surface, when,
+and the knobs); `examples/concurrency/` has a runnable program per
+model, including b2_smp, which measures what B2's absence costs.
 
 AHC has zero concurrency at every layer, and until now deliberately:
 Haskell 2010 has none (Control.Concurrent is GHC library territory,
