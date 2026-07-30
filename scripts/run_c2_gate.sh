@@ -15,6 +15,28 @@ set -u
 cd "$(dirname "$0")/.."
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+# Run a command with a wall-clock limit. macOS has no timeout(1).
+# A hung benchmark used to block a gate indefinitely - 2.5 hours of
+# a stuck b_parsort before a human noticed (M119). Now it fails.
+AHC_RUN_LIMIT="${AHC_RUN_LIMIT:-300}"
+with_limit() {
+  ( "$@" ) & local p=$!
+  # The watchdog MUST NOT inherit the caller's stdout. If it does
+  # and with_limit is used inside $(...), the command substitution
+  # waits for the watchdog to exit too - so every call blocks for
+  # the full limit even when the command returns instantly, and a
+  # 5-minute limit turned C2's RSS loop into a 2.5 hour stall.
+  ( sleep "$AHC_RUN_LIMIT"; kill -9 $p 2>/dev/null ) >/dev/null 2>&1 &
+  local w=$!
+  wait $p 2>/dev/null; local rc=$?
+  kill -9 $w 2>/dev/null; wait $w 2>/dev/null
+  if [ $rc -eq 137 ]; then
+    echo "TIMEOUT after ${AHC_RUN_LIMIT}s: $*" >&2
+    return 124
+  fi
+  return $rc
+}
 fail=0
 
 echo "== 1. exec suite (AHC_GC=own) =="
@@ -60,9 +82,11 @@ for hs in tests/bench/b_fib.hs tests/bench/b_sumfold.hs \
   # measures - see collector-design-note.md section 11.)
   ro=999999999999; rb=999999999999
   for _i in 1 2 3; do
-    _v=$(/usr/bin/time -l "$tmp/${base}_o" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    _v=$(with_limit /usr/bin/time -l "$tmp/${base}_o" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    [ -n "$_v" ] || { echo "GATE ABORTED: ${base}_o hung"; exit 2; }
     [ "$_v" -lt "$ro" ] && ro=$_v
-    _v=$(/usr/bin/time -l "$tmp/${base}_b" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    _v=$(with_limit /usr/bin/time -l "$tmp/${base}_b" 2>&1 >/dev/null | awk '/maximum resident/{print $1}')
+    [ -n "$_v" ] || { echo "GATE ABORTED: ${base}_b hung"; exit 2; }
     [ "$_v" -lt "$rb" ] && rb=$_v
   done
   r=$(python3 -c "print(f'{$ro/$rb:.2f}')")

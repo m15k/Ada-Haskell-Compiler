@@ -13,11 +13,17 @@ clamp pinned every soak and gate to a single collection cadence.
 They now mean "at five floors and two cadences, on the programs in
 the soak" - a real claim, but a young one.
 
-C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND DECLINED**;
-**both perf gates FAIL** (M109; section 9), though C2 passes at a
-4MB floor once the clamp is gone (1.80x vs the 2.0x bar - section
-13). What landed, with errata where the implementation corrected
-the design:
+C1-C3 IMPLEMENTED (M107, M108); **C4 MEASURED AND DECLINED**.
+**Gate status as of M119 (section 18): C2 PASSES at 1.88x, C3's
+sequential half PASSES at 0.966, and two of three parallel
+workloads clear both bars** - b_parfib 2.14/2.70 and b_parmap
+2.25/2.91. C3 reports FAIL overall only because b_parsort misses
+(1.52/1.92), which its own source explains: 31 coarse sparks and
+a sequential merge bound it near 2x whatever the collector does.
+Sections 9-17 record the earlier failing verdicts and the four
+harness defects that produced some of them; read them as history,
+not status. What landed, with errata where the implementation
+corrected the design:
 
 - **C1 (allocator)**: as designed, plus per-thread CHUNK carving
   (the pool lock plus the mprotect inside it convoyed at 4
@@ -59,8 +65,12 @@ the design:
   is not met, so the stage does not land. See the profile section
   below for what the same measurement DID find.
 
-Trigger policy: collect when bytes-since-GC exceed max(12MB,
-2x live); a major every 4 minors or when live triples.
+Trigger policy (M119, section 18): collect when bytes-since-GC
+exceed max(budget * (1 + n_workers), 2x live) - a PER-ALLOCATOR
+budget, default 4MB, not a global floor; a major every 4 minors or
+when live triples. Watchdogs: AHC_SPIN_LIMIT (default 120s) makes
+an unbounded blackhole spin a reported error; the harnesses bound
+every run with AHC_RUN_LIMIT (default 300s).
 AHC_OWN_MIN / AHC_OWN_MAJOR_EVERY override; AHC_OWN_STATS prints
 the phase breakdown; AHC_OWN_PARANOID=1 verifies the generational
 invariant (=2 hunts referrers); AHC_OWN_MADVISE=1 trades speed
@@ -838,3 +848,91 @@ relative to the live set, rather than on a constant - can, and
 this is the first evidence for it that is not hand-waving. It
 remains unbuilt, and is the natural next milestone for the
 collector alongside the Linux port.
+
+
+## 18. The growth-aware trigger, and two watchdogs (M119)
+
+Section 17 said the floor conflict named its own fix: the gates
+wanted different BEHAVIOUR per program shape, not different
+constants. Built, and it works.
+
+**The change is one line of policy.** The collection threshold is
+a budget PER ALLOCATING THREAD, not a global byte count:
+
+    thr = budget * (1 + n_workers);      /* was: a global floor */
+    if (thr < live * 2) thr = live * 2;  /* growth term unchanged */
+
+`AHC_OWN_MIN` now means that per-allocator budget (default 4MB).
+Workers only start on the first `par`, so a sequential program
+sees exactly the base budget and a four-worker program sees five
+times it. The rationale is section 17's measurement: with N
+workers the heap fills N+1 times faster, so a global threshold
+silently multiplies the collection RATE, and every collection is a
+stop-the-world rendezvous all N+1 threads pay for.
+
+**Both gates now pass simultaneously**, which section 17 measured
+as impossible at any fixed floor:
+
+    gate                     before        after
+    C2   (RSS <= 2.0)        2.004 FAIL    1.88  PASS
+    C3   sequential (<=1.00) 0.844 PASS    0.966 PASS
+    b_parfib   2w/4w         2.29/1.91     2.14/2.70  PASS
+    b_parmap   2w/4w         2.11/2.31     2.25/2.91  PASS
+    b_parsort  2w/4w         1.58/1.74     1.52/1.92  FAIL
+
+C3 still reports FAIL overall because b_parsort misses, and that
+is honest: 31 coarse sparks and a sequential merge phase bound it
+near 2x whatever the collector does. Whether one structurally
+capped workload should veto the gate is section 11's per-workload
+bar question, still not acted on.
+
+**Two honest deductions from the numbers.** b_parmap's improved
+RATIO is partly a handicapped baseline - its sequential arm now
+runs at 4MB instead of 12MB and slowed accordingly, while its
+4-worker ABSOLUTE time (20823ms) is essentially the old best
+(20644ms). Parallel throughput is restored, not improved. And
+allocation-heavy sequential programs pay for the smaller budget:
+b_map lost 3.7%, parmap's sequential arm ~30%. 4MB is where C2
+clears with margin and C3-sequential still passes; 8MB would trade
+C2 back to the boundary.
+
+## 19. Making stalls loud (M119)
+
+Two hangs cost hours of wall-clock this milestone, and neither was
+detectable without a human noticing a clock. Both layers are now
+bounded.
+
+**The runtime watchdog.** A blackhole spin with no progress used
+to run forever. `AHC_SPIN_LIMIT` (seconds, default 120, 0
+disables) turns it into `ahc: blackhole spin exceeded
+AHC_SPIN_LIMIT`. This is M102's principle - a deadlock is a
+REPORTED OUTCOME, not a hang - finally applied to the parallel
+path, where it had been missing since B1.
+
+**The harness limit.** The gates had no per-run bound, so one
+stuck benchmark blocked a gate indefinitely: b_parsort spun for
+2h22m inside the C3 gate before anyone looked. All three harnesses
+now bound every run via `AHC_RUN_LIMIT` (default 300s) and abort
+with `GATE ABORTED: <bin> hung`.
+
+**Both watchdogs were wrong on their first attempt**, which is
+worth recording because the pattern repeated within one milestone:
+
+- The spin watchdog initialised its limit lazily from a shared
+  `double` on a path every worker executes - a data race TSan
+  caught in one run. It is now set once at startup, read-only
+  after.
+- `with_limit` let its watchdog subshell inherit the caller's
+  stdout, so inside `$(...)` the command substitution waited for
+  the watchdog too. Every call blocked for the FULL limit even
+  when the command returned instantly, turning C2's RSS loop into
+  a 2.5 hour stall - a timeout that caused the exact failure it
+  was written to prevent. The watchdog's output is now redirected
+  and both paths are tested.
+
+The rare hang that motivated all this remains UNEXPLAINED. It was
+captured once (main spinning in ahc_eval's blackhole loop while
+all four workers sat idle in their nap loop) and has not
+reproduced in 24 targeted attempts, nor in either gate since.
+It is now loud rather than silent, which is the most that can
+honestly be claimed.

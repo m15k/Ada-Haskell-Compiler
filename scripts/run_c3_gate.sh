@@ -12,6 +12,28 @@ cd "$(dirname "$0")/.."
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
+# Run a command with a wall-clock limit. macOS has no timeout(1).
+# A hung benchmark used to block a gate indefinitely - 2.5 hours of
+# a stuck b_parsort before a human noticed (M119). Now it fails.
+AHC_RUN_LIMIT="${AHC_RUN_LIMIT:-300}"
+with_limit() {
+  ( "$@" ) & local p=$!
+  # The watchdog MUST NOT inherit the caller's stdout. If it does
+  # and with_limit is used inside $(...), the command substitution
+  # waits for the watchdog to exit too - so every call blocks for
+  # the full limit even when the command returns instantly, and a
+  # 5-minute limit turned C2's RSS loop into a 2.5 hour stall.
+  ( sleep "$AHC_RUN_LIMIT"; kill -9 $p 2>/dev/null ) >/dev/null 2>&1 &
+  local w=$!
+  wait $p 2>/dev/null; local rc=$?
+  kill -9 $w 2>/dev/null; wait $w 2>/dev/null
+  if [ $rc -eq 137 ]; then
+    echo "TIMEOUT after ${AHC_RUN_LIMIT}s: $*" >&2
+    return 124
+  fi
+  return $rc
+}
+
 # INTERLEAVED best-of-3. Timing each configuration to completion in
 # turn lets machine drift (thermal, background load) masquerade as a
 # difference between configurations - which is exactly how an earlier
@@ -34,7 +56,9 @@ interleaved() {
     for k in $(seq 0 $((n - 1))); do
       off=$(( (k + i) % n ))
       j=$((off + 1))
-      t0=$(now_ms); env ${args[$off]} "$bin" >/dev/null; t1=$(now_ms)
+      t0=$(now_ms); with_limit env ${args[$off]} "$bin" >/dev/null \
+        || { echo "GATE ABORTED: $bin hung"; exit 2; }
+      t1=$(now_ms)
       dt=$((t1 - t0))
       [ $dt -lt ${IL_RESULT[$j]} ] && IL_RESULT[$j]=$dt
     done
@@ -54,13 +78,20 @@ for hs in tests/bench/b_fib.hs tests/bench/b_sumfold.hs \
   base=$(basename "$hs" .hs)
   AHC_GC=boehm scripts/ahc-build.sh "$hs" "$tmp/${base}_b" >/dev/null 2>&1 || { echo "BUILD-FAIL $hs"; exit 1; }
   AHC_GC=own scripts/ahc-build.sh "$hs" "$tmp/${base}_o" >/dev/null 2>&1 || { echo "BUILD-FAIL $hs"; exit 1; }
-  "$tmp/${base}_b" > "$tmp/a.txt"; AHC_WORKERS=0 "$tmp/${base}_o" > "$tmp/b.txt"
+  with_limit "$tmp/${base}_b" > "$tmp/a.txt" \
+    || { echo "GATE ABORTED: ${base}_b hung"; exit 2; }
+  with_limit env AHC_WORKERS=0 "$tmp/${base}_o" > "$tmp/b.txt" \
+    || { echo "GATE ABORTED: ${base}_o hung"; exit 2; }
   cmp -s "$tmp/a.txt" "$tmp/b.txt" || { echo "OUTPUT DIFFERS: $hs"; exit 1; }
   bb=999999999; bo=999999999
   for _i in 1 2 3; do
-    _t0=$(now_ms); "$tmp/${base}_b" >/dev/null; _t1=$(now_ms)
+    _t0=$(now_ms); with_limit "$tmp/${base}_b" >/dev/null \
+      || { echo "GATE ABORTED: ${base}_b hung"; exit 2; }
+    _t1=$(now_ms)
     _d=$((_t1-_t0)); [ $_d -lt $bb ] && bb=$_d
-    _t0=$(now_ms); AHC_WORKERS=0 "$tmp/${base}_o" >/dev/null; _t1=$(now_ms)
+    _t0=$(now_ms); with_limit env AHC_WORKERS=0 "$tmp/${base}_o" >/dev/null \
+      || { echo "GATE ABORTED: ${base}_o hung"; exit 2; }
+    _t1=$(now_ms)
     _d=$((_t1-_t0)); [ $_d -lt $bo ] && bo=$_d
   done
   r=$(python3 -c "print(f'{$bo/$bb:.3f}')")
@@ -81,9 +112,11 @@ for hs in tests/bench/b_parfib.hs tests/bench/b_parsort.hs \
           tests/bench/b_parmap.hs; do
   base=$(basename "$hs" .hs)
   AHC_GC=own scripts/ahc-build.sh "$hs" "$tmp/$base" >/dev/null 2>&1 || { echo "BUILD-FAIL $hs"; exit 1; }
-  AHC_WORKERS=0 "$tmp/$base" > "$tmp/ref.txt"
+  with_limit env AHC_WORKERS=0 "$tmp/$base" > "$tmp/ref.txt" \
+    || { echo "GATE ABORTED: $base hung (0 workers)"; exit 2; }
   for w in 2 4; do
-    AHC_WORKERS=$w "$tmp/$base" > "$tmp/w.txt"
+    with_limit env AHC_WORKERS=$w "$tmp/$base" > "$tmp/w.txt" \
+      || { echo "GATE ABORTED: $base hung ($w workers)"; exit 2; }
     cmp -s "$tmp/ref.txt" "$tmp/w.txt" || { echo "OUTPUT DIFFERS at $w workers: $hs"; exit 1; }
   done
   interleaved "$tmp/$base" "AHC_WORKERS=0" "AHC_WORKERS=2" "AHC_WORKERS=4"

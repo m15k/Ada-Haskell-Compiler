@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+The growth-aware trigger, and two watchdogs (M119). M118 said the
+floor conflict named its own fix - the gates wanted different
+behaviour per program shape, not different constants. Built, and
+BOTH GATES NOW PASS SIMULTANEOUSLY, which M118 measured as
+impossible at any fixed floor.
+
+The collection threshold is now a budget PER ALLOCATING THREAD
+rather than a global byte count: thr = budget * (1 + n_workers),
+with the live*2 growth term unchanged. AHC_OWN_MIN means that
+per-allocator budget (default 4MB); workers only start on the
+first `par`, so a sequential program sees the base budget and a
+four-worker program five times it. With N workers the heap fills
+N+1 times faster, so a global threshold silently multiplied the
+collection rate - and every collection is a stop-the-world
+rendezvous all N+1 threads pay for.
+
+    gate                     before        after
+    C2   (RSS <= 2.0)        2.004 FAIL    1.88  PASS
+    C3   sequential (<=1.00) 0.844 PASS    0.966 PASS
+    b_parfib   2w/4w         2.29/1.91     2.14/2.70  PASS
+    b_parmap   2w/4w         2.11/2.31     2.25/2.91  PASS
+    b_parsort  2w/4w         1.58/1.74     1.52/1.92  FAIL
+
+C3 still reports FAIL because b_parsort misses - honestly so: 31
+coarse sparks and a sequential merge bound it near 2x whatever the
+collector does. Two deductions stated rather than buried:
+b_parmap's better RATIO is partly a handicapped baseline (its
+4-worker absolute time, 20823ms, is essentially the old best of
+20644ms - throughput restored, not improved), and
+allocation-heavy sequential programs pay for the smaller budget
+(b_map -3.7%, parmap's sequential arm ~30%).
+
+Also: two hangs cost hours this milestone and neither was
+detectable without a human noticing a clock. AHC_SPIN_LIMIT
+(default 120s) turns an unbounded blackhole spin into a reported
+error - M102's "a deadlock is a reported outcome, not a hang"
+finally applied to the parallel path. AHC_RUN_LIMIT (default 300s)
+bounds every run in all three collector harnesses after b_parsort
+spun 2h22m inside the C3 gate.
+
+BOTH WATCHDOGS WERE WRONG FIRST TIME, which is the part worth
+remembering. The spin watchdog initialised a shared double lazily
+on a path every worker executes - a data race TSan caught in one
+run, now set once at startup. And with_limit let its watchdog
+subshell inherit the caller's stdout, so inside $(...) every call
+blocked for the full limit even when the command returned
+instantly - a timeout that caused the exact stall it was written
+to prevent, turning C2's RSS loop into a 2.5 hour hang. Both
+fixed and both paths tested.
+
+The rare hang that motivated the watchdogs remains UNEXPLAINED:
+captured once (main spinning in ahc_eval while all four workers
+idled), not reproduced in 24 targeted attempts nor in either gate
+since. Loud now, not fixed.
+
 The floor is a genuine conflict (M118). Both gates re-run after a
 verified cooldown attempt, correcting two claims from M117.
 

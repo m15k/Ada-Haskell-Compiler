@@ -21,6 +21,28 @@ FLOORS="2000000 4000000 8000000 16000000 32000000"
 [ "${1:-}" = "--quick" ] && FLOORS="2000000 8000000"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+# Run a command with a wall-clock limit. macOS has no timeout(1).
+# A hung benchmark used to block a gate indefinitely - 2.5 hours of
+# a stuck b_parsort before a human noticed (M119). Now it fails.
+AHC_RUN_LIMIT="${AHC_RUN_LIMIT:-300}"
+with_limit() {
+  ( "$@" ) & local p=$!
+  # The watchdog MUST NOT inherit the caller's stdout. If it does
+  # and with_limit is used inside $(...), the command substitution
+  # waits for the watchdog to exit too - so every call blocks for
+  # the full limit even when the command returns instantly, and a
+  # 5-minute limit turned C2's RSS loop into a 2.5 hour stall.
+  ( sleep "$AHC_RUN_LIMIT"; kill -9 $p 2>/dev/null ) >/dev/null 2>&1 &
+  local w=$!
+  wait $p 2>/dev/null; local rc=$?
+  kill -9 $w 2>/dev/null; wait $w 2>/dev/null
+  if [ $rc -eq 137 ]; then
+    echo "TIMEOUT after ${AHC_RUN_LIMIT}s: $*" >&2
+    return 124
+  fi
+  return $rc
+}
 fail=0
 
 # Deep lazy chains are the shape that finds tracer bugs: a long

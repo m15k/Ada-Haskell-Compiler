@@ -675,6 +675,26 @@ AhcNode *ahc_mk_con(int contag, int arity) {
 static void own_safepoint(void);
 #endif
 
+/* Wall-clock budget for a single blackhole spin. Returns 1 once
+   the budget is exhausted. First call stamps the start. */
+/* Set ONCE in ahc_rts_init, while the runtime is still
+   single-threaded. Initialising it lazily here instead was a data
+   race TSan caught immediately: every worker executes this path,
+   and a plain 8-byte store to a shared double from several of them
+   at once is exactly the kind of thing the sanitiser exists to
+   find. Read-only afterwards. */
+static double ahc_spin_limit = 120.0;
+
+static int ahc_spin_expired(double *t0) {
+  struct timespec ts;
+  double now;
+  if (ahc_spin_limit == 0.0) return 0;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  now = (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+  if (*t0 == 0.0) { *t0 = now; return 0; }
+  return (now - *t0) > ahc_spin_limit;
+}
+
 static void spin_pause(unsigned long *iters) {
 #ifdef AHC_GC_OWN
   own_safepoint();
@@ -697,6 +717,7 @@ static void spin_pause(unsigned long *iters) {
    park and their victims never wait long. */
 AhcNode *ahc_eval(AhcNode *n) {
   unsigned long spins = 0;
+  double spin_t0 = 0.0;        /* watchdog stamp, set on first spin */
   for (;;) {
     switch (__atomic_load_n(&n->tag, __ATOMIC_ACQUIRE)) {
     case AHC_IND:
@@ -772,7 +793,21 @@ AhcNode *ahc_eval(AhcNode *n) {
            program never contained. Plain spinning is safe for the
            opposite reason: ownership follows the program's own
            dependency graph, so a cycle there IS a <<loop>>.
-           b_parsort at 2 workers deadlocked on exactly this. */
+           b_parsort at 2 workers deadlocked on exactly this.
+
+           WATCHDOG (M119): a spin that never ends must be a
+           reported outcome, not a hang - the same principle
+           M102 applied to green-thread deadlock. A rare
+           parallel hang was observed once (main spinning here
+           while every worker sat idle in its nap loop, 2.5
+           HOURS before a human noticed) and has not been
+           reproducible in 24 attempts, so it cannot yet be
+           fixed - but it can be made loud. AHC_SPIN_LIMIT sets
+           the budget in seconds; 0 disables. */
+        if ((spins & 0xFFFFF) == 0 && ahc_spin_expired(&spin_t0))
+          ahc_die("blackhole spin exceeded AHC_SPIN_LIMIT: the"
+                  " owning thread is making no progress (see"
+                  " collector-design-note.md section 18)");
         spin_pause(&spins);
         break;
       }
@@ -3179,15 +3214,11 @@ static void own_maybe_collect(void) {
      FIRST: own_in_gc is main's private flag, and a worker reading
      it was TSan's first C2 finding */
   if (floor_bytes < 0) {
-    /* AHC_OWN_MIN: collection-trigger floor in bytes. The soak
-       harness sets it tiny to force collections constantly. */
-    /* 12MB default: the floor-sweep on b_map measured RSS 2.2x /
-       3.0x / 4.7x of Boehm at 16/24/48MB floors while own stayed
-       FASTER at every setting - the floor only dominates while
-       the live set is small, which is exactly when absolute RSS
-       matters least; live*2 takes over as programs grow. */
+    /* AHC_OWN_MIN is a PER-ALLOCATOR budget, not a global one -
+       see the scaling below. The soak harness sets it tiny to
+       force collections constantly. */
     const char *e = getenv("AHC_OWN_MIN");
-    floor_bytes = e ? atol(e) : (12l << 20);
+    floor_bytes = e ? atol(e) : (4l << 20);
     /* NO CLAMP TO OWN_CHUNK. There used to be one, raising any
        floor below the 16MB chunk size up to it - which tied the
        collection POLICY to an allocation IMPLEMENTATION detail,
@@ -3198,8 +3229,31 @@ static void own_maybe_collect(void) {
        A chunk is a unit of address space, not a unit of garbage. */
     if (floor_bytes < (long)OWN_BLOCK) floor_bytes = OWN_BLOCK;
   }
-  thr = own_live_bytes * 2;
-  if (thr < floor_bytes) thr = floor_bytes;
+  /* GROWTH-AWARE TRIGGER (M119). Collection frequency is a budget
+     PER ALLOCATING THREAD, not a global byte count. With N spark
+     workers the heap fills N+1 times faster, so a global threshold
+     silently multiplies the collection RATE - and every collection
+     is a stop-the-world rendezvous that all N+1 threads pay for.
+     That is measured, not assumed: dropping the global threshold
+     from 16.8MB to 12MB cost 9.7% at four workers and only 1.9%
+     sequentially (M118 section 17), because only parallel runs pay
+     rendezvous frequency.
+
+     Scaling by the allocator count keeps per-thread collection
+     frequency constant as parallelism changes, which is what lets
+     one policy serve both gates: a sequential small-heap program
+     gets a small threshold (peak RSS stays near its live set,
+     which C2 measures) while a parallel allocation-heavy program
+     gets a proportionally larger one (workers keep running between
+     pauses, which C3 measures). The two gates never wanted
+     different CONSTANTS - they wanted the constant to mean
+     per-thread rather than global.
+
+     Workers only exist once a program calls `par`, so a purely
+     sequential program sees exactly the base budget. */
+  thr = floor_bytes
+        * (1 + (long)__atomic_load_n(&n_workers, __ATOMIC_RELAXED));
+  if (thr < own_live_bytes * 2) thr = own_live_bytes * 2;
   if (__atomic_load_n(&own_since_gc, __ATOMIC_RELAXED) < thr)
     return;
   /* a major when minors have piled up float, or live has grown
@@ -4514,6 +4568,10 @@ void ahc_rts_init(void) {
   ahc_prim_par = mk_prim2(p_par);
   ahc_prim_pseq = mk_prim2(p_pseq);
   if (getenv("AHC_SPARK_STATS")) atexit(spark_stats);
+  {                       /* watchdog budget: every build has one */
+    const char *sl = getenv("AHC_SPIN_LIMIT");
+    if (sl) ahc_spin_limit = atof(sl);
+  }
 #ifdef AHC_GC_OWN
   {
     const char *pv = getenv("AHC_OWN_PARANOID");
