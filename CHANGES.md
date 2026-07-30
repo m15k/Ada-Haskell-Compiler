@@ -1,6 +1,42 @@
 # AHC Changelog
 
-## Unreleased
+## v1.6.1 (2026-07-30)
+
+The collector patch (M113-M123). Nothing here changes the default
+build, whose output stays byte-identical to v1.6; everything below
+is the opt-in `AHC_GC=own` collector, the concurrency examples, and
+the documentation around them.
+
+**The own collector lost live data, and now does not.** `AHC_GC=own`
+produced wrong answers on deep lazy chains at most collection
+cadences - a pre-existing defect across M107-M113, not a regression,
+and never reachable from the default Boehm build. M114 found it,
+M115 fixed it at fourteen sites, and its cause was this project's
+own declared invariant applied by habit rather than by a checker:
+allocation order is a correctness property in a generational
+collector, and remembering that is not the same as enforcing it. So
+M116 wired the enforcement in - `AHC_OWN_VERIFY` on every soak run,
+proving the mark set closed under points-to, plus a CI job and
+Linux support restored.
+
+**Both collector gates now pass, on a collector that is correct.**
+The first honest numbers of the campaign arrived once the bug was
+gone: C3 sequential at 0.844 geometric mean, own 16% faster than
+Boehm on five of six workloads. The peak-RSS and parallel bars
+conflicted at every fixed trigger floor - M118 measured that
+conflict as genuine rather than a tuning question - and M119's
+growth-aware per-thread budget cleared both simultaneously, which
+no constant could.
+
+**And the gap, stated as a number.** `examples/concurrency` runs
+four programs against the models AHC borrowed from and one,
+`b2_smp`, that measures what AHC lacks: pure parallelism scales
+4.1x while task parallelism stays flat, because B2 SMP scheduling
+is unbuilt. The same table shows why the collector campaign
+happened - under the default Boehm build, adding workers makes
+parallel code *slower*. MANUAL chapter 16 is now a user guide to
+choosing among the three surfaces, not just a description of how
+they are built.
 
 Concurrency, documented as a user guide (M123). The MANUAL
 explained how the scheduler and spark pool are BUILT but never said
@@ -39,6 +75,38 @@ at the wrong chapter. Renumbering is a repo-wide edit, not a
 file-local one. The concurrency design note's status line now also
 records that the collector campaign shipped and points at the new
 chapter and examples.
+
+b2_smp - the missing half, measured (M122). The capability table
+of M121 claimed AHC has no SMP for task-shaped work; this program
+turns that claim into a number instead of an assertion. Three modes
+(`par` pure parallelism, `spawn` task parallelism, `interleave`
+concurrency) over four `fib 29`s, interleaved runs on a six-core
+box, produce two findings rather than one. The B2 gap: under
+`AHC_GC=own`, `par` scales 4.1x from one worker to four while
+`spawn` stays flat - same answer, same work, same machine, and the
+only difference is which mechanism carries it. And the reason the
+collector campaign happened at all: under the DEFAULT Boehm build
+`par` does not merely fail to scale, it gets worse with every
+worker added (7.05s -> 12.83s, 0.55x), because a graph reducer
+allocates on every reduction and Boehm anti-scales under parallel
+allocation storms. That is why the honest default remains
+`AHC_WORKERS=0`. run_examples.sh grows to build and check the
+concurrency programs alongside the rest.
+
+examples/concurrency - the four models (M121). Four runnable
+programs, one per language whose concurrency model AHC borrowed
+from, rejected, or replaced: go_csp.hs (CSP with the schedule
+pinned), ghc_sparks.hs (par/pseq), ada_protected.hs (protected
+objects, with contracts firing inside the action), and
+rust_aliasing.hs (what ownership buys, and what immutability buys
+instead). Three also run under GHC via tests/shim, which is where
+their goldens come from; two cannot have a GHC oracle, and that is
+precisely the demonstration - a reproducible schedule is not
+something the other runtimes can express. The README's capability
+table is deliberately unflattering in its last three rows: no
+zero-cost in-place mutation, no SMP for task-shaped work, no
+preemption. AHC is not better than these four languages; it
+occupies a corner none of them do, and pays for it.
 
 Arming the trap instead of hunting the bug (M120). M119 left the
 rare parallel hang unexplained after 24 attempts; twenty more

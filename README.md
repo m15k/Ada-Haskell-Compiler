@@ -94,9 +94,18 @@ outcome, and a scope joins its children by construction (Ada's
 master rule; there is deliberately no forkIO) - plus protected
 values, opt-in SMP sparks, and AHC's own block-structured
 generational collector (`AHC_GC=own`). Those runtime additions are
-opt-in; the default build is still Boehm with zero workers. 74
-conformance programs byte-identical to GHC 9.4.8, twenty harnesses
-and gates.
+opt-in; the default build is still Boehm with zero workers. v1.6.1
+is the collector patch (M113-M123): `AHC_GC=own` lost live data on
+deep lazy chains and no longer does - a pre-existing defect never
+reachable from the default build, fixed at fourteen sites and now
+enforced by a verifier rather than by habit - after which both
+collector gates pass on a correct collector (own 16% faster than
+Boehm sequentially, via a growth-aware trigger that cleared a
+conflict no fixed constant could). `examples/concurrency` states
+the remaining gap as a number: pure parallelism scales 4.1x while
+task parallelism stays flat, because SMP task scheduling is
+unbuilt. 74 conformance programs byte-identical to GHC 9.4.8,
+twenty harnesses and gates.
 
 ```haskell
 foreign import ccall "sin" c_sin :: Double -> Double  -- call C
