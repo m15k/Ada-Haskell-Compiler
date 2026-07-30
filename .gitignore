@@ -37,3 +37,6 @@ examples/concurrency/ada_protected.c
 examples/concurrency/rust_aliasing
 examples/concurrency/rust_aliasing.build/
 examples/concurrency/rust_aliasing.c
+examples/concurrency/b2_smp
+examples/concurrency/b2_smp.build/
+examples/concurrency/b2_smp.c

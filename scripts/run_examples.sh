@@ -57,12 +57,14 @@ if [ "${1:-}" = "--oracle" ]; then
       > "examples/concurrency/tests/$m.golden"
     echo "oracle examples/concurrency/tests/$m.golden"
   done
-  # go_csp is the deliberate exception: it prints a MERGE ORDER, and
-  # GHC has no stable answer to be an oracle for - measured, GHC
-  # produced two different orders in 8 runs where AHC produced one.
-  # That is the example's entire point, so its golden is AHC's own
-  # output; regenerate with --update-conc.
+  # go_csp and b2_smp are the deliberate exceptions: both print a
+  # SCHEDULE, and GHC has no stable answer to be an oracle for -
+  # measured, GHC produced two different orders where AHC produced
+  # one (8 runs and 10 runs respectively). That is the whole point
+  # of those examples, so their goldens are AHC's own output;
+  # regenerate with --update-conc.
   echo "skip   examples/concurrency/go_csp (no stable GHC oracle - by design)"
+  echo "skip   examples/concurrency/b2_smp (no stable GHC oracle - by design)"
   # examples/cal is AHC-only by construction: the contract pragmas are
   # portable, but the refinement surface (Int in 1 .. 31, Int mod 7,
   # Int satisfying isLeapYear) is an extension GHC cannot parse. Its
@@ -72,11 +74,18 @@ if [ "${1:-}" = "--oracle" ]; then
 fi
 
 if [ "${1:-}" = "--update-conc" ]; then
-  scripts/ahc-build.sh examples/concurrency/go_csp.hs \
-    examples/concurrency/go_csp >/dev/null \
-    || { echo "FAIL build examples/concurrency/go_csp"; exit 2; }
+  for m in go_csp b2_smp; do
+    scripts/ahc-build.sh "examples/concurrency/$m.hs" \
+      "examples/concurrency/$m" >/dev/null \
+      || { echo "FAIL build examples/concurrency/$m"; exit 2; }
+  done
   ./examples/concurrency/go_csp > examples/concurrency/tests/go_csp.golden
+  { ./examples/concurrency/b2_smp par
+    ./examples/concurrency/b2_smp spawn
+    ./examples/concurrency/b2_smp interleave
+  } > examples/concurrency/tests/b2_smp.golden
   echo "updated examples/concurrency/tests/go_csp.golden"
+  echo "updated examples/concurrency/tests/b2_smp.golden"
   exit 0
 fi
 
@@ -215,6 +224,46 @@ for w in 0 1 2 4 8; do
     echo "ok   examples/concurrency/ghc_sparks (AHC_WORKERS=$w)"
   else
     echo "FAIL examples/concurrency/ghc_sparks (AHC_WORKERS=$w changed the answer)"
+    fail=1
+  fi
+done
+
+#  b2_smp is three modes, so it is checked as a transcript of all
+#  three rather than a bare run.
+#
+#  NOTE ON WHAT IS *NOT* ASSERTED HERE: the example's headline is a
+#  TIMING table (par scales, spawn does not), and that is
+#  deliberately not a test. This box cannot produce clean absolute
+#  timings - background competition swings identical runs by 50% -
+#  and three harness defects in the collector campaign all had the
+#  same shape: apparatus deciding what the numbers did not support.
+#  So the suite asserts the two things that ARE stable - both
+#  mechanisms compute the SAME ANSWER, and they keep computing it
+#  at every worker count - and the timing lives in the README as a
+#  measurement with its conditions stated.
+scripts/ahc-build.sh examples/concurrency/b2_smp.hs \
+  examples/concurrency/b2_smp >/dev/null \
+  || { echo "FAIL build examples/concurrency/b2_smp"; fail=1; }
+if { ./examples/concurrency/b2_smp par
+     ./examples/concurrency/b2_smp spawn
+     ./examples/concurrency/b2_smp interleave
+   } | diff -q - examples/concurrency/tests/b2_smp.golden >/dev/null 2>&1
+then
+  echo "ok   examples/concurrency/b2_smp (all three modes)"
+else
+  echo "FAIL examples/concurrency/b2_smp (all three modes)"
+  fail=1
+fi
+
+#  par and spawn must agree with each other at every worker count:
+#  the point of the example is that they differ in TIME ONLY.
+for w in 0 2 4; do
+  p=$(AHC_WORKERS=$w ./examples/concurrency/b2_smp par)
+  q=$(AHC_WORKERS=$w ./examples/concurrency/b2_smp spawn)
+  if [ "$p" = "$q" ]; then
+    echo "ok   examples/concurrency/b2_smp (par == spawn, AHC_WORKERS=$w)"
+  else
+    echo "FAIL examples/concurrency/b2_smp (par=$p spawn=$q at AHC_WORKERS=$w)"
     fail=1
   fi
 done

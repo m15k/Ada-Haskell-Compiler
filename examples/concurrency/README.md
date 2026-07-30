@@ -1,16 +1,18 @@
 # concurrency — the four models, and which parts AHC has
 
 Four runnable programs, one per language whose concurrency model
-AHC borrowed from, rejected, or replaced:
+AHC borrowed from, rejected, or replaced — plus a fifth that
+measures what AHC does **not** have:
 
     scripts/ahc-build.sh examples/concurrency/go_csp.hs        ./go_csp
     scripts/ahc-build.sh examples/concurrency/ghc_sparks.hs    ./ghc_sparks
     scripts/ahc-build.sh examples/concurrency/ada_protected.hs ./ada_protected
     scripts/ahc-build.sh examples/concurrency/rust_aliasing.hs ./rust_aliasing
+    scripts/ahc-build.sh examples/concurrency/b2_smp.hs        ./b2_smp
 
-Three of the four also run under GHC (`runghc -itests/shim`), which
-is how the goldens were produced. The fourth cannot have a GHC
-oracle, for a reason that is the whole point — see below.
+Three run under GHC too (`runghc -itests/shim`), which is how their
+goldens were produced. Two cannot have a GHC oracle, for a reason
+that is the whole point — see below.
 
 ## What AHC actually has
 
@@ -27,7 +29,7 @@ oracle, for a reason that is the whole point — see below.
 | Deterministic pure parallelism | no | `par`/`pseq` | rayon (no purity) | no | **yes** — B1 sparks |
 | Compile-time data-race freedom | no | n/a | **ownership** | no | by immutability, not aliasing |
 | Zero-cost in-place mutation | yes | no | **yes** | yes | **no** — the real gap |
-| SMP for *IO*-bound concurrency | yes | yes | yes | yes | **no** — B2 unbuilt, deliberate |
+| SMP for *task*-shaped work | yes | yes | yes | yes | **no** — B2 unbuilt (`b2_smp.hs` measures it) |
 | Preemption | yes | yes | OS | yes | **no** — cooperative only |
 
 Read the last three rows as carefully as the rest. AHC is not
@@ -91,6 +93,75 @@ also shows `entry` barriers in both directions (a bounded buffer
 where producer and consumer must both park) and PRE/POST contracts
 that fire *inside* the protected action, so no task can observe a
 state that violated its invariant.
+
+### `b2_smp.hs` — what is missing, as a number
+
+Phase B shipped in two stages and only the first is built. **B1**
+(sparks) lets worker OS threads evaluate pure thunks, so `par` uses
+every core. **B2** (SMP scheduling) would let green tasks run on
+several OS threads, so IO-bearing concurrency could use more than
+one core. B2 is not built, so every green task shares one OS
+thread.
+
+The consequence is precise: AHC has real *concurrency* (tasks
+interleave, block, communicate, and are joined) and real
+*parallelism for pure code*, but **no parallelism for anything
+expressed as tasks**. Three modes make that concrete:
+
+    ./b2_smp par         [n]   pure parallelism  - scales
+    ./b2_smp spawn       [n]   task parallelism  - does not
+    ./b2_smp interleave        concurrency       - works fine
+
+Measured, 6-core box, four `fib 29`s, interleaved runs:
+
+    workers:            1        2        4
+    own   par        7.61s    4.14s    1.85s    4.1x   B1 works
+    own   spawn      7.02s    6.53s    6.64s    flat   B2 MISSING
+    boehm par        7.05s   10.10s   12.83s    0.55x  (!)
+    boehm spawn      6.80s    6.63s    6.57s    flat
+
+**There are two findings in that table, not one.**
+
+*The B2 gap.* `own/par` scales 4.1×; `own/spawn` is flat. Same
+answer, same total work, same machine — the only difference is
+which mechanism carries the work, and one of them has nowhere to
+put a second core.
+
+*Why the collector campaign happened.* Under the **default** build,
+`par` does not merely fail to scale — it gets **worse** with every
+worker added, 7.05s → 12.83s. A graph reducer allocates on every
+reduction, and Boehm anti-scales under parallel allocation storms.
+That is why B1's own gate came back at 0.46–0.70×, why the honest
+default is `AHC_WORKERS=0` under Boehm, and ultimately why AHC grew
+its own collector. Build with `AHC_GC=own` to see B1 work at all.
+
+Reproduce:
+
+    AHC_GC=own scripts/ahc-build.sh examples/concurrency/b2_smp.hs ./b2_own
+    for w in 1 2 4; do
+      /usr/bin/time -p env AHC_WORKERS=$w ./b2_own par   29
+      /usr/bin/time -p env AHC_WORKERS=$w ./b2_own spawn 29
+    done
+
+That timing table is deliberately **not** a test. This box cannot
+produce clean absolute timings, and three separate harness defects
+during the collector campaign had the same shape — apparatus
+deciding what the numbers did not support. The suite therefore
+asserts only what is stable: that both mechanisms compute the same
+answer, and keep computing it at every worker count.
+
+**Why B2 is not built, so this reads as a decision and not a TODO.**
+The reproducible schedule is the project's headline, and a second
+scheduler thread is exactly what it costs. `--deterministic` stays
+the default profile; B2 would have to be an opt-in mode carrying a
+weaker guarantee, and that is a design commitment nobody has paid
+for. The `interleave` mode is in the program to keep the gap from
+being overstated — concurrency is not what is missing, only the
+ability to spend more than one core on it.
+
+Like `go_csp`, this example has no GHC oracle: its `interleave`
+mode printed two distinct orders in 10 GHC runs and one in 10 AHC
+runs.
 
 ### `rust_aliasing.hs` — the honest one
 
