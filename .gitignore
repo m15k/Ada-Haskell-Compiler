@@ -25,3 +25,15 @@ examples/cal/ahccal.c
 examples/fibs/fastfib
 examples/fibs/fastfib.build/
 examples/fibs/fastfib.c
+examples/concurrency/go_csp
+examples/concurrency/go_csp.build/
+examples/concurrency/go_csp.c
+examples/concurrency/ghc_sparks
+examples/concurrency/ghc_sparks.build/
+examples/concurrency/ghc_sparks.c
+examples/concurrency/ada_protected
+examples/concurrency/ada_protected.build/
+examples/concurrency/ada_protected.c
+examples/concurrency/rust_aliasing
+examples/concurrency/rust_aliasing.build/
+examples/concurrency/rust_aliasing.c

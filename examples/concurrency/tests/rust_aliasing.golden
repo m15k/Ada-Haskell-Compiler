@@ -1,0 +1,4 @@
+concurrent readers of one immutable structure:
+(110,100)
+100 interleaved updates, no lock in the source:
+5050

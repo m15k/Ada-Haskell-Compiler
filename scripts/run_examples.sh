@@ -49,11 +49,34 @@ if [ "${1:-}" = "--oracle" ]; then
   (cd examples/fibs && "$GHC" fastfibinwest.hs 0 1 92 93 100) \
     > examples/fibs/tests/args.golden
   echo "oracle examples/fibs/tests/args.golden"
+  # examples/concurrency runs under GHC through tests/shim (forkIO/
+  # MVar/Chan for Scoped, TVar+retry for Protected, GHC.Conc for
+  # Parallel), so three of the four have a real GHC oracle.
+  for m in ghc_sparks ada_protected rust_aliasing; do
+    "$GHC" -itests/shim "examples/concurrency/$m.hs" 2>/dev/null \
+      > "examples/concurrency/tests/$m.golden"
+    echo "oracle examples/concurrency/tests/$m.golden"
+  done
+  # go_csp is the deliberate exception: it prints a MERGE ORDER, and
+  # GHC has no stable answer to be an oracle for - measured, GHC
+  # produced two different orders in 8 runs where AHC produced one.
+  # That is the example's entire point, so its golden is AHC's own
+  # output; regenerate with --update-conc.
+  echo "skip   examples/concurrency/go_csp (no stable GHC oracle - by design)"
   # examples/cal is AHC-only by construction: the contract pragmas are
   # portable, but the refinement surface (Int in 1 .. 31, Int mod 7,
   # Int satisfying isLeapYear) is an extension GHC cannot parse. Its
   # goldens are AHC's own output; regenerate with --update-cal.
   echo "skip   examples/cal (refinement surface has no GHC oracle)"
+  exit 0
+fi
+
+if [ "${1:-}" = "--update-conc" ]; then
+  scripts/ahc-build.sh examples/concurrency/go_csp.hs \
+    examples/concurrency/go_csp >/dev/null \
+    || { echo "FAIL build examples/concurrency/go_csp"; exit 2; }
+  ./examples/concurrency/go_csp > examples/concurrency/tests/go_csp.golden
+  echo "updated examples/concurrency/tests/go_csp.golden"
   exit 0
 fi
 
@@ -151,6 +174,50 @@ else
   echo "FAIL examples/fibs (argument mode)"
   fail=1
 fi
+
+#  examples/concurrency - the four concurrency models. Beyond the
+#  transcripts this block asserts the two claims the examples MAKE:
+#  that the schedule is reproducible (a golden containing a merge
+#  order is only possible if it is), and that sparks change wall
+#  time and never results (identical output at every worker count).
+for m in go_csp ghc_sparks ada_protected rust_aliasing; do
+  scripts/ahc-build.sh "examples/concurrency/$m.hs" \
+    "examples/concurrency/$m" >/dev/null \
+    || { echo "FAIL build examples/concurrency/$m"; fail=1; continue; }
+  if "./examples/concurrency/$m" \
+       | diff -q - "examples/concurrency/tests/$m.golden" >/dev/null 2>&1; then
+    echo "ok   examples/concurrency/$m"
+  else
+    echo "FAIL examples/concurrency/$m"
+    fail=1
+  fi
+done
+
+#  The determinism claim, asserted rather than asserted-about: the
+#  merge order in go_csp's golden is schedule-dependent, so ten
+#  identical runs is evidence the scheduler is reproducible. GHC
+#  fails this (measured: 2 distinct orders in 8 runs), which is why
+#  this example has no GHC oracle.
+runs=$(for i in 1 2 3 4 5 6 7 8 9 10; do
+         ./examples/concurrency/go_csp | md5; done | sort -u | wc -l)
+if [ "$runs" -eq 1 ]; then
+  echo "ok   examples/concurrency/go_csp (schedule reproducible, 10 runs)"
+else
+  echo "FAIL examples/concurrency/go_csp ($runs distinct schedules in 10 runs)"
+  fail=1
+fi
+
+#  The spark claim: par changes wall time, never results.
+for w in 0 1 2 4 8; do
+  if AHC_WORKERS=$w ./examples/concurrency/ghc_sparks \
+       | diff -q - examples/concurrency/tests/ghc_sparks.golden \
+         >/dev/null 2>&1; then
+    echo "ok   examples/concurrency/ghc_sparks (AHC_WORKERS=$w)"
+  else
+    echo "FAIL examples/concurrency/ghc_sparks (AHC_WORKERS=$w changed the answer)"
+    fail=1
+  fi
+done
 
 #  examples/cal - the value-constraint example. AHC-only (see its
 #  README), so the goldens are AHC's output; beyond the transcripts
