@@ -118,7 +118,7 @@ that.
   explicit braces; laid out with indentation; a `where` block) and
   diff the `ahc lex --layout` output — it should converge. Then
   read the "Layout vs. lookahead" and "stolen body" war stories in
-  ch. 16: this tiny file produced two of the project's five
+  ch. 19: this tiny file produced two of the project's five
   fuzzer/REPL-found bugs.
 - **You understand it when** you can explain why the layout
   algorithm cannot be a pure function of the token stream — why it
@@ -169,7 +169,7 @@ that.
   nested patterns become decision trees of flat `case`, with
   fall-through as LET-BOUND JOIN POINTS. The tree invariant —
   "Core is a tree; every reference is a fresh node" — has its own
-  war story (ch. 16, "the shared-node evidence bug"); read it here.
+  war story (ch. 19, "the shared-node evidence bug"); read it here.
 - **Do:** `ahc core` on a two-equation function with nested
   patterns and guards; account for every `$fail`/`$k` binding in
   the output. Then desugar a list comprehension and a `do` block by
@@ -231,11 +231,11 @@ Now the pipeline is yours, and the rest is applications of it, each
 readable in an afternoon, in any order:
 
 - **The optimizer** (`src/ahc-optimizer.adb`, 544 lines; MANUAL
-  ch. 13): five transforms, each argued correct against sharing and
+  ch. 15): five transforms, each argued correct against sharing and
   strictness. Read alongside `scripts/run_bench.sh` — every
   transform shipped with a measurement.
 - **Refinements and contracts** (`src/ahc-refine.adb`, 640;
-  `src/ahc-discharge.adb`, 601; MANUAL ch. 12 + the two design
+  `src/ahc-discharge.adb`, 601; MANUAL ch. 14 + the two design
   notes): the Ada extension. Discharge is a bonus station: a
   complete constant EVALUATOR for Core in 600 lines — a miniature
   of the interpreter you have already written for a DSL, aimed at
@@ -261,12 +261,12 @@ explain most decisions, and they are visible in the artifacts:
 
 1. **GHC is the oracle; never grade your own homework.** Expected
    outputs are whatever GHC 9.4.8 prints, byte for byte
-   (`scripts/run_conformance.sh`). MANUAL ch. 14 argues why this
+   (`scripts/run_conformance.sh`). MANUAL ch. 16 argues why this
    single decision outranks every other testing choice.
-2. **Eleven harnesses, layered.** Goldens catch *change*, the
+2. **Twenty harnesses, layered.** Goldens catch *change*, the
    oracle catches *wrongness*, differentials catch front-end drift,
    the fuzzer catches the unknown unknowns. Read the table in
-   ch. 14; then read ONE golden file next to its source.
+   ch. 16; then read ONE golden file next to its source.
 3. **Honesty over coverage.** What AHC does not do is a documented
    row in `tests/conformance/EXCLUSIONS.md`, never a silent gap —
    and rows get struck (foldl', handles) rather than reworded.
@@ -313,7 +313,7 @@ capstone you could have written station 8 yourself.
 
 | Always open | Why |
 |---|---|
-| `docs/MANUAL.md` ch. 18-19 | glossary + source map - the lookup tables |
+| `docs/MANUAL.md` ch. 20-21 | glossary + source map - the lookup tables |
 | a scratch `.hs` file + the five dump commands | the microscope |
 | `tests/golden/` | worked examples with pinned answers |
-| MANUAL ch. 17 | when something seems needlessly careful, a war story usually explains the scar |
+| MANUAL ch. 19 | when something seems needlessly careful, a war story usually explains the scar |

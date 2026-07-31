@@ -191,7 +191,7 @@ syntax expr, collected then desugared), demand-time check prims
   ignores the pragmas, so byte-identical stdout proves
   contract-carrying source stays oracle-portable; the separate-
   compilation harness confirms a contract edit recompiles one
-  object. MANUAL section (chapter 12 grows from "refinement types"
+  object. MANUAL section (chapter 14 grows from "refinement types"
   to "refinements and contracts"), README, CHANGES.
 
 ### v1 scope, stated up front

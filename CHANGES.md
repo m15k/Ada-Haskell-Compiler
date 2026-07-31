@@ -34,7 +34,7 @@ four programs against the models AHC borrowed from and one,
 4.1x while task parallelism stays flat, because B2 SMP scheduling
 is unbuilt. The same table shows why the collector campaign
 happened - under the default Boehm build, adding workers makes
-parallel code *slower*. MANUAL chapter 16 is now a user guide to
+parallel code *slower*. MANUAL chapter 18 is now a user guide to
 choosing among the three surfaces, not just a description of how
 they are built.
 
@@ -691,7 +691,7 @@ goldens; schedule-independent programs differential-tested against
 GHC via tests/shim (runghc -i tests/shim). Design and the
 four-language survey behind it: docs/concurrency-design-note.md.
 War stories: the 56-byte ucontext stub and the silent 8MB stack
-overflow (MANUAL chapter 17).
+overflow (MANUAL chapter 19).
 
 The dogfood binding (M101): examples/sqlite - ahcsql binds the
 OS-shipped sqlite3 in ~80 lines and runs a full session against an
@@ -837,7 +837,7 @@ link flags from the source into OUT.build/link_flags (GHC only
 warns on the unknown pragma), and compile flags join the
 object-cache key so a flag change can never reuse a stale object.
 New tests: ffi_libc, ffi_io, ffi_bigint_err exec goldens, a parse
-golden, and a marshallability-diagnostic golden. MANUAL chapter 9
+golden, and a marshallability-diagnostic golden. MANUAL chapter 10
 gains an FFI section with the type table and the two honesty rules
 (match the C definition under Int=long; bignum dies at the
 boundary).

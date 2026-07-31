@@ -8,7 +8,7 @@ piece of theory is introduced when it is first needed, in plain
 language, before the decision that depends on it. If you read it
 front to back you will understand why every part of AHC is the way
 it is. If you want one thing, the table of contents and the glossary
-(chapter 18) will get you there.
+(chapter 20) will get you there.
 
 ---
 
@@ -23,16 +23,18 @@ it is. If you want one thing, the table of contents and the glossary
 7.  [Desugaring: shrinking Haskell to eight shapes](#7-desugaring)
 8.  [Laziness: thunks, graph reduction, and the runtime](#8-laziness)
 9.  [Code generation: from Core to C](#9-code-generation)
-10. [Numbers: Int, Integer, and Double](#10-numbers)
-11. [Show: why printing was hard](#11-show)
-12. [The refinement-types extension](#12-refinement-types)
-13. [The optimizer: making it faster without changing it](#13-the-optimizer)
-14. [Testing: GHC as the oracle](#14-testing)
-15. [The standard library](#15-the-standard-library)
-16. [Concurrency: choosing a model](#16-concurrency-choosing-a-model)
-17. [War stories: the bugs and what they taught](#17-war-stories)
-18. [Glossary](#18-glossary)
-19. [Map of the source tree](#19-source-map)
+10. [The FFI: foreign import, foreign export, AHC as a library](#10-the-ffi)
+11. [The runtime, part two: green threads and the own collector](#11-the-runtime-part-two)
+12. [Numbers: Int, Integer, and Double](#12-numbers)
+13. [Show: why printing was hard](#13-show)
+14. [The refinement-types extension](#14-refinement-types)
+15. [The optimizer: making it faster without changing it](#15-the-optimizer)
+16. [Testing: GHC as the oracle](#16-testing)
+17. [The standard library](#17-the-standard-library)
+18. [Concurrency: choosing a model](#18-concurrency-choosing-a-model)
+19. [War stories: the bugs and what they taught](#19-war-stories)
+20. [Glossary](#20-glossary)
+21. [Map of the source tree](#21-source-map)
 
 ---
 
@@ -153,7 +155,7 @@ later:
   crash in the renamer.
 - **`Mk_Dict`'s arity precondition** — a class dictionary must have
   exactly as many fields as the class has methods. When the `Show`
-  class grew a third method (chapter 11), this contract fired at
+  class grew a third method (chapter 13), this contract fired at
   every construction site that hadn't been updated — a complete,
   automatic to-do list.
 - **`Fun_D`'s "at least one pattern" rule** — when `(op) = e`
@@ -256,7 +258,7 @@ tokens to decide what it is looking at (is `x <- foo` a pattern bind
 or an expression?). Those look-ahead tokens have already been
 processed by the layout engine — so when a parse error then needs a
 block closed, the layout engine's queue is stale. The fix (a late
-war story, chapter 17) exploits a theorem about L: *within a single
+war story, chapter 19) exploits a theorem about L: *within a single
 source line, the algorithm never consults its indentation stack*, so
 the parser may safely synthesize the close itself for same-line
 tokens. Correct-but-subtle code like a nested
@@ -281,7 +283,7 @@ exactly what gets said when parsing fails. The parse-error layout
 rule: it needs the parser to expose its failure points, which is
 natural in hand-written code and painful through a generator.
 And extensibility: the refinement-types extension later added three
-contextual keywords (`in`, `satisfying`, `mod` — see chapter 12);
+contextual keywords (`in`, `satisfying`, `mod` — see chapter 14);
 each was a few lines in a hand-written parser and would have been a
 grammar-conflict headache in a generated one.
 
@@ -330,7 +332,7 @@ everything. With globally unique ids, a transformation can move code
 freely and *variable capture is impossible by construction* — there
 is simply no way for two different variables to collide, because
 they are different integers. This paid off in the optimizer
-(chapter 13), which moves code around with zero capture logic.
+(chapter 15), which moves code around with zero capture logic.
 
 Resolution results are stored in **side tables** indexed by node id
 (`Resolutions` in the renamer), not written into the tree — the
@@ -563,7 +565,7 @@ Everything else about classes falls out of this picture:
   in terms of itself, which lazy evaluation handles gracefully).
 - **`deriving`**: the compiler writes the instance for you. Derived
   `Eq`/`Ord` use a generic structural comparison in the runtime;
-  derived `Show` generates real per-constructor code (chapter 11).
+  derived `Show` generates real per-constructor code (chapter 13).
 - **Instances are global**: the Report says instances flow to every
   module regardless of import lists, which is exactly what AHC's
   single global instance table does naturally.
@@ -687,7 +689,7 @@ it becomes selector thunks (Report 4.4.3.2: `a = fst e`,
 `b = snd e` morally). A literal pattern `f 0 = ...` becomes an
 equality *test* (`== 0`), not a match, because numeric literals are
 overloaded. These fine points are exactly what the GHC-oracle test
-suite is good at pinning down (chapter 14).
+suite is good at pinning down (chapter 16).
 
 ---
 
@@ -750,7 +752,7 @@ precise homemade GC would be faster and its own multi-month project;
 Boehm is one linker flag (and the runtime falls back to plain
 `malloc` — never freeing — when Boehm isn't installed, which is fine
 for short programs). This was the right scope call, with one scar
-(the stack-size story, chapter 17).
+(the stack-size story, chapter 19).
 
 **Deep chains and the big stack.** Evaluating a value built by a
 million-step `foldl` means a million-deep chain of thunks, each
@@ -780,7 +782,7 @@ layer, not deep evaluation.
 Once you know evaluation happens at *demand*, several AHC design
 choices become inevitable rather than quirky:
 
-- Refinement checks (chapter 12) fire when the checked value is
+- Refinement checks (chapter 14) fire when the checked value is
   demanded, not when it's passed. An unused out-of-range argument
   never fails — exactly like `error` in an unused argument.
 - `case e of _ -> body` does not evaluate `e` (a wildcard demands
@@ -834,9 +836,71 @@ three small steps: write the C function, declare a typed name for
 it in `AHC.Builtins`, bind name to symbol in `AHC.Prelude_Core`.
 This boundary stayed stable from milestone 17 to the end.
 
-### The FFI: foreign import ccall
+### The layered Prelude
 
-The prims boundary is compiler-internal; the **FFI** (Report
+Where do `map` and `sum` come from? Three layers, and knowing them
+explains most of `src/ahc-builtins.adb` and
+`src/ahc-prelude_core.adb`:
+
+1. **Builtins** — things that must exist before any Haskell is
+   compiled: the class hierarchy, primitive types, and *type
+   signatures* for wired-in values.
+2. **Prelude source** (`prelude/Prelude.hs`) — ordinary Haskell,
+   compiled first into the same program. Most Prelude functions
+   live here. Anything defined here automatically *overrides* a
+   hand-built version.
+3. **Prelude_Core** — hand-built Core for the things source can't
+   express: dictionary bodies wiring class methods to C primitives,
+   and the derived-instance generators.
+
+The project's arc consistently moved code *up* this list — from
+hand-built Core toward ordinary Haskell — because Haskell in
+`prelude/` or `lib/` is checked by the compiler itself, while
+hand-built Core is only checked by the arena contracts.
+
+### Separate compilation
+
+For most of the project's life the compiler emitted ONE C file for
+the entire program — prelude, libraries, and your code — and clang
+recompiled all of it on every build. Measurement showed why that
+mattered: the whole AHC pipeline (parse through optimized Core)
+takes about a third of a second for the full mini-Lisp interpreter,
+while clang on the 30,000-line monolith takes over five. Ninety-four
+percent of every rebuild was the C compiler redoing work it had
+already done.
+
+The fix is a split with a principle on each side. **Code generation
+is separate**: the program is emitted as one C file per module plus
+a shared header, and every emitted name is *stable* — a global's C
+symbol is mangled from its module and source name (never an arena
+id), and locals and lifted functions are numbered per module,
+counters reset at each unit boundary. Stability is the load-bearing
+property: it makes a module's generated text a pure function of its
+own code, so `ahc-build.sh` can cache each compiled object under a
+hash of its C text and skip clang entirely for anything unchanged.
+The cache is content-addressed, not timestamp-based — editing a
+comment recompiles *nothing*, because comments never survive to the
+generated C. A real edit to one module recompiles exactly one
+object (`scripts/run_separate.sh` proves all of this on every run),
+and interpreter rebuilds dropped from about six seconds to about
+one.
+
+**The frontend deliberately stays whole-program.** Types, classes
+and instances are still resolved with every module in view — there
+are no interface files. That is not laziness but a trade: the
+Report requires instances to be coherent program-wide, and a
+whole-program frontend gets that by construction, with no
+orphan-instance rules, no interface-consistency checking, no
+recompilation-avoidance bugs — the classic sharp edges of the
+interface-file world — at a cost of ~0.3 seconds per build.
+
+---
+
+## 10. The FFI
+
+### foreign import ccall
+
+The prims boundary (chapter 9) is compiler-internal; the **FFI** (Report
 chapter 8) is the same idea opened to user programs:
 
     foreign import ccall unsafe "labs" c_labs :: Int -> Int
@@ -921,7 +985,7 @@ object. The Boehm collector is non-moving and conservative:
 `AhcNode` pointers handed to C stay put, and pointers C hands back
 need no pinning ceremony.
 
-### The FFI: foreign export ccall, and AHC as a library
+### foreign export ccall, and AHC as a library
 
 The other direction — C (or anything speaking the C ABI) calling
 compiled Haskell:
@@ -998,7 +1062,7 @@ evaluation when the error struck stays blackholed, so re-forcing
 *that value* reports `<<loop>>` — the runtime itself continues
 fine, as the examples demonstrate by erroring and then computing.
 
-### The FFI: bindgen and the spokes
+### bindgen and the spokes
 
 The C ABI is the hub; `ahc bindgen` generates the spokes:
 
@@ -1028,69 +1092,15 @@ mid-computation. C needs no generated wrapper at all; the emitted
 `scripts/run_bindgen.sh` builds and runs whichever examples have
 their toolchain installed.
 
-### The layered Prelude
+---
 
-Where do `map` and `sum` come from? Three layers, and knowing them
-explains most of `src/ahc-builtins.adb` and
-`src/ahc-prelude_core.adb`:
-
-1. **Builtins** — things that must exist before any Haskell is
-   compiled: the class hierarchy, primitive types, and *type
-   signatures* for wired-in values.
-2. **Prelude source** (`prelude/Prelude.hs`) — ordinary Haskell,
-   compiled first into the same program. Most Prelude functions
-   live here. Anything defined here automatically *overrides* a
-   hand-built version.
-3. **Prelude_Core** — hand-built Core for the things source can't
-   express: dictionary bodies wiring class methods to C primitives,
-   and the derived-instance generators.
-
-The project's arc consistently moved code *up* this list — from
-hand-built Core toward ordinary Haskell — because Haskell in
-`prelude/` or `lib/` is checked by the compiler itself, while
-hand-built Core is only checked by the arena contracts.
-
-### Separate compilation
-
-For most of the project's life the compiler emitted ONE C file for
-the entire program — prelude, libraries, and your code — and clang
-recompiled all of it on every build. Measurement showed why that
-mattered: the whole AHC pipeline (parse through optimized Core)
-takes about a third of a second for the full mini-Lisp interpreter,
-while clang on the 30,000-line monolith takes over five. Ninety-four
-percent of every rebuild was the C compiler redoing work it had
-already done.
-
-The fix is a split with a principle on each side. **Code generation
-is separate**: the program is emitted as one C file per module plus
-a shared header, and every emitted name is *stable* — a global's C
-symbol is mangled from its module and source name (never an arena
-id), and locals and lifted functions are numbered per module,
-counters reset at each unit boundary. Stability is the load-bearing
-property: it makes a module's generated text a pure function of its
-own code, so `ahc-build.sh` can cache each compiled object under a
-hash of its C text and skip clang entirely for anything unchanged.
-The cache is content-addressed, not timestamp-based — editing a
-comment recompiles *nothing*, because comments never survive to the
-generated C. A real edit to one module recompiles exactly one
-object (`scripts/run_separate.sh` proves all of this on every run),
-and interpreter rebuilds dropped from about six seconds to about
-one.
-
-**The frontend deliberately stays whole-program.** Types, classes
-and instances are still resolved with every module in view — there
-are no interface files. That is not laziness but a trade: the
-Report requires instances to be coherent program-wide, and a
-whole-program frontend gets that by construction, with no
-orphan-instance rules, no interface-consistency checking, no
-recompilation-avoidance bugs — the classic sharp edges of the
-interface-file world — at a cost of ~0.3 seconds per build.
+## 11. The runtime, part two
 
 ### Green threads: deterministic structured concurrency
 
 *This section explains how the machinery is built. For which of
 the three concurrency surfaces to reach for, and when, see chapter
-16 — and `examples/concurrency/` for a runnable program per model.*
+18 — and `examples/concurrency/` for a runnable program per model.*
 
 Concurrency arrived in v1.6 (M102) with a design brief that
 started away from AHC entirely: survey what Go, GHC, Rust, and Ada
@@ -1265,7 +1275,7 @@ you.
 
 ---
 
-## 10. Numbers
+## 12. Numbers
 
 ### Int and Integer: two promises
 
@@ -1332,7 +1342,7 @@ AHC reproduces this exactly: try printing at 1 significant digit,
 re-parse, compare bit-for-bit; if it doesn't round-trip, try 2, up
 to 17; then reformat the digits under GHC's fixed-vs-scientific
 rule. Byte-identical output was non-negotiable because the entire
-test methodology (chapter 14) depends on it.
+test methodology (chapter 16) depends on it.
 
 Two more Double decisions: `round` is round-half-to-EVEN (`round 2.5`
 is `2`, `round 3.5` is `4`) — the Report says so, and C's `rint`
@@ -1340,7 +1350,7 @@ under default rounding mode provides it; and — as of the numeric
 tower milestone — `Integral`, `Floating` and `RealFrac` are **real
 classes** with real dictionaries. `Integral` (superclasses Num and
 Ord) has instances at both `Int` and `Integer`, and here the
-canonical bignum representation (chapter 10 above) pays a dividend:
+canonical bignum representation (chapter 12 above) pays a dividend:
 both instances bind the *same* promoting runtime primitives, and
 `toInteger` is the identity function. `Floating` and `RealFrac`
 have their instances at `Double`, wrapping the same C math
@@ -1358,7 +1368,7 @@ agree. `atan2` (RealFloat territory) stays monomorphic.
 
 ---
 
-## 11. Show
+## 13. Show
 
 ### Why printing deserved its own milestone
 
@@ -1416,7 +1426,7 @@ honest path.
 
 ---
 
-## 12. Refinement types
+## 14. Refinement types
 
 ### The idea, from the original observation
 
@@ -1611,7 +1621,7 @@ reach taken on a real program instead of a fragment.
 
 ---
 
-## 13. The optimizer
+## 15. The optimizer
 
 ### The rule: never change what a program does
 
@@ -1671,7 +1681,7 @@ with it on.
 
 ---
 
-## 14. Testing
+## 16. Testing
 
 ### The philosophy: don't grade your own homework
 
@@ -1716,7 +1726,7 @@ and failed the truth.*
 | `scripts/run_differential.sh` / `_types.sh` | do AHC and GHC agree on what *parses* and what *typechecks*? |
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
-| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 17) behave identically compiled by AHC and by GHC? |
+| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 19) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
 | `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically; deep parallel campaigns via `run_fuzz_par.sh` — usage, triage, and the menu rule in `docs/fuzzer-guide.md`) |
@@ -1755,12 +1765,12 @@ consed head, recursion is structural). Divergences are saved to
 enough to diagnose by hand, and each confirmed bug is then pinned
 as a permanent conformance test. The very first campaign paid for
 the harness: its third seed exposed a new corner of the
-layout-vs-lookahead bug farm (chapter 17) that the entire
+layout-vs-lookahead bug farm (chapter 19) that the entire
 hand-written suite had never touched.
 
 ---
 
-## 15. The standard library
+## 17. The standard library
 
 ### The insight that made it cheap
 
@@ -1806,7 +1816,7 @@ integer-only prims, and `withFile`, `writeFile`, `appendFile`,
 observable behavior - toList order, Show format, union bias - is
 oracled against the real containers library, written because the
 interpreter's environments asked for it (and whose first compile
-found two more compiler bugs - chapter 17); and
+found two more compiler bugs - chapter 19); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
 methods come from the builtin-class default machinery (enabler E4),
 which builds Report default methods against the instance's own
@@ -1814,7 +1824,7 @@ dictionary knot whenever a user instance omits them; an Ord
 instance can even define only `<=`, with `compare` itself defaulting
 through the superclass Eq dictionary.
 
-`Control.Concurrent.Scoped` (chapter 9) is the newest member and
+`Control.Concurrent.Scoped` (chapter 11) is the newest member and
 the first library module that is *deliberately not* a GHC module:
 it replaces `Control.Concurrent`'s forkIO/MVar surface with
 scope/spawn/await on purpose, and its GHC twin lives in
@@ -1823,7 +1833,7 @@ concurrent program whose output is schedule-independent.
 
 ---
 
-## 16. Concurrency: choosing a model
+## 18. Concurrency: choosing a model
 
 Chapter 9 explains how the scheduler and the spark pool are
 *built*. This chapter is about which one to reach for, and when.
@@ -1837,7 +1847,7 @@ alternatives to one another — they answer different questions:
 | share mutable state between those tasks | **protected values** | `Control.Concurrent.Protected` |
 | make a *pure* computation finish sooner using more cores | **sparks** | `Control.Parallel` |
 
-### 16.1 The one thing that surprises everyone
+### 18.1 The one thing that surprises everyone
 
 **Tasks give you concurrency. Only sparks give you cores.**
 
@@ -1857,9 +1867,9 @@ If you came from Go, this is the sharpest difference. `go f()`
 buys you a core; `spawn s act` does not. The reason is Phase B's
 second stage (SMP scheduling) being deliberately unbuilt — the
 reproducible schedule is the headline feature, and a second
-scheduler thread is exactly what it costs. See 16.7.
+scheduler thread is exactly what it costs. See 18.7.
 
-### 16.2 Structured tasks — `Control.Concurrent.Scoped`
+### 18.2 Structured tasks — `Control.Concurrent.Scoped`
 
     scope   :: (Scope -> IO a) -> IO a     -- joins all children
     spawn   :: Scope -> IO a -> IO (Task a)
@@ -1893,7 +1903,7 @@ dies with nobody awaiting it fails the scope at the join point.
 There is no `forkIO`. A leaked task is not a bug you have to avoid
 — it is a program you cannot write.
 
-**Do not use it** to go faster. See 16.1.
+**Do not use it** to go faster. See 18.1.
 
 **Watch out for:** the scheduler is *cooperative*. Its only
 switch points are IO binds, blocking operations, and `yield`. A
@@ -1910,7 +1920,7 @@ outcome rather than a hang:
 
     ahc: deadlock: all green threads blocked
 
-### 16.3 Protected values — `Control.Concurrent.Protected`
+### 18.3 Protected values — `Control.Concurrent.Protected`
 
     newProtected :: s -> IO (Protected s)
     reading      :: Protected s -> (s -> a) -> IO a
@@ -1966,7 +1976,7 @@ invariant. This is the one thing neither Go, Rust, nor GHC offers:
 
     {-# POST push \x s r -> length (fst (fst r)) <= snd s #-}
 
-### 16.4 Sparks — `Control.Parallel`
+### 18.4 Sparks — `Control.Parallel`
 
     par  :: a -> b -> b    -- hint: a may be evaluated in parallel
     pseq :: a -> b -> b    -- evaluate a to WHNF, then return b
@@ -2027,7 +2037,7 @@ timing. That is exactly why `par` is safe — the counters record
 the answer. Never golden-test spark statistics; golden-test the
 result, which does not move.
 
-### 16.5 Choosing, by scenario
+### 18.5 Choosing, by scenario
 
 | Scenario | Reach for |
 |---|---|
@@ -2041,11 +2051,11 @@ result, which does not move.
 | Enforcing an invariant on shared state | `POST` on the transition |
 
 The two mistakes worth naming. **Reaching for `spawn` to go
-faster** — it will not, and 16.1 has the numbers. **Reaching for
+faster** — it will not, and 18.1 has the numbers. **Reaching for
 `par` on something impure** — it takes an `a`, so effects cannot
 be sparked; the type stops you.
 
-### 16.6 Runtime knobs
+### 18.6 Runtime knobs
 
 | Variable | Default | Does |
 |---|---|---|
@@ -2054,7 +2064,7 @@ be sparked; the type stops you.
 | `AHC_SPIN_LIMIT` | `120` | Seconds before an unbounded blackhole spin is reported instead of hanging. `0` disables. |
 | `AHC_GC` (build) | `boehm` | `own` enables the collector that lets sparks scale. Darwin-only. |
 
-### 16.7 What is not here
+### 18.7 What is not here
 
 Four deliberate absences, each argued in
 `docs/concurrency-design-note.md`:
@@ -2068,7 +2078,7 @@ Four deliberate absences, each argued in
   order; retry-based composition is the piece not attempted.
 - **Async exceptions.** No `throwTo`, no `timeout`. A task fails
   its own `Task`, and `await` re-raises at the join.
-- **Preemption.** Cooperative only (16.2).
+- **Preemption.** Cooperative only (18.2).
 
 One caveat worth stating plainly, because it is the one place
 adding workers *weakens* a guarantee. With `AHC_WORKERS > 0`, a
@@ -2084,7 +2094,7 @@ and loud, but a different message.
 
 ---
 
-## 17. War stories
+## 19. War stories
 
 Each of these cost real debugging time and produced a rule now
 followed everywhere in the codebase.
@@ -2114,7 +2124,7 @@ close blocks itself, and, at end-of-file, *relocate* an
 already-queued virtual brace. Rule: when two streaming algorithms
 are mutually recursive, buffering in one is a bug farm in the other.
 The rule proved itself again on the differential fuzzer's third
-seed (chapter 14): the same lookahead, drained through a one-line
+seed (chapter 16): the same lookahead, drained through a one-line
 `let` inside an *explicit-brace* case alternative, left the let's
 implicit context open and the case's real `}` unmatched. That fix
 was structural rather than compensating: the bind-vs-expression
@@ -2255,7 +2265,7 @@ crosses an ABI boundary, check `sizeof` under the exact include
 order that ships. (The second scar in the same milestone: an 8MB
 green-thread stack overflowed silently under deep lazy evaluation
 and scribbled the heap - hence the guard page and the 64MB virtual
-reservation of chapter 9.)
+reservation of chapter 11.)
 
 **The constructor that was correct for a hundred milestones.**
 `ahc_mk_con` allocated the node, then its fields array — the
@@ -2278,7 +2288,7 @@ you will need it again.
 
 ---
 
-## 18. Glossary
+## 20. Glossary
 
 **Arena** — tree storage as an array of nodes addressed by integer
 ids instead of pointers. *Chapter 2.*
@@ -2387,7 +2397,7 @@ in metavariables, or fails. *Chapter 5.*
 
 ---
 
-## 19. Source map
+## 21. Source map
 
 Where to look for anything, in pipeline order:
 
@@ -2417,8 +2427,8 @@ Where to look for anything, in pipeline order:
 | `src/ahc_main.adb` | the driver: module discovery, pipeline order, CLI |
 | `runtime/ahc_rts.{h,c}` | nodes, eval, GC hookup, all primitives, bignum |
 | `prelude/Prelude.hs` | the self-compiled Prelude |
-| `lib/**` | the standard library (chapter 15) |
-| `tests/`, `scripts/` | the eleven harnesses (chapter 14) |
+| `lib/**` | the standard library (chapter 17) |
+| `tests/`, `scripts/` | the harnesses (chapter 16) |
 | `docs/refinement-types-design-note.md` | the extension's original design + as-built record |
 | `docs/stdlib-plan.md` | the library plan + status |
 | `CHANGES.md` | the release history |
