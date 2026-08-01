@@ -263,7 +263,7 @@ explain most decisions, and they are visible in the artifacts:
    outputs are whatever GHC 9.4.8 prints, byte for byte
    (`scripts/run_conformance.sh`). MANUAL ch. 16 argues why this
    single decision outranks every other testing choice.
-2. **Twenty harnesses, layered.** Goldens catch *change*, the
+2. **Twenty-odd harnesses, layered.** Goldens catch *change*, the
    oracle catches *wrongness*, differentials catch front-end drift,
    the fuzzer catches the unknown unknowns. Read the table in
    ch. 16; then read ONE golden file next to its source.

@@ -801,7 +801,7 @@ considered LLVM; C won because it removes an entire dependency and
 toolchain, is debuggable with ordinary tools, and `clang -O1`
 cleans up the generated code enough. The generated file is
 self-contained: it includes the runtime header and is compiled
-together with `ahc_rts.c` (`scripts/ahc-build.sh` does the two-step).
+together with `ahc_rts.c` (`ahc build` does the whole trip).
 
 ### Closure conversion
 
@@ -876,7 +876,7 @@ symbol is mangled from its module and source name (never an arena
 id), and locals and lifted functions are numbered per module,
 counters reset at each unit boundary. Stability is the load-bearing
 property: it makes a module's generated text a pure function of its
-own code, so `ahc-build.sh` can cache each compiled object under a
+own code, so `ahc build` can cache each compiled object under a
 hash of its C text and skip clang entirely for anything unchanged.
 The cache is content-addressed, not timestamp-based — editing a
 comment recompiles *nothing*, because comments never survive to the
@@ -884,6 +884,24 @@ generated C. A real edit to one module recompiles exactly one
 object (`scripts/run_separate.sh` proves all of this on every run),
 and interpreter rebuilds dropped from about six seconds to about
 one.
+
+Since M124 the build IS the compiler: `ahc build FILE.hs` runs
+emit in-process, hashes and compiles the changed units - in
+parallel, one worker per CPU (`-j N` overrides), each compiler's
+output replayed in unit order so a parallel build's binary and its
+diagnostics are byte-identical to a serial build's - and links.
+`scripts/ahc-build.sh` survives as a shim over it, pinning the
+historical env spellings (AHC_UNCHECKED, AHC_NOOPT, AHC_GC,
+AHC_CFLAGS/AHC_LDFLAGS). And because the compiler resolves its own
+prelude, stdlib, and runtime relative to the executable (AHC.Paths:
+env override, then the current directory, then the installation),
+`ahc build` works from ANY directory - the first two years of the
+project could only build from the checkout root. The parallel pass
+is guarded by its own harness (`scripts/run_build.sh`): out-of-tree
+build, -j1-vs-j4 byte-identity, the shim's env translation, and a
+link failure surfacing the toolchain's message. Cold-building the
+interpreter takes 10.0s at -j1 and 3.7s at -j auto on twelve CPUs;
+a no-change rebuild is 0.8s.
 
 **The frontend deliberately stays whole-program.** Types, classes
 and instances are still resolved with every module in view — there
@@ -973,7 +991,7 @@ values only — this memory is not scanned by the collector, so node
 pointers must never be stored in it.
 
 Linking against more than libc: pass `AHC_CFLAGS`/`AHC_LDFLAGS` to
-`scripts/ahc-build.sh`, or put the flags in the source itself —
+`ahc build`, or put the flags in the source itself —
 
     {-# OPTIONS_AHC_LINK -lcurl #-}
 
@@ -1031,7 +1049,7 @@ not supported.
 
 `--lib` turns the whole program into an embeddable library:
 
-    scripts/ahc-build.sh --lib MathLib.hs mathlib.a
+    ahc build --lib MathLib.hs mathlib.a
 
 produces a static archive (runtime object included) and
 `mathlib.a.build/ahc_exports.h` — prototypes for every export,
@@ -1732,6 +1750,7 @@ and failed the truth.*
 | `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically; deep parallel campaigns via `run_fuzz_par.sh` — usage, triage, and the menu rule in `docs/fuzzer-guide.md`) |
 | `scripts/run_repl.sh` | does the REPL behave? (pinned `tests/repl/*.in` transcripts through `ahc repl` — prompts, results, error-and-recovery, `:load` semantics — in a fixed scratch dir so diagnostic paths stay deterministic) |
 | `scripts/run_discharge.sh` | did compile-time contract discharge do exactly what it may? (trivially-true claims absent from the generated C, argument-dependent claims present, provably-false claims warn and stay) |
+| `scripts/run_build.sh` | does `ahc build` honor its contract? (out-of-tree multi-module build via AHC.Paths, -j1-vs-j4 byte-identical binaries, the shim's env translation, a link failure surfacing the toolchain's message) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the

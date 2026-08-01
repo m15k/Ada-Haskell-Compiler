@@ -13,7 +13,7 @@ structured concurrency — and a complete bidirectional FFI with binding
 generators for C++, Rust, Go, and GHC.
 
 ```sh
-scripts/ahc-build.sh Foo.hs   # Haskell -> C -> native executable
+./bin/ahc build Foo.hs        # Haskell -> C -> native executable
 ./Foo
 ./bin/ahc repl                # interactive (docs/repl-design-note.md)
 ```
@@ -80,8 +80,8 @@ default build links the Boehm-Demers-Weiser GC (plain malloc
 fallback); `AHC_GC=own` selects AHC's own block-structured
 generational collector, which runs 16% faster than Boehm on the
 sequential bench via a growth-aware collection trigger. Generated
-executables link with a 512MB stack so million-element thunk chains
-evaluate instead of overflowing. The runtime covers the full language
+executables link with a 1GB (virtual, lazily committed) stack so
+million-element thunk chains evaluate instead of overflowing. The runtime covers the full language
 as shipped: all numeric types including arbitrary-precision Integer,
 user ADTs with the derive family, user classes and dictionaries, lazy
 infinite structures, `seq`/`($!)`, do-notation IO with stdin/stdout
@@ -92,7 +92,7 @@ contract claims never reach the runtime at all).
 **Separate compilation**: `ahc emit` writes one C file per module with
 STABLE symbols (globals mangled from module+name, locals and lifted
 functions numbered per unit), so a module's generated text depends
-only on its own code; `scripts/ahc-build.sh` compiles each unit to an
+only on its own code; `ahc build` compiles each unit to an
 object cached by content hash and links. An edit to one module
 recompiles exactly one object — proven by `scripts/run_separate.sh`
 (no-change and comment-only rebuilds compile ZERO objects; the cache
@@ -193,7 +193,7 @@ constructor-established invariant. Refined types are erased for
 unification (transparent arithmetic, no smart constructors); ranges
 and predicates are lazily-fired checks at signature and annotation
 boundaries, and `ahc emit --unchecked` (or `AHC_UNCHECKED=1
-scripts/ahc-build.sh`) compiles the checks out, mirroring Ada's
+scripts/ahc-build.sh`, the shim over `ahc build`) compiles the checks out, mirroring Ada's
 release-mode contract policy — modular wrapping is arithmetic
 semantics, not a check, so it is always applied.
 
@@ -248,7 +248,7 @@ foreign export ccall square :: Int -> Int             -- be called
 ```
 
 ```sh
-scripts/ahc-build.sh --lib MathLib.hs mathlib.a   # + ahc_exports.h
+./bin/ahc build --lib MathLib.hs mathlib.a        # + ahc_exports.h
 ./bin/ahc bindgen rust MathLib.hs mathlib.a       # + safe wrappers
 ```
 
@@ -390,6 +390,7 @@ scripts/run_repl.sh                # REPL session goldens
 scripts/run_discharge.sh           # compile-time contract discharge
 scripts/run_export.sh              # FFI exports (run_bindgen.sh: four hosts)
 scripts/run_sqlite.sh              # the sqlite3 binding
+scripts/run_build.sh               # ahc build: out-of-tree, -j determinism, failure surface
 scripts/run_bench.sh               # benchmark suite (run_parbench.sh: SMP gate)
 scripts/run_c1_gate.sh             # own-collector gates: allocator...
 scripts/run_c2_gate.sh             #   ...collection correctness/footprint...

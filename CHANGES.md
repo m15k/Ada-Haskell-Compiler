@@ -1,5 +1,44 @@
 # AHC Changelog
 
+## Unreleased
+
+**`ahc build` - the build lives in the compiler (M124).** The
+compiler is now the single front door: `ahc build FILE.hs` runs
+emit in-process, compiles the changed C units against the runtime,
+and links - `scripts/ahc-build.sh` survives as a shim over it, so
+every harness and env spelling (AHC_UNCHECKED, AHC_NOOPT, AHC_GC,
+AHC_CFLAGS/AHC_LDFLAGS) works unchanged. Four pieces:
+
+- **AHC.Paths**: the compiler resolves its own prelude, stdlib, and
+  runtime through one cascade - env override (AHC_PRELUDE, AHC_LIB,
+  AHC_RUNTIME), then the current directory, then the installation
+  the executable belongs to. `ahc build`/`check`/`emit` work from
+  ANY directory; previously everything was CWD-relative and only
+  worked from the checkout root.
+- **AHC.Build**: the script's hashing/compile/link half in Ada,
+  with the cache recipe replicated byte-for-byte (proof: a
+  script-warmed cache yields ZERO recompiles and a byte-identical
+  relink under `ahc build`).
+- **Parallel C compilation**: cache-missing units compile through a
+  worker pool (default one per CPU, `-j N` overrides); each
+  compiler's output replays in unit order, so a parallel build's
+  binary AND diagnostics are byte-identical to a serial build's.
+  Cold-building the mini-Lisp interpreter: 10.0s at -j1, 3.7s at
+  -j auto (twelve CPUs, best of three); no-change rebuild 0.8s.
+- **The REPL** spawns `ahc build` directly - no bash, no scripts/
+  dependency; a session works against a bare installed bin/ahc.
+
+New harness `scripts/run_build.sh`: out-of-tree multi-module build,
+-j1-vs-j4 byte-identity, the shim's env translation, and a link
+failure surfacing the toolchain's message. Its failure-surface test
+caught a real bug on first run: GNAT.OS_Lib's output-redirect Spawn
+dup2's the whole process's streams, so concurrent workers ate each
+other's output - worker redirection now happens in the child
+(`sh -c '... > log 2>&1'`), never in the compiler's own process.
+The new AHC.Build precondition also caught Run_Middle's
+root-file-open failure path not reporting failure. Suite: 74
+conformance, all harnesses, 219 unit tests green.
+
 ## v1.6.1 (2026-07-30)
 
 The collector patch (M113-M123). Nothing here changes the default
