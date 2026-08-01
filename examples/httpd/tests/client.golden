@@ -1,0 +1,19 @@
+15511210043330985984000000
+worker 1: 500500
+worker 2: 1500500
+worker 3: 2500500
+worker 4: 3500500
+worker 5: 4500500
+worker 6: 5500500
+worker 7: 6500500
+worker 8: 7500500
+total 32004000
+{"bolts": 40, "nuts": 120, "washers": 500}
+HTTP/1.0 404 Not Found
+Server: ahttpd
+Content-Type: text/plain
+Content-Length: 10
+Connection: close
+
+not found
+bye

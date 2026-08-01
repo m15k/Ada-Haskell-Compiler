@@ -1,0 +1,8 @@
+ahttpd listening
+GET / -> 200 OK
+GET /fact/25 -> 200 OK
+GET /par/8 -> 200 OK
+GET /json -> 200 OK
+GET /nope -> 404 Not Found
+GET /quit -> 200 (quit)
+ahttpd done

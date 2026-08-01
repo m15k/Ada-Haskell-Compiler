@@ -342,6 +342,14 @@ output, `--oracle` regenerates).
   says why, in full).
 - **`ffi/`** and **`sqlite/`** — the embedding examples (see [FFI and
   embedding](#ffi-and-embedding)).
+- **`httpd/`** — ahttpd, an HTTP server over the raw libc socket
+  FFI: nonblocking accept/read cooperating with the green
+  scheduler, a `/par/N` route whose scope/spawn/channel fan-out has
+  its worker ARRIVAL ORDER pinned in the golden (deterministic
+  scheduling as an observable), exact-bignum `/fact/N`, and a
+  listen port whose type is `Int in 1 .. 65535`. AHC-only like cal;
+  its README records the two runtime gaps it surfaced (blocking IO
+  vs the scheduler, no channel poll) — dogfood as roadmap.
 - **`concurrency/`** — the four concurrency models from the design
   note, each restated as a runnable AHC program (`go_csp`,
   `ghc_sparks`, `rust_aliasing`, `ada_protected`), plus `b2_smp`
@@ -390,6 +398,7 @@ scripts/run_repl.sh                # REPL session goldens
 scripts/run_discharge.sh           # compile-time contract discharge
 scripts/run_export.sh              # FFI exports (run_bindgen.sh: four hosts)
 scripts/run_sqlite.sh              # the sqlite3 binding
+scripts/run_httpd.sh               # ahttpd: live HTTP session goldens
 scripts/run_build.sh               # ahc build: out-of-tree, -j determinism, failure surface
 scripts/run_bench.sh               # benchmark suite (run_parbench.sh: SMP gate)
 scripts/run_c1_gate.sh             # own-collector gates: allocator...

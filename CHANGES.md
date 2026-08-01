@@ -39,6 +39,24 @@ The new AHC.Build precondition also caught Run_Middle's
 root-file-open failure path not reporting failure. Suite: 74
 conformance, all harnesses, 219 unit tests green.
 
+**ahttpd - the concurrent-server dogfood (M125).** examples/httpd
+is an HTTP server over the raw libc socket FFI in ~200 lines across
+two modules: sockaddr_in poked byte-by-byte through the marshal
+surface, nonblocking accept/read polling with yield so the green
+scheduler keeps running, a /par/N route answering via
+scope/spawn/channel fan-out whose worker ARRIVAL ORDER is asserted
+by the golden (five runs, five identical bodies), exact-bignum
+/fact/N, and a listen port typed `Int in 1 .. 65535` that dies at
+the refinement boundary before bind(). AHC-only like cal;
+scripts/run_httpd.sh pins a full client session (headers included -
+no Date header, so sessions are byte-exact), the server's request
+log, /quit shutting the process down unaided, and the port-range
+death. The example surfaced two runtime gaps in its first hour,
+recorded in its README as the next concurrency milestone's
+motivation: blocking IO stalls every green thread (wants
+kqueue/epoll-integrated parking), and channels cannot be polled
+(wants tryRecv or an Ada-style select).
+
 ## v1.6.1 (2026-07-30)
 
 The collector patch (M113-M123). Nothing here changes the default
