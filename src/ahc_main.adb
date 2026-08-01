@@ -15,7 +15,6 @@ with Ada.Text_IO;
 with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
-with Ada.Environment_Variables;
 
 with AHC.Bindgen;
 with AHC.Builtins;
@@ -28,6 +27,7 @@ with AHC.Elaborate;
 with AHC.Fixity;
 with AHC.Kinds;
 with AHC.Layout;
+with AHC.Paths;
 with AHC.Modules;
 with AHC.Optimizer;
 with AHC.Lexer;
@@ -257,9 +257,10 @@ procedure AHC_Main is
         Ada.Directories.Containing_Directory (Path);
 
       --  Resolve a module name to a file: beside the root file
-      --  first, then $AHC_LIB, then the compiler's lib/ tree (CWD-
-      --  relative, like prelude/). Returns the first existing
-      --  candidate, or the root-relative path for the error message.
+      --  first, then the stdlib cascade ($AHC_LIB, the CWD's lib/,
+      --  the installation's lib/ - AHC.Paths). Returns the first
+      --  existing candidate, or the root-relative path for the
+      --  error message.
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
@@ -275,21 +276,13 @@ procedure AHC_Main is
                return Local;
             end if;
             declare
-               Env_Lib : constant String :=
-                 (if Ada.Environment_Variables.Exists ("AHC_LIB")
-                  then Ada.Environment_Variables.Value ("AHC_LIB")
-                  else "");
+               Std : constant String :=
+                 AHC.Paths.Stdlib_File (P & ".hs");
             begin
-               if Env_Lib /= ""
-                 and then Ada.Directories.Exists
-                   (Env_Lib & "/" & P & ".hs")
-               then
-                  return Env_Lib & "/" & P & ".hs";
+               if Std /= "" then
+                  return Std;
                end if;
             end;
-            if Ada.Directories.Exists ("lib/" & P & ".hs") then
-               return "lib/" & P & ".hs";
-            end if;
             return Local;
          end;
       end Module_Path;
@@ -459,7 +452,7 @@ procedure AHC_Main is
          --  Compile prelude/Prelude.hs into the same module first, so
          --  its definitions are in scope for the user module.
          declare
-            P_Path : constant String := "prelude/Prelude.hs";
+            P_Path : constant String := AHC.Paths.Prelude_File;
             P_Text : AHC.Source_Text.Source;
             P_Stream : AHC.Tokens.Token_Vectors.Vector;
             P_Arena : AHC.Syntax.Module_Arena;
