@@ -247,15 +247,20 @@ package body AHC.Repl is
       return Spawn_Cap (Ahc, Args, Path_Of ("parse.out")) = 0;
    end Parses_As_Decl;
 
-   --  Build Main.hs to a binary; True on success.
+   --  Build Main.hs to a binary; True on success. `ahc build`
+   --  directly (M124) - no bash, no scripts/ dependency, so a
+   --  session works against a bare installed bin/ahc. A separate
+   --  process on purpose: each entry's compile keeps its arenas out
+   --  of the long-lived REPL image, and the object cache makes the
+   --  rebuild cheap anyway.
    function Build return Boolean is
       Args : Line_Vectors.Vector;
       Rc   : Integer;
    begin
+      Args.Append (+"build");
       Args.Append (+Path_Of ("Main.hs"));
       Args.Append (+Path_Of ("main"));
-      Rc := Spawn_Cap (S (Root) & "/scripts/ahc-build.sh", Args,
-                       Path_Of ("build.out"));
+      Rc := Spawn_Cap (Ahc, Args, Path_Of ("build.out"));
       if Rc /= 0 then
          Put_All (Path_Of ("build.out"));
       end if;
