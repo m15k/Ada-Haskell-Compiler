@@ -17,6 +17,7 @@ with Ada.Containers.Vectors;
 with Ada.Directories;
 
 with AHC.Bindgen;
+with AHC.Build;
 with AHC.Builtins;
 with AHC.CodeGen;
 with AHC.Contracts;
@@ -54,6 +55,8 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc parse FILE.hs");
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
+      Put_Line (Target, "       ahc build [--lib] FILE.hs [OUT]"
+                & " [--unchecked] [--no-opt] [-o OUT] [-v]");
       Put_Line (Target, "       ahc emit FILE.hs OUT"
                 & " [--unchecked|--no-opt|--lib]"
                         & "   (writes OUT.c)");
@@ -62,11 +65,18 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc repl");
    end Print_Usage;
 
+   --  Set by every failure path that precedes or aborts emit
+   --  (Usage_Error included - a root file that fails to open goes
+   --  through it), so the build command can tell whether emit
+   --  succeeded: Ada.Command_Line's exit status is write-only.
+   Middle_Failed : Boolean := False;
+
    procedure Usage_Error (Message : String) is
    begin
       Put_Line (Standard_Error, "ahc: " & Message);
       Print_Usage (Standard_Error);
       Set_Exit_Status (2);
+      Middle_Failed := True;
    end Usage_Error;
 
    --  Dump one token per line as "line:col[*] image"; '*' marks the
@@ -128,7 +138,8 @@ procedure AHC_Main is
      (Path     : String; Mode : Character; Out_Path : String := "";
       Refined  : Boolean := True; Optimize : Boolean := True;
       Lib      : Boolean := False;
-      Bindgen_Lang : String := "") is
+      Bindgen_Lang : String := "";
+      Quiet    : Boolean := False) is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -441,6 +452,7 @@ procedure AHC_Main is
             Order.Append (Root);
          end if;
          if Failed then
+            Middle_Failed := True;
             Set_Exit_Status (1);
             return;
          end if;
@@ -490,6 +502,7 @@ procedure AHC_Main is
                             "ahc: internal: the Prelude failed to"
                             & " compile");
                   Bag.Print_All (P_Text);
+                  Middle_Failed := True;
                   Set_Exit_Status (1);
                   return;
                end if;
@@ -582,6 +595,7 @@ procedure AHC_Main is
                      Tag => L_Tag));
                if Bag.Has_Errors then
                   Bag.Print_All (L.Text);
+                  Middle_Failed := True;
                   Set_Exit_Status (1);
                   return;
                end if;
@@ -987,7 +1001,9 @@ procedure AHC_Main is
                            & AHC.Bindgen.File_Name (Bindgen_Lang));
                      end if;
                   end;
-                  Put_Line ("wrote " & Build_Dir);
+                  if not Quiet then
+                     Put_Line ("wrote " & Build_Dir);
+                  end if;
                end;
             end if;
          else
@@ -1011,6 +1027,7 @@ procedure AHC_Main is
 
       Print_Diags;
       if Bag.Has_Errors then
+         Middle_Failed := True;
          Set_Exit_Status (1);
       end if;
    end Run_Middle;
@@ -1097,6 +1114,86 @@ begin
             Usage_Error
               ("expected: ahc bindgen cpp|rust|go|ghc FILE.hs OUT");
          end if;
+      elsif Command = "build" then
+         --  emit + compile + link, the script's job done natively:
+         --  works from any directory (AHC.Paths) and prints only
+         --  "built OUT" on success.
+         declare
+            use Ada.Strings.Unbounded;
+            Src, Dest  : Unbounded_String;
+            Refined    : Boolean := True;
+            Optimize   : Boolean := True;
+            Lib        : Boolean := False;
+            Verbose    : Boolean := False;
+            Bad        : Boolean := False;
+            Expect_Out : Boolean := False;
+            Positional : Natural := 0;
+         begin
+            for I in 2 .. Argument_Count loop
+               declare
+                  A : constant String := Argument (I);
+               begin
+                  if Expect_Out then
+                     Dest := To_Unbounded_String (A);
+                     Expect_Out := False;
+                  elsif A = "--lib" then
+                     Lib := True;
+                  elsif A = "--unchecked" then
+                     Refined := False;
+                  elsif A = "--no-opt" then
+                     Optimize := False;
+                  elsif A = "-o" then
+                     Expect_Out := True;
+                  elsif A = "-v" then
+                     Verbose := True;
+                  elsif A'Length > 0 and then A (A'First) = '-' then
+                     Bad := True;
+                  else
+                     Positional := Positional + 1;
+                     case Positional is
+                        when 1      => Src := To_Unbounded_String (A);
+                        when 2      => Dest := To_Unbounded_String (A);
+                        when others => Bad := True;
+                     end case;
+                  end if;
+               end;
+            end loop;
+            if Bad or else Expect_Out or else Src = "" then
+               Usage_Error
+                 ("expected: ahc build [--lib] FILE.hs [OUT]"
+                  & " [--unchecked] [--no-opt] [-o OUT] [-v]");
+            else
+               if Dest = "" then
+                  declare
+                     S : constant String := To_String (Src);
+                  begin
+                     if S'Length > 3
+                       and then S (S'Last - 2 .. S'Last) = ".hs"
+                     then
+                        Dest := To_Unbounded_String
+                          (S (S'First .. S'Last - 3));
+                     else
+                        Usage_Error
+                          ("cannot infer output name from '" & S
+                           & "'; pass OUT or -o OUT");
+                        return;
+                     end if;
+                  end;
+               end if;
+               Run_Middle (To_String (Src), 'b', To_String (Dest),
+                           Refined  => Refined,
+                           Optimize => Optimize,
+                           Lib      => Lib,
+                           Quiet    => True);
+               if not Middle_Failed
+                 and then not AHC.Build.Compile_And_Link
+                   (To_String (Dest),
+                    (Lib => Lib, Verbose => Verbose))
+               then
+                  Set_Exit_Status (1);
+               end if;
+            end if;
+         end;
       elsif Command = "emit" then
          if Argument_Count >= 3 then
             declare
