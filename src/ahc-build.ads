@@ -24,6 +24,7 @@ package AHC.Build is
    type Options is record
       Lib     : Boolean := False;  --  archive + header, no link
       Verbose : Boolean := False;  --  print each compiler command
+      Jobs    : Natural := 0;      --  parallel C compiles; 0 = CPUs
    end record;
 
    function Compile_And_Link
@@ -32,6 +33,9 @@ package AHC.Build is
                  and then Ada.Directories.Exists (Out_Path & ".build");
    --  Assumes `ahc emit` already populated OUT.build/. True on
    --  success; a C-compiler failure surfaces clang's own message on
-   --  stderr and returns False.
+   --  stderr and returns False. Cache-missing units compile in
+   --  parallel (Jobs workers), with each compiler's output replayed
+   --  in unit order afterwards - a parallel build's binary AND its
+   --  diagnostics are byte-identical to a serial build's.
 
 end AHC.Build;

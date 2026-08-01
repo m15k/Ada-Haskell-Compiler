@@ -1,4 +1,5 @@
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Containers.Vectors;
 with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -7,6 +8,8 @@ with Ada.Text_IO;
 
 with GNAT.OS_Lib;
 with GNAT.SHA256;
+
+with System.Multiprocessors;
 
 with AHC.Paths;
 
@@ -18,6 +21,15 @@ package body AHC.Build is
    package String_Vectors is new Ada.Containers.Indefinite_Vectors
      (Positive, String);
    package Sorting is new String_Vectors.Generic_Sorting;
+
+   --  One C file to compile: everything decided (paths, flags) at
+   --  collection time, so compiling is a pure spawn - that is what
+   --  makes the parallel pass trivially safe.
+   type Job is record
+      Src, Obj : Unbounded_String;
+      In_Build : Boolean;  --  unit include path (-I OUT.build)
+   end record;
+   package Job_Vectors is new Ada.Containers.Vectors (Positive, Job);
 
    function Env (Name : String) return String is
      (if Ada.Environment_Variables.Exists (Name)
@@ -76,6 +88,38 @@ package body AHC.Build is
       end if;
    end Append_Words;
 
+   function To_Arg_List
+     (Args : String_Vectors.Vector) return Argument_List_Access
+   is
+      A : constant Argument_List_Access :=
+        new Argument_List (1 .. Natural (Args.Length));
+   begin
+      for I in A'Range loop
+         A (I) := new String'(Args (I));
+      end loop;
+      return A;
+   end To_Arg_List;
+
+   procedure Free_Args (A : in out Argument_List_Access) is
+   begin
+      for I in A'Range loop
+         Free (A (I));
+      end loop;
+      Free (A);
+   end Free_Args;
+
+   procedure Put_Command
+     (Prog : String; Args : String_Vectors.Vector)
+   is
+      Line : Unbounded_String := To_Unbounded_String (Prog);
+   begin
+      for W of Args loop
+         Append (Line, " " & W);
+      end loop;
+      Ada.Text_IO.Put_Line
+        (Ada.Text_IO.Standard_Error, To_String (Line));
+   end Put_Command;
+
    --  Spawn Prog with Args, stdio inherited (a failing clang prints
    --  its own message). True when the exit code is zero.
    function Run
@@ -91,27 +135,14 @@ package body AHC.Build is
             "ahc: cannot find '" & Prog & "' on PATH");
          return False;
       end if;
+      if Verbose then
+         Put_Command (Prog, Args);
+      end if;
       declare
-         A : Argument_List (1 .. Natural (Args.Length));
+         A : Argument_List_Access := To_Arg_List (Args);
       begin
-         for I in A'Range loop
-            A (I) := new String'(Args (I));
-         end loop;
-         if Verbose then
-            declare
-               Line : Unbounded_String := To_Unbounded_String (Prog);
-            begin
-               for W of Args loop
-                  Append (Line, " " & W);
-               end loop;
-               Ada.Text_IO.Put_Line
-                 (Ada.Text_IO.Standard_Error, To_String (Line));
-            end;
-         end if;
-         Ok := Spawn (Exe.all, A) = 0;
-         for I in A'Range loop
-            Free (A (I));
-         end loop;
+         Ok := Spawn (Exe.all, A.all) = 0;
+         Free_Args (A);
       end;
       Free (Exe);
       return Ok;
@@ -203,31 +234,161 @@ package body AHC.Build is
         To_Unbounded_String (Env ("AHC_LDFLAGS"));
 
       Objects : String_Vectors.Vector;
+      Pending : Job_Vectors.Vector;
 
-      --  Compile Src to Obj unless the cache already holds it.
-      function Ensure_Object
-        (Src, Obj : String; Unit_Include : Boolean) return Boolean
-      is
+      function Compile_Args (J : Job) return String_Vectors.Vector is
          Args : String_Vectors.Vector;
       begin
-         if Ada.Directories.Exists (Obj) then
-            return True;
-         end if;
          Args.Append ("-O1");
          Args.Append ("-c");
          Args.Append ("-o");
-         Args.Append (Obj);
+         Args.Append (To_String (J.Obj));
          Args.Append ("-I");
          Args.Append (Runtime);
-         if Unit_Include then
+         if J.In_Build then
             Args.Append ("-I");
             Args.Append (Build_Dir);
          end if;
          Append_Words (Args, To_String (GC_Cflags));
          Append_Words (Args, User_Cflags);
-         Args.Append (Src);
-         return Run ("clang", Args, Opts.Verbose);
-      end Ensure_Object;
+         Args.Append (To_String (J.Src));
+         return Args;
+      end Compile_Args;
+
+      --  Compile every pending job with Workers tasks pulling from
+      --  a shared counter. Each clang's output lands in its own
+      --  temp file and is replayed in JOB order afterwards, so a
+      --  parallel build's diagnostics read exactly like a serial
+      --  one's - determinism is a property of the build tool too.
+      function Compile_Parallel (Workers : Positive) return Boolean
+      is
+         Count     : constant Natural := Natural (Pending.Length);
+         Ok_Flags  : array (1 .. Count) of Boolean :=
+           [others => False];
+         Out_Files : array (1 .. Count) of Unbounded_String;
+         Clang     : GNAT.OS_Lib.String_Access :=
+           Locate_Exec_On_Path ("clang");
+         All_Ok    : Boolean := True;
+
+         protected Queue is
+            procedure Next (J : out Natural);
+         private
+            Cursor : Natural := 0;
+         end Queue;
+
+         protected body Queue is
+            procedure Next (J : out Natural) is
+            begin
+               if Cursor < Count then
+                  Cursor := Cursor + 1;
+                  J := Cursor;
+               else
+                  J := 0;
+               end if;
+            end Next;
+         end Queue;
+
+         task type Worker;
+
+         task body Worker is
+            J : Natural;
+         begin
+            loop
+               Queue.Next (J);
+               exit when J = 0;
+               declare
+                  FD   : File_Descriptor;
+                  Name : GNAT.OS_Lib.String_Access;
+                  Args : Argument_List_Access :=
+                    To_Arg_List (Compile_Args (Pending (J)));
+                  Rc   : Integer := 1;
+               begin
+                  Create_Temp_File (FD, Name);
+                  if FD /= Invalid_FD then
+                     Out_Files (J) := To_Unbounded_String (Name.all);
+                     Spawn (Clang.all, Args.all, FD, Rc,
+                            Err_To_Out => True);
+                     Close (FD);
+                  end if;
+                  Free (Name);
+                  Free_Args (Args);
+                  Ok_Flags (J) := Rc = 0;
+               exception
+                  when others =>
+                     Ok_Flags (J) := False;
+               end;
+            end loop;
+         end Worker;
+
+      begin
+         if Clang = null then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "ahc: cannot find 'clang' on PATH");
+            return False;
+         end if;
+         if Opts.Verbose then
+            for J of Pending loop
+               Put_Command ("clang", Compile_Args (J));
+            end loop;
+         end if;
+         declare
+            Pool : array (1 .. Workers) of Worker;
+            pragma Unreferenced (Pool);
+         begin
+            null;  --  the declare block joins the pool
+         end;
+         Free (Clang);
+         for J in 1 .. Count loop
+            if Out_Files (J) /= "" then
+               declare
+                  Text    : constant String :=
+                    Slurp (To_String (Out_Files (J)));
+                  Success : Boolean;
+               begin
+                  Delete_File (To_String (Out_Files (J)), Success);
+                  if Text /= "" then
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        Trim_Trailing (Text));
+                  end if;
+               end;
+            end if;
+            All_Ok := All_Ok and Ok_Flags (J);
+         end loop;
+         return All_Ok;
+      end Compile_Parallel;
+
+      function Compile_Pending return Boolean is
+         Auto : constant Positive :=
+           Positive (System.Multiprocessors.Number_Of_CPUs);
+         Want : constant Positive :=
+           (if Opts.Jobs = 0 then Auto else Opts.Jobs);
+         W    : constant Natural :=
+           Natural'Min (Want, Natural (Pending.Length));
+      begin
+         if W <= 1 then
+            for J of Pending loop
+               if not Run ("clang", Compile_Args (J), Opts.Verbose)
+               then
+                  return False;
+               end if;
+            end loop;
+            return True;
+         end if;
+         return Compile_Parallel (W);
+      end Compile_Pending;
+
+      procedure Stage (Src, Obj : String; In_Build : Boolean) is
+      begin
+         if not Ada.Directories.Exists (Obj) then
+            Pending.Append
+              (Job'(Src      => To_Unbounded_String (Src),
+                    Obj      => To_Unbounded_String (Obj),
+                    In_Build => In_Build));
+         end if;
+         Objects.Append (Obj);
+      end Stage;
 
    begin
       if not Ada.Directories.Exists (Rts_C) then
@@ -291,17 +452,10 @@ package body AHC.Build is
          --  The runtime, cached like any unit.
          Rts_Inputs.Append (Rts_C);
          Rts_Inputs.Append (Rts_H);
-         declare
-            Obj : constant String :=
-              Cache & "/rts_" & Hash_Of (Rts_Inputs, Flags_Key)
-              & ".o";
-         begin
-            if not Ensure_Object (Rts_C, Obj, Unit_Include => False)
-            then
-               return False;
-            end if;
-            Objects.Append (Obj);
-         end;
+         Stage (Rts_C,
+                Cache & "/rts_" & Hash_Of (Rts_Inputs, Flags_Key)
+                & ".o",
+                In_Build => False);
 
          --  Program units, in the shell glob's sorted order (link
          --  order is part of byte-identical binaries).
@@ -329,23 +483,18 @@ package body AHC.Build is
                   Inputs.Append (Build_Dir & "/" & U);
                   Inputs.Append (Prog_H);
                   Inputs.Append (Rts_H);
-                  declare
-                     Obj : constant String :=
-                       Cache & "/" & Base & "_"
-                       & Hash_Of (Inputs, Flags_Key) & ".o";
-                  begin
-                     if not Ensure_Object
-                       (Build_Dir & "/" & U, Obj,
-                        Unit_Include => True)
-                     then
-                        return False;
-                     end if;
-                     Objects.Append (Obj);
-                  end;
+                  Stage (Build_Dir & "/" & U,
+                         Cache & "/" & Base & "_"
+                         & Hash_Of (Inputs, Flags_Key) & ".o",
+                         In_Build => True);
                end;
             end loop;
          end;
       end;
+
+      if not Compile_Pending then
+         return False;
+      end if;
 
       if Opts.Lib then
          --  A static archive (runtime object included) plus the

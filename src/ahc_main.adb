@@ -56,7 +56,7 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
       Put_Line (Target, "       ahc build [--lib] FILE.hs [OUT]"
-                & " [--unchecked] [--no-opt] [-o OUT] [-v]");
+                & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]");
       Put_Line (Target, "       ahc emit FILE.hs OUT"
                 & " [--unchecked|--no-opt|--lib]"
                         & "   (writes OUT.c)");
@@ -1125,9 +1125,15 @@ begin
             Optimize   : Boolean := True;
             Lib        : Boolean := False;
             Verbose    : Boolean := False;
-            Bad        : Boolean := False;
-            Expect_Out : Boolean := False;
-            Positional : Natural := 0;
+            Bad         : Boolean := False;
+            Expect_Out  : Boolean := False;
+            Expect_Jobs : Boolean := False;
+            Jobs        : Natural := 0;
+            Positional  : Natural := 0;
+
+            function All_Digits (S : String) return Boolean is
+              (S'Length > 0
+               and then (for all C of S => C in '0' .. '9'));
          begin
             for I in 2 .. Argument_Count loop
                declare
@@ -1136,6 +1142,20 @@ begin
                   if Expect_Out then
                      Dest := To_Unbounded_String (A);
                      Expect_Out := False;
+                  elsif Expect_Jobs then
+                     if All_Digits (A) then
+                        Jobs := Natural'Value (A);
+                     else
+                        Bad := True;
+                     end if;
+                     Expect_Jobs := False;
+                  elsif A = "-j" then
+                     Expect_Jobs := True;
+                  elsif A'Length > 2
+                    and then A (A'First .. A'First + 1) = "-j"
+                    and then All_Digits (A (A'First + 2 .. A'Last))
+                  then
+                     Jobs := Natural'Value (A (A'First + 2 .. A'Last));
                   elsif A = "--lib" then
                      Lib := True;
                   elsif A = "--unchecked" then
@@ -1158,10 +1178,12 @@ begin
                   end if;
                end;
             end loop;
-            if Bad or else Expect_Out or else Src = "" then
+            if Bad or else Expect_Out or else Expect_Jobs
+              or else Src = ""
+            then
                Usage_Error
                  ("expected: ahc build [--lib] FILE.hs [OUT]"
-                  & " [--unchecked] [--no-opt] [-o OUT] [-v]");
+                  & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]");
             else
                if Dest = "" then
                   declare
@@ -1188,7 +1210,7 @@ begin
                if not Middle_Failed
                  and then not AHC.Build.Compile_And_Link
                    (To_String (Dest),
-                    (Lib => Lib, Verbose => Verbose))
+                    (Lib => Lib, Verbose => Verbose, Jobs => Jobs))
                then
                   Set_Exit_Status (1);
                end if;
