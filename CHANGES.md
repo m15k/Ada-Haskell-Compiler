@@ -1,6 +1,12 @@
 # AHC Changelog
 
-## Unreleased
+## v1.7 (2026-08-01)
+
+The builder release (M124-M125): the build moves into the compiler
+and works from any directory, and the first program AHC serves to a
+web browser finds the runtime's next milestone. Nothing here changes
+any existing program's output - every golden in the suite is
+byte-identical to v1.6.1.
 
 **`ahc build` - the build lives in the compiler (M124).** The
 compiler is now the single front door: `ahc build FILE.hs` runs

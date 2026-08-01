@@ -435,6 +435,13 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   binding, the five-host examples/ffi; deterministic structured
   concurrency (Scoped, Protected, SMP sparks); AHC's own generational
   collector (`AHC_GC=own`).
+- **v1.7** — the builder release (M124–M125): `ahc build` replaces
+  the build script (native, parallel `-j`, byte-identical to a
+  serial build, works from any directory via installation-relative
+  path resolution; the script survives as a shim), and the ahttpd
+  dogfood — an HTTP server over the socket FFI whose goldens pin a
+  deterministic concurrent schedule, and whose README records the
+  two runtime gaps it surfaced.
 - **v1.6.1** — the collector patch (M113–M123): `AHC_GC=own` lost
   live data on deep lazy chains and no longer does — a pre-existing
   defect never reachable from the default build, fixed at fourteen
