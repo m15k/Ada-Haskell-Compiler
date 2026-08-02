@@ -32,10 +32,14 @@ shutdown; the harness never needs `kill`).
   boundary, before `bind` ever runs. `Http.response`'s status code
   is a `Status = Int in 100 .. 599`, and its POST relates the
   rendered response to its body.
-- **Nonblocking IO cooperating with the green scheduler**: the
-  listen socket is `O_NONBLOCK`; `accept` and `read` poll with
-  `yield`, so waiting for a client never blocks the OS thread and
-  spawned green threads keep making progress.
+- **Scheduler-integrated IO** (M127): the accept loop *parks* on
+  the listen fd — `waitReadOr lfd quitCh`, Ada's
+  accept-or-terminate — and each connection's handler parks on its
+  own fd (`waitRead`) while the client dawdles. An idle server
+  costs ~zero CPU (the harness asserts it), and connections
+  overlap: the harness opens a silent connection, serves another
+  client meanwhile, then completes the first — with the request
+  log still a byte-exact golden.
 - **Byte-exact sessions**: responses carry no Date header, so an
   entire client session — headers included — is one golden file.
 
@@ -46,27 +50,25 @@ AHC's own output. The socket constants are Darwin's
 (`SOL_SOCKET`/`SO_REUSEADDR`/`O_NONBLOCK` and the `sin_len` byte
 differ on Linux; the source notes the values).
 
-## What it honestly cannot do yet — the findings
+## The findings — surfaced, then closed
 
-Dogfood programs exist to find the next milestone, and this one
-found two runtime gaps:
+Dogfood programs exist to find the next milestone. The first
+version of this server (M125) surfaced two runtime gaps in its
+first hour:
 
-1. **Blocking IO blocks every green thread.** The scheduler's only
-   scheduling points are IO binds, blocking *channel* operations,
-   and `yield` — a blocking `accept(2)` would stall the whole
-   program, which is why ahttpd runs its sockets nonblocking and
-   polls with `yield`. That works, but an idle server busy-polls
-   the CPU. The honest fix is scheduler-integrated IO: park a green
-   thread on a file descriptor and let `kqueue`/`epoll` wake it —
-   the same move every green-thread runtime (Go's netpoller, GHC's
-   IO manager) eventually made.
-2. **There is no way to poll a channel.** `recv` blocks and nothing
-   else exists, so a loop cannot watch a socket *and* a quit signal
-   at once — ahttpd handles requests sequentially and `/quit` is a
-   route, not a signal. A `tryRecv` (or a `select` over channels —
-   Ada's own `select` is the obvious model) would let the accept
-   loop fan out handlers concurrently while staying quittable.
+1. **Blocking IO blocked every green thread** — so M125 ran its
+   sockets nonblocking and busy-polled with `yield`, burning a CPU
+   while idle.
+2. **Channels could not be polled** — no way to watch a socket
+   *and* a quit signal, so M125 handled requests sequentially and
+   `/quit` was a route hack.
 
-Neither gap needed guessing at design time; the program surfaced
-both in its first hour. That is the dogfood tradition working as
-intended.
+Both closed in M127 (`docs/io-design-note.md`): the scheduler now
+parks tasks on file descriptors and blocks in `poll(2)` when the
+run queue drains, waking ready waiters in registration order; and
+`tryRecv`/`selectRecv`/`waitReadOr` give channels a select — with
+the choice rule pinned, the select Ravenscar could not keep. M128
+rewrote this server on those prims: the harness pins the idle-CPU
+claim, the concurrent-handler overlap, and the same byte-exact
+session goldens as before. Finding to fix to proof, three
+milestones — the dogfood tradition working as intended.

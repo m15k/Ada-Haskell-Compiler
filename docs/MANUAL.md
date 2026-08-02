@@ -1177,6 +1177,18 @@ blackholing gained an owner field: a task forcing another task's
 blackhole parks on it and wakes on update, while forcing your own
 still dies `<<loop>>`.
 
+Scheduler-integrated IO (M127) extended the same machinery: a
+task can park on a file descriptor (a registration-ordered wait
+list; the scheduler's empty-queue branch blocks in `poll(2)` and
+wakes ready waiters in that order instead of dying), and a
+*selector* — `selectRecv`, `waitReadOr` — waits on several sources
+at once through per-channel cells, since a task owns exactly one
+run-queue link. Send prefers plain receivers over selectors, both
+FIFO; every wake path fires at most once; a woken dual-waiter
+unlinks itself from the other source's list before proceeding.
+The empty-queue-and-nobody-parked case is still the honest
+deadlock report.
+
 Testing kept both halves of the discipline: schedule-independent
 programs are differential-tested against GHC through
 `tests/shim/Control/Concurrent/Scoped.hs` (forkIO/MVar/Chan
@@ -1886,7 +1898,7 @@ If you came from Go, this is the sharpest difference. `go f()`
 buys you a core; `spawn s act` does not. The reason is Phase B's
 second stage (SMP scheduling) being deliberately unbuilt — the
 reproducible schedule is the headline feature, and a second
-scheduler thread is exactly what it costs. See 18.7.
+scheduler thread is exactly what it costs. See 18.8.
 
 ### 18.2 Structured tasks — `Control.Concurrent.Scoped`
 
@@ -2056,7 +2068,41 @@ timing. That is exactly why `par` is safe — the counters record
 the answer. Never golden-test spark statistics; golden-test the
 result, which does not move.
 
-### 18.5 Choosing, by scenario
+### 18.5 Waiting on the world — fds and select (M127)
+
+`docs/io-design-note.md` is the full argument; the surface is five
+functions on `Control.Concurrent.Scoped`:
+
+    waitRead   :: Int -> IO ()             -- park until fd readable
+    waitWrite  :: Int -> IO ()             -- park until fd writable
+    tryRecv    :: Chan a -> IO (Maybe a)   -- never parks
+    selectRecv :: [Chan a] -> IO (Int, a)  -- first non-empty, ties
+                                           --   by list order
+    waitReadOr :: Int -> Chan a -> IO (Maybe a)
+                                           -- fd or message; a
+                                           --   message wins
+
+When the run queue drains and tasks are parked on file
+descriptors, the scheduler blocks in `poll(2)` — an idle program
+costs nothing — and wakes the ready waiters in REGISTRATION
+ORDER. Select ties resolve in list order, and a channel's plain
+receivers outrank its selectors. Every choice rule is pinned, so
+an interleaving through IO is still a golden: this is the select
+Ravenscar banned for nondeterminism, kept by making it
+deterministic. The fds are yours (opened by your FFI calls,
+usually `O_NONBLOCK`); the runtime never opens, closes, or owns
+one. `waitReadOr` is the accept-loop shape — wait for a client or
+a quit message — and `examples/httpd` is the worked example: a
+parked accept loop, a handler task per connection, and an idle
+server at zero CPU, all pinned by `scripts/run_httpd.sh`.
+
+The cooperative contract is unchanged: readiness is *checked* when
+the run queue drains, so a busy peer delays the poll exactly as it
+delays everything else. Wall-clock timeouts (`or delay`) are
+deliberately absent — nondeterministic by nature, deferred until
+they can be tested honestly.
+
+### 18.6 Choosing, by scenario
 
 | Scenario | Reach for |
 |---|---|
@@ -2074,7 +2120,7 @@ faster** — it will not, and 18.1 has the numbers. **Reaching for
 `par` on something impure** — it takes an `a`, so effects cannot
 be sparked; the type stops you.
 
-### 18.6 Runtime knobs
+### 18.7 Runtime knobs
 
 | Variable | Default | Does |
 |---|---|---|
@@ -2083,7 +2129,7 @@ be sparked; the type stops you.
 | `AHC_SPIN_LIMIT` | `120` | Seconds before an unbounded blackhole spin is reported instead of hanging. `0` disables. |
 | `AHC_GC` (build) | `boehm` | `own` enables the collector that lets sparks scale. Darwin-only. |
 
-### 18.7 What is not here
+### 18.8 What is not here
 
 Four deliberate absences, each argued in
 `docs/concurrency-design-note.md`:

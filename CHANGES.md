@@ -1,5 +1,32 @@
 # AHC Changelog
 
+## Unreleased
+
+**Scheduler-integrated IO (M126-M128,
+docs/io-design-note.md).** The two runtime gaps ahttpd surfaced,
+closed the house way: design note first (how Go's netpoller, GHC's
+IO manager, Rust's executors, and Ada's selective wait each solved
+this - and that Ravenscar banned select for the nondeterminism
+everyone else accepted), then the runtime, then the dogfood as
+acceptance test. A task parked on a file descriptor now sleeps in
+the scheduler: when the run queue drains, `poll(2)` blocks - an
+idle program costs zero CPU - and ready waiters wake in
+REGISTRATION ORDER. Channels gained `tryRecv`, `selectRecv` (first
+non-empty in list order - the pinned tie-break), and `waitReadOr`
+(fd-or-message, a message wins): the select Ravenscar could not
+keep, kept by making every choice rule deterministic. Four exec
+goldens pin the semantics, each byte-identical across five runs.
+ahttpd rewritten on the new prims: a parked accept loop
+(waitReadOr on the listen fd and the quit channel), a handler task
+per connection, /quit as a channel signal - and its harness now
+asserts the idle server at ~zero CPU and a parked connection
+overlapping a served one, with the same byte-exact session
+goldens. En route, the milestone's id shifts exposed a discharge
+evaluator bug latent since M81 (a rec-let store aliasing the env
+vector against its own evaluation - the validation build's
+tampering check caught it), fixed by sequencing the evaluation
+before the store.
+
 ## v1.7 (2026-08-01)
 
 The builder release (M124-M125): the build moves into the compiler

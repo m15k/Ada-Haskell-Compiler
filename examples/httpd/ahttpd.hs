@@ -5,8 +5,11 @@
 --
 --   socket/bind/listen/accept/read/write/close : foreign imports
 --   sockaddr_in built byte-by-byte with the marshal surface
---   nonblocking accept + read, polled with yield (the green
---     scheduler keeps running; nobody blocks the OS thread)
+--   the accept loop PARKS on the listen fd (waitReadOr, M127) -
+--     no busy-poll, an idle server costs zero CPU - and watches
+--     the quit channel at the same time: Ada's accept-or-terminate
+--   a handler task per connection: slow clients overlap, and the
+--     schedule is still deterministic
 --   /par/N answers via scope/spawn/channel fan-out whose message
 --     ARRIVAL ORDER is part of the golden - the deterministic
 --     scheduler makes an interleaving a testable output
@@ -59,12 +62,15 @@ mkSockAddr port = do
   pokeWord8 sa 3 (fromIntegral (port `mod` 256))
   return sa
 
--- Nonblocking read: EAGAIN means "someone else can run" - yield
--- and come back. The request fits one segment for this demo.
+-- Nonblocking read: EAGAIN parks THIS handler on the fd (M127);
+-- every other task keeps running until the bytes arrive. The
+-- request fits one segment for this demo.
 readRequest :: CInt -> Ptr Char -> IO Int
 readRequest fd buf = do
   n <- c_read fd buf 4096
-  if n < 0 then yield >> readRequest fd buf else return (fromIntegral n)
+  if n < 0
+    then waitRead (fromIntegral fd) >> readRequest fd buf
+    else return (fromIntegral n)
 
 parseNat :: String -> Maybe Int
 parseNat s =
@@ -151,9 +157,12 @@ splitRoute ('/' : rest) =
     _ -> Nothing
 splitRoute _ = Nothing
 
--- One connection: read, parse, log, answer, close.
-handle :: CInt -> IO Bool
-handle fd = do
+-- One connection, on its own green thread: read (parking on the
+-- fd while the client dawdles), parse, log, answer, close. /quit
+-- answers first, then signals the accept loop over the channel.
+handle :: CInt -> Chan () -> IO ()
+handle fd quitCh = do
+  _ <- c_fcntl fd fSetFl oNonblock
   buf <- mallocBytes 4096
   n <- readRequest fd buf
   raw <- peekCStringLen buf n
@@ -171,23 +180,29 @@ handle fd = do
   let body = either id id result
   _ <- c_write fd body (fromIntegral (length body))
   _ <- c_close fd
-  return (isQuit result)
+  case result of
+    Left _  -> send quitCh ()
+    Right _ -> return ()
   where
     status (Left _)  = "200 (quit)"
     status (Right r) = takeWhile (/= '\r') (drop 9 r)
-    isQuit (Left _)  = True
-    isQuit (Right _) = False
 
--- Nonblocking accept, polled with yield: while this loop waits for
--- a client, any spawned green thread keeps making progress.
-acceptLoop :: CInt -> IO ()
-acceptLoop lfd = do
-  fd <- c_accept lfd nullPtr nullPtr
-  if fd < 0
-    then yield >> acceptLoop lfd
-    else do
-      quit <- handle fd
-      if quit then return () else acceptLoop lfd
+-- The accept loop parks until the listen fd is readable OR the
+-- quit channel has a message - a message wins. Each accepted
+-- connection gets its own handler task; the scope joins them all
+-- before the server says goodbye.
+acceptLoop :: Scope -> CInt -> Chan () -> IO ()
+acceptLoop sc lfd quitCh = do
+  m <- waitReadOr (fromIntegral lfd) quitCh
+  case m of
+    Just _ -> return ()
+    Nothing -> do
+      fd <- c_accept lfd nullPtr nullPtr
+      if fd < 0
+        then acceptLoop sc lfd quitCh
+        else do
+          _ <- spawn sc (handle fd quitCh)
+          acceptLoop sc lfd quitCh
 
 main :: IO ()
 main = do
@@ -211,6 +226,8 @@ main = do
       _ <- c_listen lfd 16
       _ <- c_fcntl lfd fSetFl oNonblock
       putStrLn "ahttpd listening"
-      acceptLoop lfd
+      scope (\sc -> do
+        quitCh <- newChan
+        acceptLoop sc lfd quitCh)
       _ <- c_close lfd
       putStrLn "ahttpd done"

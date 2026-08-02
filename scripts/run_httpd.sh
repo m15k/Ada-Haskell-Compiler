@@ -3,14 +3,19 @@
 #
 #   1. build examples/httpd (multi-module: Http.hs beside the root)
 #      with `ahc build`;
-#   2. run a fixed client session against it - bodies for every
-#      route plus one full-header response - and byte-compare
-#      against the golden. /par/8's worker ARRIVAL ORDER is in the
-#      golden: the deterministic scheduler makes an interleaving a
-#      testable output;
-#   3. the server's own request log is a second golden;
-#   4. /quit must end the process (no kill needed);
-#   5. a port outside 1..65535 must die at the Port refinement
+#   2. an IDLE server costs ~zero CPU - the accept loop PARKS on
+#      the listen fd (M127's poll integration); the old busy-poll
+#      would burn the whole idle window;
+#   3. a fixed client session, byte-compared against the golden.
+#      /par/8's worker ARRIVAL ORDER is in the golden;
+#   4. CONCURRENT HANDLERS: connection A opens and stays silent
+#      (its handler parks on the fd), B is served meanwhile, then
+#      A's request completes - the schedule still deterministic,
+#      pinned by the log golden;
+#   5. the server's own request log is a second golden;
+#   6. /quit - a channel signal since M128 - must end the process
+#      (no kill needed);
+#   7. a port outside 1..65535 must die at the Port refinement
 #      boundary, before bind().
 #
 # Goldens are AHC's own output (the refinement surface is not GHC
@@ -44,7 +49,15 @@ for cand in 18731 18747 18763 18779; do
   kill $spid 2>/dev/null; wait $spid 2>/dev/null
 done
 [ -n "$port" ] || { flunk "server never came up"; exit 1; }
-step "server up (multi-module ahc build, nonblocking accept)"
+step "server up (multi-module ahc build, parked accept)"
+
+# 2. an idle server parks in poll: ~zero CPU
+sleep 2
+cpu=$(ps -o time= -p $spid | tr -d ' ')
+case "$cpu" in
+  0:00*) step "idle server: ~zero CPU ($cpu after 2s)";;
+  *)     flunk "idle server burned CPU ($cpu after 2s)";;
+esac
 
 base="http://127.0.0.1:$port"
 {
@@ -52,8 +65,29 @@ base="http://127.0.0.1:$port"
   curl -s "$base/par/8"
   curl -s "$base/json"
   curl -s -i "$base/nope"
-  curl -s "$base/quit"
 } > "$tmp/client.out"
+
+# 4. concurrent handlers: A connects and stays silent (handler
+#    parks in readRequest), B is served, then A completes
+overlap_ok=""
+if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
+  sleep 0.3
+  b=$(curl -s "$base/")
+  printf 'GET /fact/10 HTTP/1.0\r\n\r\n' >&3
+  aresp=$(cat <&3)
+  exec 3<&-
+  if [ -n "$b" ] && printf '%s' "$aresp" | grep -q 3628800; then
+    overlap_ok=1
+  fi
+fi
+if [ -n "$overlap_ok" ]
+then step "concurrent handlers: A parked, B served, A completed"
+else flunk "concurrent handlers"; fi
+
+# 6. quit is a channel signal; the response still says bye
+if [ "$(curl -s "$base/quit")" = "bye" ]
+then step "/quit answered"
+else flunk "/quit response"; fi
 
 # 4. /quit ends the process on its own (watchdog, not kill)
 ( sleep 5 && kill $spid 2>/dev/null ) & watchdog=$!
@@ -63,8 +97,9 @@ else flunk "/quit did not end the server"; fi
 kill $watchdog 2>/dev/null
 spid=""
 
-# 2. the client session, byte-exact (the readiness "/" probe is not
-#    in the golden; the log golden accounts for it)
+# 3. the client session, byte-exact (the readiness "/" probe and
+#    the overlap requests are not in it; the log golden accounts
+#    for every request)
 if diff -q "$tmp/client.out" examples/httpd/tests/client.golden >/dev/null
 then step "client session byte-identical (incl. /par/8 arrival order)"
 else flunk "client session diverged"; diff "$tmp/client.out" examples/httpd/tests/client.golden | head; fi

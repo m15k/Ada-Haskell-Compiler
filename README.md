@@ -347,9 +347,14 @@ output, `--oracle` regenerates).
   scheduler, a `/par/N` route whose scope/spawn/channel fan-out has
   its worker ARRIVAL ORDER pinned in the golden (deterministic
   scheduling as an observable), exact-bignum `/fact/N`, and a
-  listen port whose type is `Int in 1 .. 65535`. AHC-only like cal;
-  its README records the two runtime gaps it surfaced (blocking IO
-  vs the scheduler, no channel poll) — dogfood as roadmap.
+  listen port whose type is `Int in 1 .. 65535`. AHC-only like cal.
+  The two runtime gaps its first version surfaced (blocking IO vs
+  the scheduler, no channel poll) became M127's
+  scheduler-integrated IO — fd parking via poll(2) with
+  registration-order wakes, tryRecv/selectRecv/waitReadOr — and
+  the server now parks its accept loop, overlaps handlers, and
+  idles at zero CPU, all pinned by its harness. Dogfood as
+  roadmap, roadmap as dogfood.
 - **`concurrency/`** — the four concurrency models from the design
   note, each restated as a runnable AHC program (`go_csp`,
   `ghc_sparks`, `rust_aliasing`, `ada_protected`), plus `b2_smp`
