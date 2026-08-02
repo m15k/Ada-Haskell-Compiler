@@ -260,6 +260,13 @@ package body AHC.Build is
       --  temp file and is replayed in JOB order afterwards, so a
       --  parallel build's diagnostics read exactly like a serial
       --  one's - determinism is a property of the build tool too.
+      --
+      --  The redirection MUST happen in the child (sh -c '... >f'),
+      --  never via GNAT.OS_Lib.Spawn's output-descriptor variant:
+      --  that variant dup2's the WHOLE PROCESS's stdout/stderr for
+      --  the child's entire lifetime, so concurrent workers trample
+      --  each other's streams - run_build.sh's failure-surface test
+      --  caught exactly that (a vanished link error).
       function Compile_Parallel (Workers : Positive) return Boolean
       is
          Count     : constant Natural := Natural (Pending.Length);
@@ -268,7 +275,23 @@ package body AHC.Build is
          Out_Files : array (1 .. Count) of Unbounded_String;
          Clang     : GNAT.OS_Lib.String_Access :=
            Locate_Exec_On_Path ("clang");
+         Shell     : GNAT.OS_Lib.String_Access :=
+           Locate_Exec_On_Path ("sh");
          All_Ok    : Boolean := True;
+
+         function Sh_Quote (S : String) return String is
+            R : Unbounded_String := To_Unbounded_String ("'");
+         begin
+            for C of S loop
+               if C = ''' then
+                  Append (R, "'\''");
+               else
+                  Append (R, C);
+               end if;
+            end loop;
+            Append (R, "'");
+            return To_String (R);
+         end Sh_Quote;
 
          protected Queue is
             procedure Next (J : out Natural);
@@ -299,19 +322,31 @@ package body AHC.Build is
                declare
                   FD   : File_Descriptor;
                   Name : GNAT.OS_Lib.String_Access;
-                  Args : Argument_List_Access :=
-                    To_Arg_List (Compile_Args (Pending (J)));
+                  Cmd  : Unbounded_String;
                   Rc   : Integer := 1;
                begin
                   Create_Temp_File (FD, Name);
                   if FD /= Invalid_FD then
-                     Out_Files (J) := To_Unbounded_String (Name.all);
-                     Spawn (Clang.all, Args.all, FD, Rc,
-                            Err_To_Out => True);
                      Close (FD);
+                     Out_Files (J) := To_Unbounded_String (Name.all);
+                     Cmd := To_Unbounded_String
+                       ("exec " & Sh_Quote (Clang.all));
+                     for W of Compile_Args (Pending (J)) loop
+                        Append (Cmd, " " & Sh_Quote (W));
+                     end loop;
+                     Append (Cmd,
+                             " > " & Sh_Quote (Name.all) & " 2>&1");
+                     declare
+                        Args : Argument_List_Access :=
+                          new Argument_List'
+                            (1 => new String'("-c"),
+                             2 => new String'(To_String (Cmd)));
+                     begin
+                        Rc := Spawn (Shell.all, Args.all);
+                        Free_Args (Args);
+                     end;
                   end if;
                   Free (Name);
-                  Free_Args (Args);
                   Ok_Flags (J) := Rc = 0;
                exception
                   when others =>
@@ -321,10 +356,12 @@ package body AHC.Build is
          end Worker;
 
       begin
-         if Clang = null then
+         if Clang = null or else Shell = null then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error,
-               "ahc: cannot find 'clang' on PATH");
+               "ahc: cannot find 'clang' and 'sh' on PATH");
+            Free (Clang);
+            Free (Shell);
             return False;
          end if;
          if Opts.Verbose then
@@ -339,6 +376,7 @@ package body AHC.Build is
             null;  --  the declare block joins the pool
          end;
          Free (Clang);
+         Free (Shell);
          for J in 1 .. Count loop
             if Out_Files (J) /= "" then
                declare
