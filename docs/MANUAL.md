@@ -1828,9 +1828,11 @@ base's exact `permutations` production order and sort stability
 (AHC's simple stable mergesort provably matches base's clever one
 *because* stability makes the answer unique).
 
-Notable corners: `Data.Ix` and `Text.Read` are full type classes
-defined in library modules — proof the class machinery works from
-userland; `Data.Ratio` builds exact fractions on the bignum layer
+Notable corners: `Data.Ix` is a full type class defined in a library
+module — proof the class machinery works from userland (`Read` is the
+same kind of ordinary source class, but Report 9.1 exports it from the
+Prelude, so it lives there and `Text.Read` re-exports it);
+`Data.Ratio` builds exact fractions on the bignum layer
 (and needed one new compiler rule: a library type may *shadow a
 builtin* type constructor, the type-level mirror of shadowing
 Prelude values, which is how `Rational` took its proper name over

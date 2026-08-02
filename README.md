@@ -27,6 +27,12 @@ decision and the theory behind it, written for a reader who is not a
 compiler engineer. `docs/adahc-PRD.md` holds the full product
 requirements (`docs/adahc PRD.rtf` is the original).
 
+Want to point AHC at code it has never seen? **`docs/repos-to-try.md`**
+lists nine GitHub projects — a sudoku solver, a maze generator,
+Conway's Life, an interactive tic-tac-toe — none written with AHC in
+mind, each with the exact commands to build and run it, plus the search
+recipe that found them and what usually blocks a repo.
+
 ## Building
 
 Requires [Alire](https://alire.ada.dev/) with a GNAT ≥ 13 toolchain
@@ -170,7 +176,7 @@ alternatives (for the root module) — agrees line-for-line with GHC's
 `-Wincomplete-patterns` / `-Woverlapping-patterns` on the pinned
 corpus. Cross-module diagnostics carry proper source spans.
 
-Remaining monomorphic subsets: Data.Array (Int indices) and Text.Read's
+Remaining monomorphic subsets: Data.Array (Int indices) and the `Read`
 instance set. `Ratio a` and `Complex a` are fully polymorphic.
 
 ## The Ada extension
@@ -290,8 +296,8 @@ Data.Map and Data.Set (a weight-balanced search tree matching the
 containers library's observable behavior exactly — toList order, Show
 format, union bias — and oracled against the real thing), Data.Ratio
 (exact fractions over bignum Integer), Data.Complex, Data.Array
-(Int-indexed), Text.Read (a source Read class covering
-Int/Integer/Bool/lists/pairs), and the concurrency modules
+(Int-indexed), Text.Read (a facade over the Prelude's source Read
+class, covering Int/Integer/Bool/lists/pairs), and the concurrency modules
 Control.Concurrent.Scoped / Protected — all ordinary Haskell modules
 compiled by AHC through its own module system. The driver resolves
 imports beside the root file, then `$AHC_LIB`, then `lib/`.

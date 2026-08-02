@@ -304,9 +304,14 @@ package body AHC.Builtins is
          end;
       end loop;
 
-      --  String = [Char]
+      --  String = [Char], and FilePath = String (Report 7.1/9.1: a
+      --  synonym of a synonym, so both expand to [Char] here).
       Env.Synonyms.Include
         (Table.Intern ("String"),
+         (Arity => 0, Core_Rhs => Type_Id (LST (TC (Env.Char_TC))),
+          others => <>));
+      Env.Synonyms.Include
+        (Table.Intern ("FilePath"),
          (Arity => 0, Core_Rhs => Type_Id (LST (TC (Env.Char_TC))),
           others => <>));
 

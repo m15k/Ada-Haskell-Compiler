@@ -94,6 +94,14 @@ init :: [a] -> [a]
 init (x : xs) = if null xs then [] else x : init xs
 init [] = error "Prelude.init: empty list"
 
+-- Report 9.1: infixl 9 !! (the fixity is wired in AHC.Fixity).
+(!!) :: [a] -> Int -> a
+xs !! n = if n < 0 then error "Prelude.!!: negative index" else indexGo_ xs n
+
+indexGo_ :: [a] -> Int -> a
+indexGo_ [] _ = error "Prelude.!!: index too large"
+indexGo_ (x : xs) n = if n == 0 then x else indexGo_ xs (n - 1)
+
 takeWhile :: (a -> Bool) -> [a] -> [a]
 takeWhile _ [] = []
 takeWhile p (x : xs) = if p x then x : takeWhile p xs else []
@@ -401,3 +409,121 @@ instance (Show a, Show b) => Show (Either a b) where
     showParen (d > 10) (\t -> "Right " ++ showsPrec 11 y t) s
   show x = showsPrec 0 x ""
   showList xs s = showsList_ xs s
+
+-- Read ----------------------------------------------------------------
+-- Report 9.1 exports Read (..), reads and read from the Prelude, so the
+-- class and its instances live here rather than in Text.Read, which is
+-- now a facade over these definitions. Keeping the class here is also
+-- what lets `deriving Read` work without importing Text.Read (the
+-- compiler binds readsEnum_ by name -- AHC.Prelude_Core).
+-- The Prelude has no imports, so the three character predicates Read
+-- needs are private ASCII copies of the Data.Char ones.
+
+class Read a where
+  readsPrec :: Int -> String -> [(a, String)]
+
+reads :: Read a => String -> [(a, String)]
+reads s = readsPrec 0 s
+
+read :: Read a => String -> a
+read s =
+  case [x | (x, t) <- reads s, allSpace_ t] of
+    [x] -> x
+    _   -> error "Prelude.read: no parse"
+
+isSpace_ :: Char -> Bool
+isSpace_ c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+isDigit_ :: Char -> Bool
+isDigit_ c = c >= '0' && c <= '9'
+
+isIdChar_ :: Char -> Bool
+isIdChar_ c =
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    || isDigit_ c || c == '\''
+
+allSpace_ :: String -> Bool
+allSpace_ [] = True
+allSpace_ (c : cs) = isSpace_ c && allSpace_ cs
+
+skipSpace_ :: String -> String
+skipSpace_ = dropWhile isSpace_
+
+--  Derived-Read support (bound by the compiler for deriving Read on
+--  enumerations): match one maximal identifier token against the
+--  constructor table.
+readsEnum_ :: [(String, a)] -> Int -> String -> [(a, String)]
+readsEnum_ table _ s =
+  case span isIdChar_ (skipSpace_ s) of
+    (tok, rest) -> [ (v, rest) | (nm, v) <- table, nm == tok ]
+
+--  Integers: optional parenthesized negative, per the Report's lex.
+readsInteger_ :: String -> [(Integer, String)]
+readsInteger_ s0 =
+  case skipSpace_ s0 of
+    ('-' : t) -> [(negate n, r) | (n, r) <- readsNat_ t]
+    ('(' : t) ->
+      [ (n, r2)
+      | (n, r) <- readsInteger_ t
+      , (')' : r2) <- [skipSpace_ r]
+      ]
+    t -> readsNat_ t
+
+readsNat_ :: String -> [(Integer, String)]
+readsNat_ s =
+  case span isDigit_ s of
+    ([], _)     -> []
+    (digits, r) ->
+      [(foldl (\a c -> a * 10 + digitVal_ c) 0 digits, r)]
+
+digitVal_ :: Char -> Integer
+digitVal_ c =
+  if isDigit_ c then toInteger (fromEnum c - fromEnum '0')
+  else error "Prelude.read: not a digit"
+
+instance Read Integer where
+  readsPrec _ s = readsInteger_ s
+
+instance Read Int where
+  readsPrec _ s =
+    [(integerToInt_ n, r) | (n, r) <- readsInteger_ s]
+
+integerToInt_ :: Integer -> Int
+integerToInt_ n = fromInteger n
+
+instance Read Bool where
+  readsPrec _ s =
+    case skipSpace_ s of
+      ('T' : 'r' : 'u' : 'e' : r) -> [(True, r)]
+      ('F' : 'a' : 'l' : 's' : 'e' : r) -> [(False, r)]
+      _ -> []
+
+instance Read a => Read [a] where
+  readsPrec _ s =
+    case skipSpace_ s of
+      ('[' : t) ->
+        case skipSpace_ t of
+          (']' : r) -> [([], r)]
+          _         -> readItems t
+      _ -> []
+    where
+      readItems u =
+        [ (x : xs, r2)
+        | (x, r) <- readsPrec 0 u
+        , (xs, r2) <- readRest (skipSpace_ r)
+        ]
+      readRest (',' : u) = readItems u
+      readRest (']' : u) = [([], u)]
+      readRest _ = []
+
+instance (Read a, Read b) => Read (a, b) where
+  readsPrec _ s =
+    case skipSpace_ s of
+      ('(' : t) ->
+        [ ((x, y), r4)
+        | (x, r) <- readsPrec 0 t
+        , (',' : r2) <- [skipSpace_ r]
+        , (y, r3) <- readsPrec 0 r2
+        , (')' : r4) <- [skipSpace_ r3]
+        ]
+      _ -> []

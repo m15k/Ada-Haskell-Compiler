@@ -1,5 +1,41 @@
 # AHC Changelog
 
+## Unreleased
+
+**Prelude gaps and an empty-string pattern crash.** Four fixes found
+by compiling base-only Haskell 2010 programs off GitHub, where each
+was the *only* thing standing between AHC and a program that
+otherwise typechecked clean.
+
+- `f "" = ...` crashed the compiler with an unhandled
+  `ASSERTION_ERROR` instead of compiling. `Well_Formed (Pat_Node)`
+  shared the `Text /= No_Name` guard between `Lit_String_P` and the
+  numeric literal patterns, but an EMPTY string literal is No_Name by
+  the token convention (AHC.Tokens) - so the guard rejected a legal
+  pattern, and `Add` blew its precondition. `Lit_String_P` now carries
+  no Text guard, matching `Lit_String_E`, which always allowed it; the
+  exhaustiveness checker and the AST printer learned the same
+  convention (both would have raised Constraint_Error converting
+  No_Name to a Real_Name_Id). Non-empty string patterns were never
+  affected. Pinned by ch03_17_string_patterns.hs.
+- `(!!)` was missing from the Prelude entirely (its infixl 9 fixity
+  was already wired in AHC.Fixity). Added as ordinary Prelude source
+  with GHC's two error messages.
+- `FilePath` was missing: now a wired-in synonym beside `String` in
+  AHC.Builtins, expanding to `[Char]`.
+- `Read`, `reads` and `read` moved from Text.Read into the Prelude,
+  where Report 9.1 exports them; Text.Read is now the re-export
+  facade the Report also requires, so both name the same entities.
+  A consequence worth having: `read` and `deriving Read` no longer
+  need an import, matching GHC. The Prelude takes no imports, so
+  Read's three character predicates are private ASCII copies of the
+  Data.Char ones. The three core goldens grew by the new Read
+  dictionaries - pure additions, no existing Core changed.
+
+Pinned by ch08_prelude_index_read.hs, both new conformance programs
+byte-identical to GHC 9.4.8. All ten harnesses, the 219 unit tests
+and the fuzzer stay green.
+
 ## v1.8 (2026-08-01)
 
 The IO release (M126-M129): the green scheduler learns to wait on

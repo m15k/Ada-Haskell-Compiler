@@ -220,7 +220,10 @@ package body AHC.Syntax.Printer is
             when Wild_P => return "(pwild)";
             when Lit_Int_P => return "(pint " & NM (N.Text) & ")";
             when Lit_Float_P => return "(pfloat " & NM (N.Text) & ")";
-            when Lit_String_P => return "(pstr """ & NM (N.Text) & """)";
+            when Lit_String_P =>
+               return "(pstr """
+                 & (if N.Text = Names.No_Name then ""
+                    else Table.Text (N.Text)) & """)";
             when Lit_Char_P => return "(pchar " & Img (N.Char_Value) & ")";
             when Neg_Int_P => return "(pint -" & NM (N.Text) & ")";
             when Neg_Float_P => return "(pfloat -" & NM (N.Text) & ")";

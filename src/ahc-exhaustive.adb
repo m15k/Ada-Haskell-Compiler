@@ -130,10 +130,12 @@ package body AHC.Exhaustive is
                             Key => Lit_Key
                               ("c" & N.Char_Value'Image)));
             when Lit_String_P =>
+               --  Empty string literals carry No_Name (AHC.Tokens).
                return Add ((Kind => Lit_A,
                             Key => Lit_Key
-                              ("s" & Table.Text
-                                 (Names.Real_Name_Id (N.Text)))));
+                              ("s" & (if N.Text = Names.No_Name then ""
+                                      else Table.Text
+                                        (Names.Real_Name_Id (N.Text))))));
             when Con_P =>
                declare
                   R : constant Rename.Resolution :=

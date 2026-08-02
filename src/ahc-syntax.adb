@@ -111,9 +111,13 @@ package body AHC.Syntax is
       case N.Kind is
          when Var_P =>
             return N.Var /= Names.No_Name;
-         when Wild_P | Lit_Char_P =>
+         when Wild_P | Lit_Char_P | Lit_String_P =>
+            --  A string literal's Text is No_Name when the literal is
+            --  empty (the token convention, AHC.Tokens): `f "" = ...`
+            --  is a well-formed pattern, so it carries no Text guard --
+            --  same as Lit_String_E above.
             return True;
-         when Lit_Int_P | Lit_Float_P | Lit_String_P
+         when Lit_Int_P | Lit_Float_P
             | Neg_Int_P | Neg_Float_P =>
             return N.Text /= Names.No_Name;
          when Con_P =>
