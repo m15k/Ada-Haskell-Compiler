@@ -440,6 +440,13 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   binding, the five-host examples/ffi; deterministic structured
   concurrency (Scoped, Protected, SMP sparks); AHC's own generational
   collector (`AHC_GC=own`).
+- **v1.8** — the IO release (M126–M129): scheduler-integrated IO
+  (fd parking via poll(2) when the run queue drains, wakes in
+  registration order; tryRecv/selectRecv/waitReadOr — the select
+  Ravenscar banned, kept by pinning every choice rule), ahttpd
+  reworked as the passing acceptance test (parked accept loop,
+  concurrent handlers, idle at zero CPU), and the ahc.toml project
+  manifest.
 - **v1.7** — the builder release (M124–M125): `ahc build` replaces
   the build script (native, parallel `-j`, byte-identical to a
   serial build, works from any directory via installation-relative

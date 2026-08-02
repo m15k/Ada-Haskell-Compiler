@@ -1,6 +1,13 @@
 # AHC Changelog
 
-## Unreleased
+## v1.8 (2026-08-01)
+
+The IO release (M126-M129): the green scheduler learns to wait on
+the world without giving up reproducible schedules, the ahttpd
+dogfood that wrote the brief becomes the acceptance test that
+passes it, and a project directory can name its build once. No
+existing program's output changes; every golden not deliberately
+extended is byte-identical to v1.7.
 
 **Scheduler-integrated IO (M126-M128,
 docs/io-design-note.md).** The two runtime gaps ahttpd surfaced,
