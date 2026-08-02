@@ -1239,6 +1239,43 @@ package body AHC.Builtins is
                Ignore := Def_Global
                  ("primYield", Mono (IO_T (U_T)));
 
+               --  Scheduler-integrated IO (M127,
+               --  docs/io-design-note.md). Fds are plain Ints; the
+               --  Int-typed channel ids get their phantom safety
+               --  back in Control.Concurrent.Scoped.
+               Ignore := Def_Global
+                 ("primWaitRead", Mono (FN (I_T, IO_T (U_T))));
+               Ignore := Def_Global
+                 ("primWaitWrite", Mono (FN (I_T, IO_T (U_T))));
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primTryRecv",
+                     Poly1 (A, FN (I_T,
+                                   IO_T (AP (TC (Env.Maybe_TC),
+                                             TV (A))))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+                  Pair_T : constant Real_Type_Id :=
+                    AP (AP (TC (Env.Tuple_TCs (2)), I_T), TV (A));
+               begin
+                  Ignore := Def_Global
+                    ("primSelectRecv",
+                     Poly1 (A, FN (AP (TC (Env.List_TC), I_T),
+                                   IO_T (Pair_T))));
+               end;
+               declare
+                  A : constant Real_TyVar_Id := New_Tv ("a");
+               begin
+                  Ignore := Def_Global
+                    ("primWaitReadOr",
+                     Poly1 (A, FN (I_T, I_T,
+                                   IO_T (AP (TC (Env.Maybe_TC),
+                                             TV (A))))));
+               end;
+
                --  Sparks (B1): pure, advisory parallelism.
                declare
                   A : constant Real_TyVar_Id := New_Tv ("a");

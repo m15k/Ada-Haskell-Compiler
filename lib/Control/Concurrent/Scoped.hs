@@ -2,6 +2,8 @@ module Control.Concurrent.Scoped
   ( Scope, Task, Chan
   , scope, spawn, await, yield
   , newChan, send, recv
+  , tryRecv, selectRecv
+  , waitRead, waitWrite, waitReadOr
   ) where
 
 -- Deterministic structured concurrency
@@ -58,3 +60,32 @@ recv (MkChan c) = primChanRecv c
 -- Give every other runnable task one turn.
 yield :: IO ()
 yield = primYield
+
+-- Scheduler-integrated IO (docs/io-design-note.md). Readiness is
+-- checked when the run queue drains; every wake order is pinned
+-- (fds in registration order, select ties in list order), so the
+-- schedule stays reproducible.
+
+-- Just the head, or Nothing right now; never parks.
+tryRecv :: Chan a -> IO (Maybe a)
+tryRecv (MkChan c) = primTryRecv c
+
+-- The first non-empty channel in LIST ORDER (the deterministic
+-- tie-break); parks on all of them when every one is empty.
+-- Returns the 0-based index alongside the value.
+selectRecv :: [Chan a] -> IO (Int, a)
+selectRecv cs = primSelectRecv (map (\(MkChan c) -> c) cs)
+
+-- Park until the fd is readable / writable. The runtime never
+-- opens, closes, or owns the fd - that stays the program's FFI.
+waitRead :: Int -> IO ()
+waitRead fd = primWaitRead fd
+
+waitWrite :: Int -> IO ()
+waitWrite fd = primWaitWrite fd
+
+-- The accept-loop shape (Ada's `accept ... or terminate`): park
+-- until the fd is readable OR the channel has a message; a
+-- message beats a ready fd.
+waitReadOr :: Int -> Chan a -> IO (Maybe a)
+waitReadOr fd (MkChan c) = primWaitReadOr fd c

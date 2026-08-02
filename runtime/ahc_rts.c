@@ -11,12 +11,14 @@
 #define _DARWIN_C_SOURCE 1    /* _XOPEN_SOURCE alone hides MAP_ANON */
 #endif
 #include <ucontext.h>
+#include <poll.h>
 
 #include <pthread.h>
 
 #include "ahc_rts.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <math.h>
 #include <limits.h>
 #include <string.h>
@@ -84,6 +86,12 @@ struct AhcTask {
   AhcNode *xfer;          /* channel hand-off mailbox */
   AhcTask *qnext;         /* run-queue / wait-list linkage */
   AhcTask *join_waiters;  /* tasks parked on my completion */
+  AhcTask *ionext;        /* fd-wait list linkage (M127); a dual
+                             waiter sits in a channel's waiter list
+                             via qnext AND here at once */
+  int wait_fd;            /* meaningful only while on the io list */
+  short wait_ev;          /* POLLIN / POLLOUT */
+  long sel_index;         /* which select alternative fired */
   jmp_buf err_stack[AHC_ERR_DEPTH];
   int err_depth;
   char err_msg[512];      /* ahc_last_error; the death message at 3 */
@@ -151,6 +159,78 @@ static AhcTask *runq_pop(void) {
   return t;
 }
 
+/* ----- scheduler-integrated IO (M127, io-design-note.md) -------
+   Tasks parked on a file descriptor sit on this list in
+   REGISTRATION ORDER. When the run queue drains and the list is
+   non-empty the scheduler blocks in poll(2) - an idle program
+   costs nothing - and wakes the ready waiters in registration
+   order, so the schedule stays reproducible. Membership on the
+   list is what "armed" means; there is no sentinel fd. */
+
+static AhcTask *iow_head, *iow_tail;
+
+static void iow_add(AhcTask *t, int fd, short ev) {
+  t->wait_fd = fd;
+  t->wait_ev = ev;
+  t->ionext = NULL;
+  if (iow_tail) iow_tail->ionext = t;
+  else iow_head = t;
+  iow_tail = t;
+}
+
+static void iow_remove(AhcTask *t) {
+  AhcTask *prev = NULL, *p = iow_head;
+  while (p) {
+    if (p == t) {
+      if (prev) prev->ionext = p->ionext;
+      else iow_head = p->ionext;
+      if (iow_tail == p) iow_tail = prev;
+      p->ionext = NULL;
+      return;
+    }
+    prev = p;
+    p = p->ionext;
+  }
+}
+
+static void wake(AhcTask *t);
+
+/* Run queue empty: block in poll over every parked fd waiter and
+   wake the ready ones in registration order. 0 = nobody is
+   waiting on an fd, i.e. a genuine deadlock. */
+static int io_poll_block(void) {
+  int n = 0, i, rc;
+  AhcTask *t;
+  struct pollfd *pf;
+  AhcTask **owner;
+  for (t = iow_head; t; t = t->ionext)
+    if (t->state == 1) n++;
+  if (n == 0) return 0;
+  pf = (struct pollfd *)malloc(sizeof(struct pollfd) * (size_t)n);
+  owner = (AhcTask **)malloc(sizeof(AhcTask *) * (size_t)n);
+  if (!pf || !owner) ahc_die("out of memory");
+  i = 0;
+  for (t = iow_head; t; t = t->ionext)
+    if (t->state == 1) {
+      pf[i].fd = t->wait_fd;
+      pf[i].events = t->wait_ev;
+      pf[i].revents = 0;
+      owner[i] = t;
+      i++;
+    }
+  do {
+    rc = poll(pf, (nfds_t)n, -1);
+  } while (rc < 0 && errno == EINTR);
+  if (rc < 0) ahc_die("poll failed");
+  for (i = 0; i < n; i++)
+    if (pf[i].revents && owner[i]->state == 1)
+      wake(owner[i]);       /* error/hangup wake too: the caller's
+                               own read reports the story */
+  free(pf);
+  free(owner);
+  return 1;
+}
+
 /* Switch to the next runnable task. Requeue_self distinguishes a
    voluntary yield (still runnable) from a park (blocked) or death
    (never runnable again). */
@@ -159,8 +239,11 @@ static void sched_switch(int requeue_self) {
   AhcTask *nxt;
   if (requeue_self) runq_push(self);
   nxt = runq_pop();
-  if (!nxt)
-    ahc_die("deadlock: all green threads blocked");
+  while (!nxt) {
+    if (!io_poll_block())
+      ahc_die("deadlock: all green threads blocked");
+    nxt = runq_pop();
+  }
   if (nxt == self) return;
 #ifdef AHC_GC_OWN
   /* The own collector reads parked extents directly; no
@@ -1935,10 +2018,47 @@ typedef struct AhcChanCell {
   struct AhcChanCell *next;
 } AhcChanCell;
 
+/* A selector (selectRecv / waitReadOr) waits on SEVERAL sources at
+   once, and a task has only one qnext link - so selectors enlist
+   through per-channel cells instead. malloc'd: they never hold a
+   node (the value goes straight to the task's xfer at send time);
+   the owner unlinks its cells when it resumes. */
+typedef struct AhcSelCell {
+  AhcTask *t;                /* NULL once served or abandoned */
+  long index;                /* the alternative's position */
+  struct AhcSelCell *next;
+} AhcSelCell;
+
 typedef struct AhcChan {
   AhcChanCell *head, *tail;  /* sent, not yet received (FIFO) */
   AhcTask *recv_waiters;     /* parked receivers (FIFO) */
+  AhcSelCell *sel_waiters;   /* parked selectors (FIFO) */
 } AhcChan;
+
+static void sel_enlist(AhcChan *c, AhcTask *t, long index) {
+  AhcSelCell *cell = (AhcSelCell *)malloc(sizeof(AhcSelCell));
+  AhcSelCell **p = &c->sel_waiters;
+  if (!cell) ahc_die("out of memory");
+  cell->t = t;
+  cell->index = index;
+  cell->next = NULL;
+  while (*p) p = &(*p)->next;
+  *p = cell;
+}
+
+/* Drop this task's cells (and any dead ones met on the way). */
+static void sel_unlink(AhcChan *c, AhcTask *t) {
+  AhcSelCell **p = &c->sel_waiters;
+  while (*p) {
+    AhcSelCell *cell = *p;
+    if (cell->t == t || cell->t == NULL) {
+      *p = cell->next;
+      free(cell);
+    } else {
+      p = &cell->next;
+    }
+  }
+}
 
 static AhcTask **task_reg;  static int task_n, task_cap;
 static AhcScope **scope_reg; static int scope_n, scope_cap;
@@ -2144,6 +2264,7 @@ static AhcNode *io_chan_new(AhcNode **env, AhcNode *w) {
   c->head = NULL;
   c->tail = NULL;
   c->recv_waiters = NULL;
+  c->sel_waiters = NULL;
   return ahc_mk_int(reg_add((void ***)&chan_reg,
                             &chan_n, &chan_cap, c));
 }
@@ -2155,10 +2276,26 @@ static AhcNode *io_chan_send(AhcNode **env, AhcNode *w) {
   (void)w;
   while ((r = c->recv_waiters) != NULL) {
     c->recv_waiters = r->qnext;
-    if (r->state < 2) {
+    /* == 1, not < 2: an fd-woken dual waiter still on this list
+       must not be handed a second value (M127) */
+    if (r->state == 1) {
       r->xfer = v;
       wake(r);
       return ahc_mk_con(UNIT_TAG, 0);
+    }
+  }
+  {
+    /* plain receivers outrank selectors; both FIFO - the pinned
+       preference order (io-design-note.md part 2) */
+    AhcSelCell *cell;
+    for (cell = c->sel_waiters; cell; cell = cell->next) {
+      if (cell->t && cell->t->state == 1) {
+        cell->t->xfer = v;
+        cell->t->sel_index = cell->index;
+        wake(cell->t);
+        cell->t = NULL;
+        return ahc_mk_con(UNIT_TAG, 0);
+      }
     }
   }
   {
@@ -2212,6 +2349,155 @@ static AhcNode *io_task_yield(AhcNode **env, AhcNode *w) {
   (void)w;
   maybe_yield();
   return ahc_mk_con(UNIT_TAG, 0);
+}
+
+/* ----- scheduler-integrated IO prims (M127) ---------------------
+   io-design-note.md part 2. Maybe is tags 1/2 (Nothing/Just), a
+   pair is the single tag-1 constructor, children first. */
+
+#define NOTHING_TAG 1
+#define JUST_TAG 2
+
+static AhcNode *mk_nothing(void) {
+  return ahc_mk_con(NOTHING_TAG, 0);
+}
+
+static AhcNode *mk_just(AhcNode *v) {
+  AhcNode *c = ahc_mk_con(JUST_TAG, 1);
+  c->u.con.fields[0] = v;
+  return c;
+}
+
+/* waitRead / waitWrite: park until the fd is ready. Readiness is
+   checked when the run queue drains - the cooperative contract. */
+static AhcNode *io_wait_fd(AhcNode **env, AhcNode *w) {
+  long fd = ahc_eval(env[0])->u.i;
+  short ev = (short)ahc_eval(env[1])->u.i;
+  (void)w;
+  iow_add(cur_task, (int)fd, ev);
+  park();
+  iow_remove(cur_task);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+
+static AhcNode *p_wait_read(AhcNode *fd) {
+  AhcNode **e = ahc_env(2);
+  e[0] = fd;
+  e[1] = ahc_mk_int(POLLIN);
+  return ahc_mk_fun(io_wait_fd, e);
+}
+
+static AhcNode *p_wait_write(AhcNode *fd) {
+  AhcNode **e = ahc_env(2);
+  e[0] = fd;
+  e[1] = ahc_mk_int(POLLOUT);
+  return ahc_mk_fun(io_wait_fd, e);
+}
+
+/* tryRecv: never parks. */
+static AhcNode *io_try_recv(AhcNode **env, AhcNode *w) {
+  AhcChan *c = chan_of(env[0]);
+  (void)w;
+  if (c->head) {
+    AhcChanCell *cell = c->head;
+    c->head = cell->next;
+    if (!c->head) c->tail = NULL;
+    return mk_just(cell->v);
+  }
+  return mk_nothing();
+}
+
+static AhcNode *p_try_recv(AhcNode *ci) {
+  AhcNode **e = ahc_env(1);
+  e[0] = ci;
+  return ahc_mk_fun(io_try_recv, e);
+}
+
+/* selectRecv: first non-empty channel in LIST ORDER - the pinned
+   tie-break; parks on all of them when every one is empty. */
+static AhcNode *io_select_recv(AhcNode **env, AhcNode *w) {
+  (void)w;
+  for (;;) {
+    AhcNode *cell = ahc_eval(env[0]);
+    long idx = 0;
+    while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+      AhcChan *c = chan_of(cell->u.con.fields[0]);
+      if (c->head) {
+        AhcChanCell *cc = c->head;
+        c->head = cc->next;
+        if (!c->head) c->tail = NULL;
+        {
+          AhcNode *pr = ahc_mk_con(1, 2);
+          pr->u.con.fields[0] = ahc_mk_int(idx);
+          pr->u.con.fields[1] = cc->v;
+          return pr;
+        }
+      }
+      cell = ahc_eval(cell->u.con.fields[1]);
+      idx++;
+    }
+    if (idx == 0) ahc_die("selectRecv: empty channel list");
+    cell = ahc_eval(env[0]);
+    idx = 0;
+    while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+      sel_enlist(chan_of(cell->u.con.fields[0]), cur_task, idx);
+      cell = ahc_eval(cell->u.con.fields[1]);
+      idx++;
+    }
+    park();
+    cell = ahc_eval(env[0]);
+    while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+      sel_unlink(chan_of(cell->u.con.fields[0]), cur_task);
+      cell = ahc_eval(cell->u.con.fields[1]);
+    }
+    if (cur_task->xfer) {
+      AhcNode *v = cur_task->xfer;
+      AhcNode *pr = ahc_mk_con(1, 2);
+      cur_task->xfer = NULL;
+      pr->u.con.fields[0] = ahc_mk_int(cur_task->sel_index);
+      pr->u.con.fields[1] = v;
+      return pr;
+    }
+  }
+}
+
+static AhcNode *p_select_recv(AhcNode *cs) {
+  AhcNode **e = ahc_env(1);
+  e[0] = cs;
+  return ahc_mk_fun(io_select_recv, e);
+}
+
+/* waitReadOr: a message beats a ready fd (the pre-park check);
+   after the park, whichever event woke us decided - each wake path
+   fires at most once (state==1 guards). The accept-loop shape. */
+static AhcNode *io_wait_read_or(AhcNode **env, AhcNode *w) {
+  long fd = ahc_eval(env[0])->u.i;
+  AhcChan *c = chan_of(env[1]);
+  (void)w;
+  if (c->head) {
+    AhcChanCell *cell = c->head;
+    c->head = cell->next;
+    if (!c->head) c->tail = NULL;
+    return mk_just(cell->v);
+  }
+  sel_enlist(c, cur_task, 0);
+  iow_add(cur_task, (int)fd, POLLIN);
+  park();
+  iow_remove(cur_task);
+  sel_unlink(c, cur_task);
+  if (cur_task->xfer) {
+    AhcNode *v = cur_task->xfer;
+    cur_task->xfer = NULL;
+    return mk_just(v);
+  }
+  return mk_nothing();
+}
+
+static AhcNode *p_wait_read_or(AhcNode *fd, AhcNode *ci) {
+  AhcNode **e = ahc_env(2);
+  e[0] = fd;
+  e[1] = ci;
+  return ahc_mk_fun(io_wait_read_or, e);
 }
 
 /* ----- protected values (M103) -----------------------------------
@@ -4531,6 +4817,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
   *ahc_prim_chan_new, *ahc_prim_chan_send, *ahc_prim_chan_recv,
   *ahc_prim_task_yield,
+  *ahc_prim_wait_read, *ahc_prim_wait_write, *ahc_prim_try_recv,
+  *ahc_prim_select_recv, *ahc_prim_wait_read_or,
   *ahc_prim_prot_new, *ahc_prim_prot_read,
   *ahc_prim_prot_update, *ahc_prim_prot_entry,
   *ahc_prim_par, *ahc_prim_pseq,
@@ -4652,6 +4940,11 @@ void ahc_rts_init(void) {
   ahc_prim_chan_send = mk_prim2(p_chan_send);
   ahc_prim_chan_recv = mk_prim1(p_chan_recv);
   ahc_prim_task_yield = ahc_mk_fun(io_task_yield, NULL);
+  ahc_prim_wait_read = mk_prim1(p_wait_read);
+  ahc_prim_wait_write = mk_prim1(p_wait_write);
+  ahc_prim_try_recv = mk_prim1(p_try_recv);
+  ahc_prim_select_recv = mk_prim1(p_select_recv);
+  ahc_prim_wait_read_or = mk_prim2(p_wait_read_or);
   ahc_prim_prot_new = mk_prim1(p_prot_new);
   ahc_prim_prot_read = mk_prim2(p_prot_read);
   ahc_prim_prot_update = mk_prim2(p_prot_update);

@@ -1,0 +1,4 @@
+reader: waiting
+writer: about to write
+writer: wrote
+reader: got ping

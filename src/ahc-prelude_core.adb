@@ -1257,6 +1257,11 @@ package body AHC.Prelude_Core is
          BP ("primChanSend", "ahc_prim_chan_send");
          BP ("primChanRecv", "ahc_prim_chan_recv");
          BP ("primYield", "ahc_prim_task_yield");
+         BP ("primWaitRead", "ahc_prim_wait_read");
+         BP ("primWaitWrite", "ahc_prim_wait_write");
+         BP ("primTryRecv", "ahc_prim_try_recv");
+         BP ("primSelectRecv", "ahc_prim_select_recv");
+         BP ("primWaitReadOr", "ahc_prim_wait_read_or");
          BP ("primProtNew", "ahc_prim_prot_new");
          BP ("primProtRead", "ahc_prim_prot_read");
          BP ("primProtUpdate", "ahc_prim_prot_update");
