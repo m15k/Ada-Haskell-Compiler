@@ -440,20 +440,6 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   binding, the five-host examples/ffi; deterministic structured
   concurrency (Scoped, Protected, SMP sparks); AHC's own generational
   collector (`AHC_GC=own`).
-- **v1.8** — the IO release (M126–M129): scheduler-integrated IO
-  (fd parking via poll(2) when the run queue drains, wakes in
-  registration order; tryRecv/selectRecv/waitReadOr — the select
-  Ravenscar banned, kept by pinning every choice rule), ahttpd
-  reworked as the passing acceptance test (parked accept loop,
-  concurrent handlers, idle at zero CPU), and the ahc.toml project
-  manifest.
-- **v1.7** — the builder release (M124–M125): `ahc build` replaces
-  the build script (native, parallel `-j`, byte-identical to a
-  serial build, works from any directory via installation-relative
-  path resolution; the script survives as a shim), and the ahttpd
-  dogfood — an HTTP server over the socket FFI whose goldens pin a
-  deterministic concurrent schedule, and whose README records the
-  two runtime gaps it surfaced.
 - **v1.6.1** — the collector patch (M113–M123): `AHC_GC=own` lost
   live data on deep lazy chains and no longer does — a pre-existing
   defect never reachable from the default build, fixed at fourteen
@@ -461,6 +447,20 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   which both collector gates pass on a correct collector (own 16%
   faster than Boehm sequentially, via a growth-aware trigger that
   cleared a conflict no fixed constant could).
+- **v1.7** — the builder release (M124–M125): `ahc build` replaces
+  the build script (native, parallel `-j`, byte-identical to a
+  serial build, works from any directory via installation-relative
+  path resolution; the script survives as a shim), and the ahttpd
+  dogfood — an HTTP server over the socket FFI whose goldens pin a
+  deterministic concurrent schedule, and whose README records the
+  two runtime gaps it surfaced.
+- **v1.8** — the IO release (M126–M129): scheduler-integrated IO
+  (fd parking via poll(2) when the run queue drains, wakes in
+  registration order; tryRecv/selectRecv/waitReadOr — the select
+  Ravenscar banned, kept by pinning every choice rule), ahttpd
+  reworked as the passing acceptance test (parked accept loop,
+  concurrent handlers, idle at zero CPU), and the ahc.toml project
+  manifest.
 
 Full details per release in `CHANGES.md`.
 
