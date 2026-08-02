@@ -481,7 +481,20 @@ package body AHC.Discharge is
                           E2 - Natural (N.Binds.Length) + 1;
                      begin
                         for B of N.Binds loop
-                           Envs (Cell).Val := Ev (B.Rhs, E2);
+                           --  Ev BEFORE indexing into Envs: Ev can
+                           --  Bind (append), and appending while an
+                           --  Envs reference is live is container
+                           --  tampering. Latent since M81 - only a
+                           --  claim whose rec-let rhs itself binds
+                           --  reaches it, which none did until the
+                           --  M127 id shifts changed an evaluation
+                           --  path in examples/cal.
+                           declare
+                              V : constant Value_Id :=
+                                Ev (B.Rhs, E2);
+                           begin
+                              Envs (Cell).Val := V;
+                           end;
                            Cell := Cell + 1;
                         end loop;
                      end;
