@@ -13,48 +13,112 @@ structured concurrency — and a complete bidirectional FFI with binding
 generators for C++, Rust, Go, and GHC.
 
 ```sh
-./bin/ahc build Foo.hs        # Haskell -> C -> native executable
+ahc build Foo.hs   # Haskell -> C -> native executable
 ./Foo
-./bin/ahc repl                # interactive (docs/repl-design-note.md)
+ahc repl           # interactive
 ```
 
-New here? **`docs/STUDY-GUIDE.md`** is the guided path through the
-codebase: eight stations from tokens to graph reduction, each with the
-source to read, the stage dumps to run, and a test question — plus an
-exercise ladder from "add a Prelude function" to "strike an EXCLUSIONS
-row". **`docs/MANUAL.md`** is the complete manual — every design
-decision and the theory behind it, written for a reader who is not a
-compiler engineer. `docs/adahc-PRD.md` holds the full product
-requirements (`docs/adahc PRD.rtf` is the original).
+## Getting started
 
-Want to point AHC at code it has never seen? **`docs/repos-to-try.md`**
-lists nine GitHub projects — a sudoku solver, a maze generator,
-Conway's Life, an interactive tic-tac-toe — none written with AHC in
-mind, each with the exact commands to build and run it, plus the search
-recipe that found them and what usually blocks a repo.
+**What you need.** [Alire](https://alire.ada.dev/) with a GNAT ≥ 13
+toolchain (`alr toolchain --select gnat_native gprbuild`) to build the
+compiler, and `clang` to build the C it emits. The
+Boehm-Demers-Weiser GC is optional — install it (`brew install
+bdw-gc`) and AHC links it automatically; without it, programs run on
+plain malloc and never collect. There are no prebuilt binaries yet,
+and the compiler has only been exercised on macOS (see
+[Status and scope](#status-and-scope)).
 
-## Building
-
-Requires [Alire](https://alire.ada.dev/) with a GNAT ≥ 13 toolchain
-(`alr toolchain --select gnat_native gprbuild`).
+**Build the compiler.**
 
 ```sh
-alr build --validation   # all contracts enabled (default for development)
-alr build --release      # contracts compiled out
+git clone https://github.com/m15k/Ada-Haskell-Compiler.git
+cd Ada-Haskell-Compiler
+alr build --release        # or --validation, to run AHC's own contracts
 ./bin/ahc --version
 ```
 
-## Testing
+`./bin/ahc` finds its Prelude, standard library, and runtime relative
+to itself, so you can put it on your `PATH` and work anywhere.
 
-```sh
-cd tests
-alr build --validation
-./bin/ahc_tests
+**Your first program.**
+
+```haskell
+-- Hello.hs
+main :: IO ()
+main = mapM_ putStrLn [greet n | n <- [1 .. 3 :: Int]]
+  where greet n = "hello " ++ show n
 ```
 
-The tests crate always builds with contracts enabled; some tests assert
-that violated contracts actually raise `Assert_Failure`. The end-to-end
-harnesses live in `scripts/` — see [Verification](#verification).
+```sh
+ahc build Hello.hs && ./Hello
+```
+
+**A project.** Drop an `ahc.toml` beside your root module and `ahc
+build` needs no arguments. Imported modules resolve beside the root
+(`A.B.C` in `A/B/C.hs`), so multi-module programs need no extra
+configuration:
+
+```toml
+main   = "Main.hs"      # required
+output = "myapp"        # default: the root name minus .hs
+# lib = true            # build a static archive + C header instead
+# unchecked = true      # compile refinement/contract checks out
+# gc = "own"            # boehm (default) | own | none
+# cflags  = "-I/opt/include"
+# ldflags = "-lsqlite3"
+```
+
+Command-line flags and environment variables override the manifest.
+`examples/httpd/` is a working two-module project laid out this way.
+
+**Where to go next.** `ahc repl` for an interactive session
+(`docs/repl-design-note.md`); `examples/` for seven complete programs,
+from a mini-Lisp interpreter to an HTTP server; and **`docs/MANUAL.md`**
+— the full manual, written for a reader who is not a compiler
+engineer, covering both the language as shipped and every design
+decision behind it. Want to point AHC at code it has never seen?
+**`docs/repos-to-try.md`** lists nine GitHub projects — a sudoku
+solver, a maze generator, Conway's Life, an interactive tic-tac-toe —
+none written with AHC in mind, each with the exact commands to build
+and run it, plus the search recipe that found them and what usually
+blocks a repo.
+
+## Status and scope
+
+AHC is a complete, verified implementation of **Haskell 2010** — not a
+GHC replacement. Read that as a promise and a limit:
+
+- **The promise.** 74 conformance programs are byte-identical to GHC
+  9.4.8's output, and a differential fuzzer keeps checking randomly
+  generated programs against it. Everything the Report requires and
+  AHC does not implement is written down in
+  [`tests/conformance/EXCLUSIONS.md`](tests/conformance/EXCLUSIONS.md)
+  rather than tested weakly.
+- **The limit.** No GHC extensions, no `base` beyond the subset in
+  `lib/`, and no package ecosystem — a program's dependencies are the
+  modules beside it plus AHC's own standard library. Programs using
+  the Ada extension (refinement types, contracts, deterministic
+  concurrency) are AHC-only by construction; ordinary Haskell 2010
+  stays portable to GHC, which is exactly how the test suite proves
+  itself.
+- **Platforms.** Developed and tested on macOS (x86-64). The Linux
+  code paths exist but have not been exercised; Windows is not
+  supported.
+
+## Working on AHC itself
+
+```sh
+alr build --validation     # all contracts enabled (the dev default)
+cd tests && alr build --validation && ./bin/ahc_tests
+```
+
+The tests crate always builds with contracts enabled; some tests
+assert that violated contracts actually raise `Assert_Failure`. The
+end-to-end harnesses live in `scripts/` — see
+[Verification](#verification). **`docs/STUDY-GUIDE.md`** is the guided
+path through the codebase, and `docs/adahc-PRD.md` holds the original
+product requirements.
 
 ## The compiler
 
@@ -479,6 +543,16 @@ Full details per release in `CHANGES.md`.
   collector (`docs/*-design-note.md`), the fuzzer guide
   (`docs/fuzzer-guide.md`), and the stdlib plan (`docs/stdlib-plan.md`)
 - `tests/conformance/EXCLUSIONS.md` — what is deliberately absent, and why
+
+## License
+
+Dual-licensed at your option under [MIT](LICENSE-MIT) or
+[Apache-2.0 with the LLVM exception](LICENSE-APACHE) — the Rust/LLVM
+arrangement. The LLVM exception matters here: it removes the
+attribution requirement for the runtime that AHC-compiled programs
+link against, so a binary produced by `ahc build` carries no notice
+obligation from the compiler itself. Contributions are dual-licensed
+the same way; see [LICENSE](LICENSE).
 
 ## Layout
 

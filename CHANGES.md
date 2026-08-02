@@ -36,6 +36,22 @@ Pinned by ch08_prelude_index_read.hs, both new conformance programs
 byte-identical to GHC 9.4.8. All ten harnesses, the 219 unit tests
 and the fuzzer stay green.
 
+## Unreleased
+
+**License + getting started (M130).** The dual license alire.toml has
+declared since M0 now exists as text: LICENSE-MIT, LICENSE-APACHE
+(Apache-2.0 with the LLVM exception - which removes the attribution
+requirement for the runtime AHC-compiled programs link against, so an
+`ahc build` binary carries no notice obligation from the compiler),
+and a LICENSE pointing at both. The README opens for USERS rather
+than contributors: a Getting started section (what you need, build the
+compiler, hello world, an ahc.toml project - every step run verbatim
+on a clean directory before shipping), a Status and scope section
+stating the promise (74 GHC-byte-identical conformance programs, a
+fuzzer, EXCLUSIONS instead of weak tests) next to the limits (no GHC
+extensions, no package ecosystem, macOS-only so far), and a License
+section. Contributor material moved to "Working on AHC itself".
+
 ## v1.8 (2026-08-01)
 
 The IO release (M126-M129): the green scheduler learns to wait on

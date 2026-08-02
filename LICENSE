@@ -1,0 +1,17 @@
+AHC is dual-licensed, at your option, under either of
+
+  * MIT license (LICENSE-MIT, or
+    https://opensource.org/licenses/MIT)
+  * Apache License, Version 2.0, with the LLVM exception
+    (LICENSE-APACHE, or https://www.apache.org/licenses/LICENSE-2.0
+    plus the exception text at the end of that file)
+
+This is the Rust/LLVM dual-licensing arrangement: the MIT option keeps
+things simple, the Apache option adds an explicit patent grant, and the
+LLVM exception removes the attribution requirement for the runtime
+that AHC-compiled programs link against — so a binary produced by
+`ahc build` carries no notice obligation from the compiler itself.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work by you shall be dual-licensed as
+above, without any additional terms or conditions.
