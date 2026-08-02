@@ -15,6 +15,7 @@ with Ada.Text_IO;
 with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
+with Ada.Environment_Variables;
 
 with AHC.Bindgen;
 with AHC.Build;
@@ -28,6 +29,7 @@ with AHC.Elaborate;
 with AHC.Fixity;
 with AHC.Kinds;
 with AHC.Layout;
+with AHC.Manifest;
 with AHC.Paths;
 with AHC.Modules;
 with AHC.Optimizer;
@@ -1178,12 +1180,64 @@ begin
                   end if;
                end;
             end loop;
+            --  No source argument: a project directory names its
+            --  root in ahc.toml (M129). CLI flags and environment
+            --  variables override manifest values.
+            if not Bad and then not Expect_Out
+              and then not Expect_Jobs and then Src = ""
+              and then Ada.Directories.Exists ("ahc.toml")
+            then
+               declare
+                  Proj : AHC.Manifest.Project;
+
+                  procedure Append_Env (Name, Extra : String) is
+                     Cur : constant String :=
+                       (if Ada.Environment_Variables.Exists (Name)
+                        then Ada.Environment_Variables.Value (Name)
+                        else "");
+                  begin
+                     if Extra /= "" then
+                        Ada.Environment_Variables.Set
+                          (Name,
+                           (if Cur = "" then Extra
+                            else Cur & " " & Extra));
+                     end if;
+                  end Append_Env;
+               begin
+                  if not AHC.Manifest.Load ("ahc.toml", Proj) then
+                     Set_Exit_Status (2);
+                     return;
+                  end if;
+                  Src := Proj.Main;
+                  if Dest = "" then
+                     Dest := Proj.Output;
+                  end if;
+                  Refined  := Refined and not Proj.Unchecked;
+                  Optimize := Optimize and not Proj.No_Opt;
+                  Lib      := Lib or Proj.Lib;
+                  if Jobs = 0 then
+                     Jobs := Proj.Jobs;
+                  end if;
+                  Append_Env ("AHC_CFLAGS",
+                              To_String (Proj.Cflags));
+                  Append_Env ("AHC_LDFLAGS",
+                              To_String (Proj.Ldflags));
+                  if Proj.GC /= ""
+                    and then not Ada.Environment_Variables.Exists
+                      ("AHC_GC")
+                  then
+                     Ada.Environment_Variables.Set
+                       ("AHC_GC", To_String (Proj.GC));
+                  end if;
+               end;
+            end if;
             if Bad or else Expect_Out or else Expect_Jobs
               or else Src = ""
             then
                Usage_Error
                  ("expected: ahc build [--lib] FILE.hs [OUT]"
-                  & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]");
+                  & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]"
+                  & " (or an ahc.toml in the current directory)");
             else
                if Dest = "" then
                   declare

@@ -1,0 +1,5 @@
+# ahttpd is a project directory: a bare `ahc build` in here reads
+# this and does the rest (M129). CLI flags and environment
+# variables override manifest values.
+main = "ahttpd.hs"
+output = "ahttpd"

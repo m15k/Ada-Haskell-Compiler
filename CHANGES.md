@@ -27,6 +27,17 @@ vector against its own evaluation - the validation build's
 tampering check caught it), fixed by sequencing the evaluation
 before the store.
 
+**ahc.toml - the project manifest (M129).** A bare `ahc build` in
+a directory holding an ahc.toml reads it instead of requiring a
+source argument: flat keys only (main, output, lib, unchecked,
+no-opt, gc, cflags, ldflags, jobs), no sections, no dependency
+solver - with no package ecosystem to manage, a build system
+reduces to naming the root module and the flags a project always
+wants. CLI flags and environment variables override manifest
+values; unknown keys are errors, loudly. examples/httpd carries
+the model manifest; run_build.sh pins the bare build, a manifest
+flag taking effect, and the unknown-key rejection.
+
 ## v1.7 (2026-08-01)
 
 The builder release (M124-M125): the build moves into the compiler

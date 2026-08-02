@@ -899,7 +899,11 @@ env override, then the current directory, then the installation),
 project could only build from the checkout root. The parallel pass
 is guarded by its own harness (`scripts/run_build.sh`): out-of-tree
 build, -j1-vs-j4 byte-identity, the shim's env translation, and a
-link failure surfacing the toolchain's message. Cold-building the
+link failure surfacing the toolchain's message. A project
+directory can name its root once: a bare `ahc build` reads
+`ahc.toml` (M129) - flat keys only (main, output, lib, unchecked,
+no-opt, gc, cflags, ldflags, jobs), CLI flags and environment
+variables override, unknown keys are errors. Cold-building the
 interpreter takes 10.0s at -j1 and 3.7s at -j auto on twelve CPUs;
 a no-change rebuild is 0.8s.
 

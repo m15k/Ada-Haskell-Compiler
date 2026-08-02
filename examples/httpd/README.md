@@ -4,7 +4,7 @@ A working HTTP server over the raw libc socket API through the FFI —
 no framework, no hidden runtime support, ~200 lines across two
 modules. `scripts/run_httpd.sh` keeps it green.
 
-    ahc build examples/httpd/ahttpd.hs ahttpd
+    cd examples/httpd && ahc build    # ahc.toml names the rest
     ./ahttpd 8080
     curl http://127.0.0.1:8080/
 

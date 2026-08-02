@@ -58,5 +58,25 @@ if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q "nope-no-such-library"
 then step "link failure: toolchain message + nonzero exit"
 else flunk "link failure surface (rc=$rc)"; fi
 
+# 5. ahc.toml: a bare `ahc build` in a project directory reads the
+#    manifest; unknown keys are rejected loudly
+proj="$tmp/proj"; mkdir -p "$proj"
+cp tests/build/Range.hs "$proj/Range.hs"
+cat > "$proj/ahc.toml" <<'MANIFEST'
+# the smallest honest manifest
+main = "Range.hs"
+output = "rng"
+unchecked = true
+MANIFEST
+if ( cd "$proj" && "$root/bin/ahc" build ) >/dev/null 2>&1 \
+   && [ "$("$proj/rng")" = "12" ]
+then step "ahc.toml: bare build, manifest flags applied"
+else flunk "ahc.toml build"; fi
+printf 'main = "Range.hs"\nbogus = 1\n' > "$proj/ahc.toml"
+if ( cd "$proj" && "$root/bin/ahc" build ) 2>&1 \
+   | grep -q "unknown key 'bogus'"
+then step "ahc.toml: unknown key rejected with a message"
+else flunk "ahc.toml unknown key"; fi
+
 [ $fail -eq 0 ] && echo "ahc build harness: all green"
 exit $fail
