@@ -706,7 +706,7 @@ package body AHC.Prelude_Core is
                      if Tvs (I) = N.Tv
                        and then I <= Params.Last_Index
                      then
-                        return Expr_Id (V (Var_Id (Params (I))));
+                        return Expr_Id (V (Var_Id (Params.Element (I))));
                      end if;
                   end loop;
                   return No_Expr;

@@ -85,7 +85,7 @@ package body AHC.Exhaustive is
          declare
             Args : Nat_Vectors.Vector;
          begin
-            Args.Append (Norm (Syntax.Pat_Id (Items (From))));
+            Args.Append (Norm (Syntax.Pat_Id (Items.Element (From))));
             Args.Append (Norm_List (Items, From + 1));
             return Add ((Kind => Con_A,
                          Con => Core.Real_DataCon_Id (Env.Cons_DC),

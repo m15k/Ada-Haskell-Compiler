@@ -444,13 +444,13 @@ package body AHC.Refine is
                   for I in reverse 1 .. Xs.Last_Index loop
                      Inner := M.Add (Expr_Node'
                        (Kind => Lam_C, Span => Span0,
-                        Binder => Real_Var_Id (Xs (I)),
+                        Binder => Real_Var_Id (Xs.Element (I)),
                         Lam_Body => Inner));
                   end loop;
                   for I in reverse 1 .. Ds.Last_Index loop
                      Inner := M.Add (Expr_Node'
                        (Kind => Lam_C, Span => Span0,
-                        Binder => Real_Var_Id (Ds (I)),
+                        Binder => Real_Var_Id (Ds.Element (I)),
                         Lam_Body => Inner));
                   end loop;
                   return Inner;

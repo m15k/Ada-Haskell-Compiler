@@ -1207,7 +1207,7 @@ package body AHC.Typechecker is
                                     then
                                        W.Sol := By_Param;
                                        W.Dict :=
-                                         Var_Id (Params (CI));
+                                         Var_Id (Params.Element (CI));
                                        W_List.Replace_Element (I, W);
                                     end if;
                                  end loop;

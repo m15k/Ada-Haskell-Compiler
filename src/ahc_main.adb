@@ -729,7 +729,7 @@ procedure AHC_Main is
                                       (Kind => AHC.Core.TFun_T,
                                        From =>
                                          AHC.Core.Real_Type_Id
-                                           (Args (I)),
+                                           (Args.Element (I)),
                                        To => Body_T));
                               end loop;
                               Sigs.Include
