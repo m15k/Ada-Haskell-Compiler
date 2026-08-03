@@ -50,10 +50,15 @@ jobs:
         run: alr -n build --release && alr -n build --validation
 
       - name: Boehm actually linked (not the silent malloc fallback)
+        # Not piped into grep: grep -q exits at the first match and
+        # SIGPIPEs the compiler mid-link, which is how this step
+        # "failed" on its first run while the discovery it tests
+        # was working perfectly.
         run: |
-          ./bin/ahc build tests/exec/hello.hs /tmp/hello -v 2>&1 \
-            | grep -q AHC_USE_BOEHM \
-            || { echo "collector not discovered on this platform"; exit 1; }
+          ./bin/ahc build tests/exec/hello.hs /tmp/hello -v > /tmp/b.log 2>&1
+          grep -q AHC_USE_BOEHM /tmp/b.log \
+            || { echo "collector not discovered on this platform"; \
+                 cat /tmp/b.log; exit 1; }
           /tmp/hello
 
       - name: Unit tests (219)
@@ -129,6 +134,20 @@ jobs:
 
       - name: Build (validation - contracts on)
         run: alr -n build --validation
+
+      - name: Drop the duplicate LC_RPATH (toolchain packaging)
+        # Alire's GNAT 14.2.1 stamps its own lib directory into the
+        # binary's rpath twice; dyld from macOS 26 on treats a
+        # duplicate LC_RPATH as fatal, so every ahc invocation aborts
+        # before main. Nothing to do with AHC - remove the extra copy
+        # and carry on.
+        run: |
+          for p in $(otool -l bin/ahc \
+                     | awk '/LC_RPATH/{getline;getline;print $2}' \
+                     | sort | uniq -d); do
+            install_name_tool -delete_rpath "$p" bin/ahc
+          done
+          ./bin/ahc --version
 
       - name: Boehm collector (default) still green
         run: scripts/run_exec.sh
