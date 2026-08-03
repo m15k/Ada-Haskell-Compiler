@@ -24,6 +24,15 @@ set -u
 cd "$(dirname "$0")/.."
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
 
+# ahttpd hard-codes Darwin's SOL_SOCKET/SO_REUSEADDR/O_NONBLOCK and
+# the sockaddr_in sin_len byte (examples/httpd/README.md says so).
+# Porting the example is its own piece of work; until then this
+# harness is honest about where it applies.
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "skip ahttpd harness: the example's socket constants are Darwin's"
+  exit 0
+fi
+
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"; kill $spid 2>/dev/null' EXIT
 fail=0
 spid=""

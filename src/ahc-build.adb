@@ -469,6 +469,38 @@ package body AHC.Build is
                     ("-L" & Prefix & "/lib -lgc");
                end if;
             end;
+            --  No Homebrew (or no bdw-gc in it): ask pkg-config,
+            --  which is how the collector is found everywhere else.
+            --  8.2 is the floor - green threads need the coroutine
+            --  API (GC_set_stackbottom), and an older collector
+            --  falls back to no-GC rather than miscompile.
+            if GC_Cflags = "" then
+               declare
+                  Have : Boolean;
+                  Ignore : constant String :=
+                    Capture ("pkg-config", "--atleast-version=8.2",
+                             "bdw-gc", Have);
+                  Cf_Ok, Lf_Ok : Boolean;
+               begin
+                  pragma Unreferenced (Ignore);
+                  if Have then
+                     declare
+                        Cf : constant String :=
+                          Capture ("pkg-config", "--cflags", "bdw-gc",
+                                   Cf_Ok);
+                        Lf : constant String :=
+                          Capture ("pkg-config", "--libs", "bdw-gc",
+                                   Lf_Ok);
+                     begin
+                        if Cf_Ok and then Lf_Ok then
+                           GC_Cflags := To_Unbounded_String
+                             (Cf & " -DAHC_USE_BOEHM -DGC_THREADS");
+                           GC_Ldflags := To_Unbounded_String (Lf);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
          end if;
       end;
 

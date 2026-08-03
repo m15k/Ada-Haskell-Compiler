@@ -13,6 +13,16 @@
 #include <ucontext.h>
 #include <poll.h>
 
+#if defined(AHC_GC_OWN) && !defined(__APPLE__)
+/* The own collector reads thread stack bounds with
+   pthread_get_stackaddr_np and the data segment through dyld. Linux
+   equivalents exist (pthread_getattr_np, __data_start/_end) and the
+   data-segment half is already written below - but the stack half is
+   not, and shipping it untested is how this project acquires bugs.
+   Say so plainly rather than failing at an undeclared function. */
+#error "AHC_GC=own is macOS-only today; use AHC_GC=boehm or none"
+#endif
+
 #include <pthread.h>
 
 #include "ahc_rts.h"

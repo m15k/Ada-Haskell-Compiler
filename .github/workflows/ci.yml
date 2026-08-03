@@ -1,18 +1,13 @@
 name: CI
 
-# PARKED: GitHub Actions on this private repo is blocked by an
-# account billing/spending-limit setting, so automatic runs would
-# only produce noise. The full suite gates every milestone LOCALLY
-# in the meantime. To activate CI once billing is resolved (or the
-# repo goes public), replace the trigger below with:
-#
-#   on:
-#     push:
-#       branches: [main]
-#     pull_request:
-#
-# and run once via: gh workflow run ci.yml
+# Activated when the repo went public (M132). The Linux leg is also
+# the project's FIRST Linux exercise - every milestone before this
+# was gated on macOS only - so treat ubuntu failures as findings
+# about AHC, not about the workflow.
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -37,6 +32,12 @@ jobs:
           fi
           "$HOME/.ghcup/bin/runghc" --version
 
+      - name: System packages (collector + pkg-config discovery)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgc-dev pkg-config
+          pkg-config --modversion bdw-gc
+
       - uses: alire-project/setup-alire@v4
 
       - name: Select GNAT toolchain
@@ -47,6 +48,13 @@ jobs:
 
       - name: Build (release)
         run: alr -n build --release && alr -n build --validation
+
+      - name: Boehm actually linked (not the silent malloc fallback)
+        run: |
+          ./bin/ahc build tests/exec/hello.hs /tmp/hello -v 2>&1 \
+            | grep -q AHC_USE_BOEHM \
+            || { echo "collector not discovered on this platform"; exit 1; }
+          /tmp/hello
 
       - name: Unit tests (219)
         run: |
@@ -80,6 +88,15 @@ jobs:
 
       - name: REPL transcripts
         run: scripts/run_repl.sh
+
+      - name: Build command (out-of-tree, -j determinism, manifest)
+        run: scripts/run_build.sh
+
+      - name: Install + dist tarball (relocatable, checkout-free)
+        run: scripts/run_install.sh
+
+      - name: FFI exports (C main against an AHC library)
+        run: scripts/run_export.sh
 
       - name: Fuzz (50 seeds)
         run: scripts/run_fuzz.sh 50 1
@@ -115,6 +132,9 @@ jobs:
 
       - name: Boehm collector (default) still green
         run: scripts/run_exec.sh
+
+      - name: ahttpd (Darwin-only socket constants)
+        run: scripts/run_httpd.sh
 
       - name: Own collector - correctness across GC cadences
         # five trigger floors x minor and major, each run proving
