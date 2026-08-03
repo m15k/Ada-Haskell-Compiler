@@ -108,8 +108,8 @@ package body AHC.Core.Printer is
          if I > 1 then
             Append (R, " ");
          end if;
-         Append (R, NM (Table, M.Info (Sch.Tvs (I)).Name)
-                    & "_" & Img (Natural (Sch.Tvs (I))));
+         Append (R, NM (Table, M.Info (Sch.Tvs.Element (I)).Name)
+                    & "_" & Img (Natural (Sch.Tvs.Element (I))));
       end loop;
       Append (R, ")");
       if not Sch.Context.Is_Empty then

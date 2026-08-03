@@ -1314,7 +1314,7 @@ package body AHC.Desugar is
          if Natural (U.Equations.Length) = 1 then
             declare
                N : constant Decl_Node :=
-                 Arena.Node (U.Equations (1));
+                 Arena.Node (U.Equations.Element (1));
                All_Vars : Boolean := True;
             begin
                for P of N.Fun_Pats loop
@@ -1395,7 +1395,7 @@ package body AHC.Desugar is
                when Fun_Unit =>
                   declare
                      V : constant Core.Var_Id :=
-                       Res.Decl_Var (Positive (U.Equations (1)));
+                       Res.Decl_Var (Positive (U.Equations.Element (1)));
                   begin
                      if V /= Core.No_Var then
                         Into.Append
@@ -1406,7 +1406,7 @@ package body AHC.Desugar is
                   end;
                when Pat_Unit =>
                   declare
-                     D : constant Real_Decl_Id := U.Equations (1);
+                     D : constant Real_Decl_Id := U.Equations.Element (1);
                      N : constant Decl_Node := Arena.Node (D);
                      Span : constant Diagnostics.Source_Span := N.Span;
                      PN : constant Pat_Node := Arena.Node (N.Pat);

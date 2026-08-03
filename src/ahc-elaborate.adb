@@ -473,7 +473,7 @@ package body AHC.Elaborate is
                                           Eq_Dict : constant
                                             Real_Expr_Id :=
                                               Ap2E (V2 (Real_Var_Id
-                                                (Cl_Info.Super_Sels
+                                                (Cl_Info.Super_Sels.Element
                                                    (1))),
                                                V2 (Self_D));
                                           Eq_M : constant

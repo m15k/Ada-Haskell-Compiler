@@ -106,7 +106,7 @@ package body Test_Rename is
          if Res.Decl_Var (I) /= AHC.Core.No_Var then
             Append (Out_Buf,
                     " " & Var_S (AHC.Core.Real_Var_Id
-                                   (Res.Decl_Var (I))));
+                                   (Res.Decl_Var.Element (I))));
          end if;
       end loop;
       Append (Out_Buf, "] P[");
