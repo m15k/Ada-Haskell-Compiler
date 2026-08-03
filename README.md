@@ -41,6 +41,23 @@ alr build --release        # or --validation, to run AHC's own contracts
 `./bin/ahc` finds its Prelude, standard library, and runtime relative
 to itself, so you can put it on your `PATH` and work anywhere.
 
+**Install it somewhere permanent** (optional — the checkout works as
+is):
+
+```sh
+scripts/install.sh --prefix ~/.local      # default: /usr/local
+scripts/install.sh --prefix ~/.local --uninstall
+```
+
+That lays down `PREFIX/bin/ahc` plus `PREFIX/share/ahc/` (the
+Prelude, standard library, runtime, and license texts) and touches
+nothing else. The tree is relocatable — move it, rename the prefix,
+or unpack a release tarball anywhere and it still works, because the
+compiler resolves everything relative to its own binary.
+`scripts/mkdist.sh` builds such a tarball
+(`ahc-<version>-<os>-<arch>.tar.gz`), whose unpacked directory is
+already a working installation.
+
 **Your first program.**
 
 ```haskell
@@ -475,6 +492,7 @@ scripts/run_export.sh              # FFI exports (run_bindgen.sh: four hosts)
 scripts/run_sqlite.sh              # the sqlite3 binding
 scripts/run_httpd.sh               # ahttpd: live HTTP session goldens
 scripts/run_build.sh               # ahc build: out-of-tree, -j determinism, failure surface
+scripts/run_install.sh             # install/dist: relocatable, checkout-free, uninstallable
 scripts/run_bench.sh               # benchmark suite (run_parbench.sh: SMP gate)
 scripts/run_c1_gate.sh             # own-collector gates: allocator...
 scripts/run_c2_gate.sh             #   ...collection correctness/footprint...

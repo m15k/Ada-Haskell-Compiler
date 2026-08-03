@@ -885,6 +885,15 @@ object (`scripts/run_separate.sh` proves all of this on every run),
 and interpreter rebuilds dropped from about six seconds to about
 one.
 
+Installation follows from the same resolution rule (M131). AHC.Paths
+recognizes two shapes beside a binary: a checkout (`<root>/prelude`,
+`lib`, `runtime`) and a Unix prefix (`<root>/share/ahc/...`), so
+`scripts/install.sh --prefix ~/.local` can land in a shared prefix
+without scattering Haskell sources through `/usr/local/lib`. Nothing
+is absolute: the installed tree is relocatable, and
+`scripts/mkdist.sh` ships it as a tarball whose unpacked directory
+is already a working compiler.
+
 Since M124 the build IS the compiler: `ahc build FILE.hs` runs
 emit in-process, hashes and compiles the changed units - in
 parallel, one worker per CPU (`-j N` overrides), each compiler's
@@ -1767,6 +1776,7 @@ and failed the truth.*
 | `scripts/run_repl.sh` | does the REPL behave? (pinned `tests/repl/*.in` transcripts through `ahc repl` — prompts, results, error-and-recovery, `:load` semantics — in a fixed scratch dir so diagnostic paths stay deterministic) |
 | `scripts/run_discharge.sh` | did compile-time contract discharge do exactly what it may? (trivially-true claims absent from the generated C, argument-dependent claims present, provably-false claims warn and stay) |
 | `scripts/run_build.sh` | does `ahc build` honor its contract? (out-of-tree multi-module build via AHC.Paths, -j1-vs-j4 byte-identical binaries, the shim's env translation, a link failure surfacing the toolchain's message) |
+| `scripts/run_install.sh` | is an INSTALLED compiler self-sufficient? (prefix shape, nothing written outside it, a stdlib+concurrency program built from an unrelated directory with no path reaching back into the checkout, a dist tarball that works unpacked in place and relocates, and an uninstall that removes what it added) |
 
 The layering matters: goldens catch *change*, the oracle catches
 *wrongness*, unit tests catch *stage-local* regressions, and the

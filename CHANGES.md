@@ -38,6 +38,20 @@ and the fuzzer stay green.
 
 ## Unreleased
 
+**Install + release tarballs (M131).** `scripts/install.sh --prefix
+DIR` lays down PREFIX/bin/ahc plus PREFIX/share/ahc/{prelude,lib,
+runtime} and writes nothing else; `--uninstall` removes exactly what
+it added. AHC.Paths learned the prefix shape alongside the checkout
+shape, which is what lets a shared prefix work without scattering
+Haskell sources through /usr/local/lib. `scripts/mkdist.sh` builds
+ahc-<version>-<os>-<arch>.tar.gz from the same install path (so the
+two layouts cannot drift), and the unpacked tarball is ALREADY a
+working compiler - its bundled install.sh only moves it somewhere
+permanent. scripts/run_install.sh pins the whole claim, including the
+strong form: an installed compiler builds a stdlib-and-concurrency
+program from an unrelated directory with no path reaching back into
+the checkout.
+
 **License + getting started (M130).** The dual license alire.toml has
 declared since M0 now exists as text: LICENSE-MIT, LICENSE-APACHE
 (Apache-2.0 with the LLVM exception - which removes the attribution

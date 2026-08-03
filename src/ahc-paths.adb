@@ -33,10 +33,20 @@ package body AHC.Paths is
 
    Install_Root : constant String := Compute_Install_Root;
 
+   --  Two install shapes, probed in this order after the CWD:
+   --    <root>/prelude, <root>/lib, <root>/runtime      (a checkout)
+   --    <root>/share/ahc/{prelude,lib,runtime}          (a prefix)
+   --  The second is why `make install` can target /usr/local without
+   --  scattering Haskell sources through /usr/local/lib, which
+   --  belongs to native libraries.
+
+   Share : constant String := "/share/ahc/";
+
    --  The shared cascade: env override wins outright (even if the
    --  target is missing, so the eventual error names the place the
    --  user asked for); otherwise first existing of CWD-relative,
-   --  install-relative; otherwise the CWD-relative default.
+   --  checkout-relative, prefix-relative; otherwise the CWD-relative
+   --  default.
 
    function Resolve (Env_Var, Rel : String) return String is
    begin
@@ -46,10 +56,13 @@ package body AHC.Paths is
       if Ada.Directories.Exists (Rel) then
          return Rel;
       end if;
-      if Install_Root /= ""
-        and then Ada.Directories.Exists (Install_Root & "/" & Rel)
-      then
-         return Install_Root & "/" & Rel;
+      if Install_Root /= "" then
+         if Ada.Directories.Exists (Install_Root & "/" & Rel) then
+            return Install_Root & "/" & Rel;
+         end if;
+         if Ada.Directories.Exists (Install_Root & Share & Rel) then
+            return Install_Root & Share & Rel;
+         end if;
       end if;
       return Rel;
    end Resolve;
@@ -75,10 +88,14 @@ package body AHC.Paths is
       if Ada.Directories.Exists ("lib/" & Rel) then
          return "lib/" & Rel;
       end if;
-      if Install_Root /= ""
-        and then Ada.Directories.Exists (Install_Root & "/lib/" & Rel)
-      then
-         return Install_Root & "/lib/" & Rel;
+      if Install_Root /= "" then
+         if Ada.Directories.Exists (Install_Root & "/lib/" & Rel) then
+            return Install_Root & "/lib/" & Rel;
+         end if;
+         if Ada.Directories.Exists (Install_Root & Share & "lib/" & Rel)
+         then
+            return Install_Root & Share & "lib/" & Rel;
+         end if;
       end if;
       return "";
    end Stdlib_File;

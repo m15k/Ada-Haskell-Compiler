@@ -9,6 +9,11 @@
 --  belongs to (<exe>/../prelude and friends). The last arm is what
 --  lets ahc compile a source file from ANY working directory: the
 --  binary knows where its own tree is.
+--
+--  Two installed shapes are recognized: a checkout (<root>/prelude,
+--  <root>/lib, <root>/runtime beside bin/ahc) and a Unix prefix
+--  (<root>/share/ahc/... - so `make install PREFIX=/usr/local` does
+--  not scatter Haskell sources through /usr/local/lib).
 
 with Ada.Directories;
 

@@ -40,3 +40,4 @@ examples/concurrency/rust_aliasing.c
 examples/concurrency/b2_smp
 examples/concurrency/b2_smp.build/
 examples/concurrency/b2_smp.c
+dist/
