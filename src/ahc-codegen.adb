@@ -1289,9 +1289,9 @@ package body AHC.CodeGen is
                     ("ahc_mk_selector(" & Img (I - 1) & ")"));
             end loop;
             for I in 1 .. Cl.Methods.Last_Index loop
-               if Cl.Methods (I).Selector /= No_Var then
+               if Cl.Methods.Element (I).Selector /= No_Var then
                   Special.Include
-                    (Real_Var_Id (Cl.Methods (I).Selector),
+                    (Real_Var_Id (Cl.Methods.Element (I).Selector),
                      To_Unbounded_String
                        ("ahc_mk_selector(" & Img (NS + I - 1)
                         & ")"));

@@ -476,7 +476,7 @@ package body AHC.Typechecker is
             declare
                Sel : constant Var_Id :=
                  (if I <= Info.Super_Sels.Last_Index
-                  then Var_Id (Info.Super_Sels (I)) else No_Var);
+                  then Var_Id (Info.Super_Sels.Element (I)) else No_Var);
                Sup_Ev : Real_Expr_Id := Ev;
             begin
                if Sel /= No_Var then

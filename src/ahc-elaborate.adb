@@ -282,7 +282,7 @@ package body AHC.Elaborate is
                            function Sib (I : Positive)
                              return Real_Expr_Id
                            is (Ap2E (V2 (Real_Var_Id
-                                 (Cl_Info.Methods (I).Selector)),
+                                 (Cl_Info.Methods.Element (I).Selector)),
                                V2 (Self_D)));
 
                            function Global_Named (Nm : String)
@@ -338,7 +338,7 @@ package body AHC.Elaborate is
                               Alts.Append (M.Add (Alt_Node'
                                 (Kind => Con_Alt, Span => Span,
                                  A_Con => Real_DataCon_Id
-                                   (M.Info (Ord_TC).Cons (Tag)),
+                                   (M.Info (Ord_TC).Cons.Element (Tag)),
                                  Binders =>
                                    Var_Id_Vectors.Empty_Vector,
                                  Alt_Body => A)));
@@ -359,7 +359,7 @@ package body AHC.Elaborate is
                                 (Kind => Con_C, Span => Span,
                                  Con => Real_DataCon_Id
                                    (M.Info (Real_TyCon_Id
-                                      (Env.Ordering_TC)).Cons
+                                      (Env.Ordering_TC)).Cons.Element
                                         (Tag)))));
 
                            function Bool_Con (T : Boolean)

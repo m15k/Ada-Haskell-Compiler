@@ -411,7 +411,7 @@ package body AHC.Prelude_Core is
          for I in 1 .. M.Info (TC).Cons.Last_Index loop
             Alts.Append (M.Add (Alt_Node'
               (Kind => Con_Alt, Span => Span,
-               A_Con => Real_DataCon_Id (M.Info (TC).Cons (I)),
+               A_Con => Real_DataCon_Id (M.Info (TC).Cons.Element (I)),
                Binders => Var_Id_Vectors.Empty_Vector,
                Alt_Body => F (I))));
          end loop;
@@ -612,7 +612,7 @@ package body AHC.Prelude_Core is
          for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
             declare
                DC : constant Real_DataCon_Id :=
-                 Real_DataCon_Id (M.Info (TC).Cons (I));
+                 Real_DataCon_Id (M.Info (TC).Cons.Element (I));
             begin
                Tbl := Cons
                  (Ap2 (ConE (Env.Tuple_DCs (2)),
@@ -849,7 +849,7 @@ package body AHC.Prelude_Core is
                            declare
                               Lbl : constant String :=
                                 Table.Text (Names.Real_Name_Id
-                                  (DInfo.Field_Names (I)))
+                                  (DInfo.Field_Names.Element (I)))
                                 & " = ";
                               FS : constant Real_Expr_Id :=
                                 Field_S (FTypes (I), Bs (I), 0,

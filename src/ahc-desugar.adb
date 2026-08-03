@@ -559,7 +559,7 @@ package body AHC.Desugar is
                            Matched : Boolean := False;
                         begin
                            for F of N.Rec_Fields loop
-                              if F.Field.Name = Info.Field_Names (FI)
+                              if F.Field.Name = Info.Field_Names.Element (FI)
                               then
                                  declare
                                     PN : constant Pat_Node :=
@@ -1176,7 +1176,7 @@ package body AHC.Desugar is
                                 Span);
                         begin
                            for F of N.Rec_Fields loop
-                              if F.Field.Name = Info.Field_Names (FI)
+                              if F.Field.Name = Info.Field_Names.Element (FI)
                               then
                                  Arg := Ds_Expr (F.Value);
                               end if;
@@ -1240,7 +1240,7 @@ package body AHC.Desugar is
                                  begin
                                     for F of N.Rec_Fields loop
                                        if F.Field.Name =
-                                          Info.Field_Names (FI)
+                                          Info.Field_Names.Element (FI)
                                        then
                                           Arg := Ds_Expr (F.Value);
                                        end if;
@@ -1334,7 +1334,7 @@ package body AHC.Desugar is
                         declare
                            PR : constant Resolution :=
                              Res.Pat_Res
-                               (Positive (N.Fun_Pats (I)));
+                               (Positive (N.Fun_Pats.Element (I)));
                         begin
                            Body_E := Lam (PR.Var, Body_E, Span);
                         end;
@@ -1363,7 +1363,7 @@ package body AHC.Desugar is
                for I in 1 .. N.Fun_Pats.Last_Index loop
                   Pairs.Append
                     (Pair'(Scrut => Args (I),
-                           Pat => Syntax.Pat_Id (N.Fun_Pats (I))));
+                           Pat => Syntax.Pat_Id (N.Fun_Pats.Element (I))));
                end loop;
                Result := Let1
                  (FV, Result,
@@ -1973,7 +1973,7 @@ package body AHC.Desugar is
                for FI in 1 .. Info.Field_Names.Last_Index loop
                   declare
                      Sel_C : constant Builtins.Var_Maps.Cursor :=
-                       Env.Values.Find (Info.Field_Names (FI));
+                       Env.Values.Find (Info.Field_Names.Element (FI));
                      Span : constant Diagnostics.Source_Span :=
                        (Start => 1, Stop => 1);
                   begin
@@ -2002,7 +2002,7 @@ package body AHC.Desugar is
                                    1 .. I2.Field_Names.Last_Index
                                  loop
                                     if I2.Field_Names (FJ) =
-                                       Info.Field_Names (FI)
+                                       Info.Field_Names.Element (FI)
                                     then
                                        declare
                                           Bs : Core.Var_Id_Vectors
@@ -2037,7 +2037,7 @@ package body AHC.Desugar is
                                 ("no match in record selector "
                                  & Table.Text
                                      (Names.Real_Name_Id
-                                        (Info.Field_Names (FI))),
+                                        (Info.Field_Names.Element (FI))),
                                  Span))));
                            G.Is_Rec := False;
                            G.Binds.Append (Core.Bind_Pair'
