@@ -55,7 +55,8 @@ jobs:
         # "failed" on its first run while the discovery it tests
         # was working perfectly.
         run: |
-          ./bin/ahc build tests/exec/hello.hs /tmp/hello -v > /tmp/b.log 2>&1
+          ./bin/ahc build tests/exec/hello.hs /tmp/hello -v > /tmp/b.log 2>&1 \
+            || { echo "--- build failed; full log:"; cat /tmp/b.log; exit 1; }
           grep -q AHC_USE_BOEHM /tmp/b.log \
             || { echo "collector not discovered on this platform"; \
                  cat /tmp/b.log; exit 1; }

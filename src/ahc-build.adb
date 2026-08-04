@@ -596,11 +596,21 @@ package body AHC.Build is
       --  stack so depth limits match practical programs. The linker
       --  spelling is per-OS.
       declare
-         Ok    : Boolean;
+         Ok, Ok_M : Boolean;
          Uname : constant String := Capture ("uname", "-s", Ok => Ok);
+         Arch  : constant String :=
+           Capture ("uname", "-m", Ok => Ok_M);
+         --  Darwin's linker caps -stack_size at 512MB on arm64 and
+         --  rejects anything larger outright, so the 1GB reservation
+         --  (M102: a 2M-deep no-opt thunk chain sat at the old edge)
+         --  is x86_64-only. Deep lazy chains hit their limit sooner
+         --  on Apple Silicon; the green threads' own 64MB stacks are
+         --  unaffected.
          Stack : constant String :=
            (if Uname = "Darwin"
-            then "-Wl,-stack_size,0x40000000"
+            then (if Arch = "arm64"
+                  then "-Wl,-stack_size,0x20000000"
+                  else "-Wl,-stack_size,0x40000000")
             else "-Wl,-z,stacksize=0x40000000");
          Args  : String_Vectors.Vector;
       begin
