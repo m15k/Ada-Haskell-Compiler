@@ -606,23 +606,38 @@ package body AHC.Build is
          --  is x86_64-only. Deep lazy chains hit their limit sooner
          --  on Apple Silicon; the green threads' own 64MB stacks are
          --  unaffected.
+         --
+         --  There is no ELF equivalent: GNU ld answers -z stacksize
+         --  with "ignored", because Linux sizes the main thread's
+         --  stack from RLIMIT_STACK at exec time, not from the
+         --  binary. So nothing is passed there, and deep chains are
+         --  bounded by `ulimit -s` (raising it is the user's lever;
+         --  giving main its own mmap'd stack is a future milestone).
          Stack : constant String :=
-           (if Uname = "Darwin"
-            then (if Arch = "arm64"
-                  then "-Wl,-stack_size,0x20000000"
-                  else "-Wl,-stack_size,0x40000000")
-            else "-Wl,-z,stacksize=0x40000000");
+           (if Uname /= "Darwin" then ""
+            elsif Arch = "arm64" then "-Wl,-stack_size,0x20000000"
+            else "-Wl,-stack_size,0x40000000");
          Args  : String_Vectors.Vector;
       begin
          Args.Append ("-O1");
          Args.Append ("-o");
          Args.Append (Out_Path);
-         Args.Append (Stack);
+         if Stack /= "" then
+            Args.Append (Stack);
+         end if;
          for O of Objects loop
             Args.Append (O);
          end loop;
          Append_Words (Args, To_String (GC_Ldflags));
          Append_Words (Args, To_String (User_Ldflags));
+         --  The runtime's Floating prims are libm calls (exp, log,
+         --  sqrt, pow, the trig family). Darwin carries them in
+         --  libSystem, which every link already gets; everywhere
+         --  else libm is a separate archive and the link fails with
+         --  undefined references to the whole math surface.
+         if Uname /= "Darwin" then
+            Args.Append ("-lm");
+         end if;
          if not Run ("clang", Args, Opts.Verbose) then
             return False;
          end if;
