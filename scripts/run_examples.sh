@@ -207,8 +207,10 @@ done
 #  identical runs is evidence the scheduler is reproducible. GHC
 #  fails this (measured: 2 distinct orders in 8 runs), which is why
 #  this example has no GHC oracle.
+#  (shasum, not md5: macOS has md5, Linux has md5sum, and CI found
+#  the difference the moment the suite first ran on Linux.)
 runs=$(for i in 1 2 3 4 5 6 7 8 9 10; do
-         ./examples/concurrency/go_csp | md5; done | sort -u | wc -l)
+         ./examples/concurrency/go_csp | shasum; done | sort -u | wc -l)
 if [ "$runs" -eq 1 ]; then
   echo "ok   examples/concurrency/go_csp (schedule reproducible, 10 runs)"
 else

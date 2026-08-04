@@ -70,9 +70,9 @@ esac
 
 base="http://127.0.0.1:$port"
 {
-  curl -s "$base/fact/25"
-  curl -s "$base/par/8"
-  curl -s "$base/json"
+  curl -s --max-time 10 "$base/fact/25"
+  curl -s --max-time 10 "$base/par/8"
+  curl -s --max-time 10 "$base/json"
   curl -s -i "$base/nope"
 } > "$tmp/client.out"
 
@@ -81,9 +81,12 @@ base="http://127.0.0.1:$port"
 overlap_ok=""
 if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
   sleep 0.3
-  b=$(curl -s "$base/")
+  b=$(curl -s --max-time 10 "$base/")
   printf 'GET /fact/10 HTTP/1.0\r\n\r\n' >&3
-  aresp=$(cat <&3)
+  #  Bounded: an unclosed connection would otherwise block until the
+  #  CI job's timeout - which is exactly what it did on the first
+  #  arm64 macOS run (60 minutes, then cancelled).
+  aresp=$(perl -e 'alarm 15; local $/; print <STDIN>' <&3 || true)
   exec 3<&-
   if [ -n "$b" ] && printf '%s' "$aresp" | grep -q 3628800; then
     overlap_ok=1
@@ -94,7 +97,7 @@ then step "concurrent handlers: A parked, B served, A completed"
 else flunk "concurrent handlers"; fi
 
 # 6. quit is a channel signal; the response still says bye
-if [ "$(curl -s "$base/quit")" = "bye" ]
+if [ "$(curl -s --max-time 10 "$base/quit")" = "bye" ]
 then step "/quit answered"
 else flunk "/quit response"; fi
 
@@ -119,7 +122,7 @@ then step "server log byte-identical"
 else flunk "server log diverged"; diff "$tmp/log" examples/httpd/tests/server.golden | head; fi
 
 # 5. the Port refinement fires before any socket call
-msg=$("$tmp/ahttpd" 70000 2>&1)
+msg=$(perl -e 'alarm 15; exec @ARGV' "$tmp/ahttpd" 70000 2>&1)
 if [ "$msg" = "refinement violation: 70000 not in 1 .. 65535" ]
 then step "port 70000 dies at the Port boundary"
 else flunk "port refinement (got: $msg)"; fi
