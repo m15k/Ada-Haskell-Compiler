@@ -20,7 +20,8 @@
 typedef enum {
   AHC_THUNK, AHC_BLACKHOLE, AHC_FUN, AHC_CON, AHC_IND,
   AHC_INT, AHC_DOUBLE, AHC_CHAR, AHC_BIGINT, AHC_PTR,
-  AHC_CLAIM   /* transient: tag claimed, owner not yet published */
+  AHC_CLAIM,  /* transient: tag claimed, owner not yet published */
+  AHC_BYTES   /* packed byte slice (Text): always-WHNF, immutable */
 } AhcTag;
 
 typedef struct AhcNode AhcNode;
@@ -39,6 +40,9 @@ struct AhcNode {
     double d;
     long c;
     struct { int32_t sign; int32_t n; uint32_t *d; } big;
+    /* byte slice into a shared immutable payload (valid UTF-8 by
+       construction); off/len make take/drop O(1) shares */
+    struct { int32_t len; int32_t off; uint8_t *b; } bytes;
     void *p;
   } u;
 };
@@ -61,6 +65,8 @@ AhcNode *ahc_mk_confun(int contag, int arity); /* curried worker      */
 AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
+AhcNode *ahc_mk_bytes(const uint8_t *src, int32_t len); /* copies     */
+AhcNode *ahc_mk_bytes_slice(AhcNode *t, int32_t off, int32_t len);
 AhcNode *ahc_mk_missing(const char *what);     /* dies when forced    */
 AhcNode *ahc_mk_ptr(void *p);                  /* foreign pointer     */
 

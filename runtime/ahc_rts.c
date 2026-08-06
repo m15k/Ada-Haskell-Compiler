@@ -36,14 +36,23 @@
 #if defined(AHC_GC_OWN)
 /* The collector campaign's own allocator (C1, leak mode -
    docs/collector-design-note.md). Kinds: 0 node, 1 ptr-array,
-   2 misc, 3 large. */
+   2 misc (conservatively scanned), 3 atomic (pointer-free, never
+   scanned); "large" is a block STATE, not a kind. Atomic blocks
+   hold byte payloads (Text) and bignum limbs - scanning them as
+   words was the false-retention hazard the design note's "atomic"
+   owner kind names. NOTE: unlike the other kinds, atomic memory is
+   NOT zeroed on recycle in every collector (Boehm's
+   GC_MALLOC_ATOMIC); callers must fully write what they read. */
 static void *own_alloc(int kind, size_t n);
 #define AHC_ALLOC(n) own_alloc(2, (n))
+#define AHC_ALLOC_ATOMIC(n) own_alloc(3, (n))
 #elif defined(AHC_USE_BOEHM)
 #include <gc.h>
 #define AHC_ALLOC(n) GC_MALLOC(n)
+#define AHC_ALLOC_ATOMIC(n) GC_MALLOC_ATOMIC(n)
 #else
 #define AHC_ALLOC(n) malloc(n)
+#define AHC_ALLOC_ATOMIC(n) malloc(n)
 #endif
 
 /* Boundary error recovery: while a foreign-export entry function is
@@ -419,7 +428,7 @@ static void die_msg_list(const char *prefix, AhcNode *cell) {
 #define OWN_RESERVE (64ul << 30)        /* virtual; committed lazily */
 #define OWN_MAX_SMALL 128
 #define OWN_NCLASS 16
-#define OWN_NKIND 4                     /* node, ptrarr, misc, large */
+#define OWN_NKIND 5                     /* node, ptrarr, misc, atomic, large */
 
 typedef struct OwnBlock {
   uint32_t kind;
@@ -437,7 +446,7 @@ static char *own_base, *own_commit, *own_end;
 static OwnBlock *own_pool;           /* fed by the C2 sweep */
 static pthread_mutex_t own_mx = PTHREAD_MUTEX_INITIALIZER;
 static long own_blocks_out[OWN_NKIND];   /* __atomic counters */
-static __thread OwnBlock *own_active[3][OWN_NCLASS];
+static __thread OwnBlock *own_active[4][OWN_NCLASS];
 /* Each thread carves blocks from a privately-held chunk, so the
    global lock (and the mprotect inside it) is paid once per 16MB,
    not once per block - the pool mutex showed up in the first C1
@@ -457,8 +466,8 @@ enum {
 #define OWN_MAX_BLOCKS (OWN_RESERVE / OWN_BLOCK)
 static unsigned char *own_bstate;        /* one byte per block */
 static unsigned char *own_marks;         /* 1 bit / 8 heap bytes */
-static OwnBlock *own_partial[3][OWN_NCLASS];  /* free-slot blocks */
-static __thread void *own_free_tls[3][OWN_NCLASS];
+static OwnBlock *own_partial[4][OWN_NCLASS];  /* free-slot blocks */
+static __thread void *own_free_tls[4][OWN_NCLASS];
 static long own_since_gc;                /* bytes handed out */
 static long own_live_bytes;              /* after last sweep */
 static long own_gc_count;
@@ -613,7 +622,7 @@ static void *own_alloc_large(uint32_t kind, size_t n) {
   pthread_mutex_lock(&own_mx);
   b = (OwnBlock *)own_commit_span(nb * OWN_BLOCK);
   pthread_mutex_unlock(&own_mx);
-  __atomic_fetch_add(&own_blocks_out[3], 1, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&own_blocks_out[4], 1, __ATOMIC_RELAXED);
   __atomic_fetch_add(&own_since_gc, (long)(nb * OWN_BLOCK),
                      __ATOMIC_RELAXED);
   b->kind = kind;                /* the REAL kind; large is a state */
@@ -676,10 +685,10 @@ static void *own_alloc(int kind, size_t n) {
 
 static void own_stats(void) {
   fprintf(stderr,
-          "own gc: blocks node %ld ptrarr %ld misc %ld large %ld"
-          " (%.1f MB committed)\n",
+          "own gc: blocks node %ld ptrarr %ld misc %ld atomic %ld"
+          " large %ld (%.1f MB committed)\n",
           own_blocks_out[0], own_blocks_out[1],
-          own_blocks_out[2], own_blocks_out[3],
+          own_blocks_out[2], own_blocks_out[3], own_blocks_out[4],
           (double)(own_commit - own_base) / (1024.0 * 1024.0));
   {
     double wall = own_now() - own_t_start;
@@ -1091,6 +1100,37 @@ AhcNode *ahc_mk_string(const char *s) {
   return ahc_mk_string_len(s, strlen(s));
 }
 
+/* ----- Packed byte slices (Text) --------------------------------- */
+/* Always-WHNF nodes over an immutable out-of-line payload in an
+   ATOMIC (never-scanned) allocation. Payload before node - the
+   construction-order invariant - and fully written before any
+   handle escapes (atomic memory is not zeroed). */
+
+AhcNode *ahc_mk_bytes(const uint8_t *src, int32_t len) {
+  uint8_t *b = (uint8_t *)AHC_ALLOC_ATOMIC(len > 0 ? (size_t)len : 1);
+  AhcNode *r;
+  if (!b) ahc_die("out of memory");
+  if (len > 0) memcpy(b, src, (size_t)len);
+  r = alloc_node();
+  r->tag = AHC_BYTES;
+  r->u.bytes.len = len;
+  r->u.bytes.off = 0;
+  r->u.bytes.b = b;
+  return r;
+}
+
+/* Share t's payload: the parent existed first, so the invariant
+   holds without a copy. Bounds are the caller's contract. */
+AhcNode *ahc_mk_bytes_slice(AhcNode *t, int32_t off, int32_t len) {
+  AhcNode *w = ahc_eval(t);
+  AhcNode *r = alloc_node();
+  r->tag = AHC_BYTES;
+  r->u.bytes.len = len;
+  r->u.bytes.off = w->u.bytes.off + off;
+  r->u.bytes.b = w->u.bytes.b;
+  return r;
+}
+
 /* ----- Integer bignum -------------------------------------------- */
 /* Sign+magnitude, uint32 limbs little-endian. CANONICAL FORM: any
    value that fits a C long lives in an AHC_INT node; AHC_BIGINT
@@ -1098,8 +1138,12 @@ AhcNode *ahc_mk_string(const char *s) {
 
 typedef uint32_t limb;
 
+/* Limbs are pointer-free: the atomic kind keeps the conservative
+   scan out of them (a limb pattern that looked like a heap address
+   was retention for the whole block). Every caller fully writes
+   the limbs it reads - atomic memory is not zeroed. */
 static limb *limb_alloc(int n) {
-  limb *d = (limb *)AHC_ALLOC(sizeof(limb) * (n > 0 ? n : 1));
+  limb *d = (limb *)AHC_ALLOC_ATOMIC(sizeof(limb) * (n > 0 ? n : 1));
   if (!d) ahc_die("out of memory");
   return d;
 }
@@ -1143,8 +1187,7 @@ static AhcNode *mk_big(int sign, limb *d, int n) {
 AhcNode *ahc_mk_ulong(unsigned long v) {
   limb *d;
   if (v <= (unsigned long)LONG_MAX) return ahc_mk_int((long)v);
-  d = (limb *)AHC_ALLOC(2 * sizeof(limb));
-  if (!d) ahc_die("out of memory");
+  d = limb_alloc(2);
   d[0] = (limb)(v & 0xffffffffUL);
   d[1] = (limb)(v >> 32);
   return mk_big(1, d, 2);
@@ -1880,6 +1923,18 @@ static int poly_cmp(AhcNode *a, AhcNode *b) {
   case AHC_PTR:
     return ((uintptr_t)a->u.p > (uintptr_t)b->u.p) -
            ((uintptr_t)a->u.p < (uintptr_t)b->u.p);
+  case AHC_BYTES: {
+    /* byte-lexicographic == code-point order over valid UTF-8, so
+       this is Ord Text as well as Eq Text */
+    int32_t n = a->u.bytes.len < b->u.bytes.len
+              ? a->u.bytes.len : b->u.bytes.len;
+    int c = n > 0 ? memcmp(a->u.bytes.b + a->u.bytes.off,
+                           b->u.bytes.b + b->u.bytes.off,
+                           (size_t)n) : 0;
+    if (c != 0) return c < 0 ? -1 : 1;
+    return (a->u.bytes.len > b->u.bytes.len) -
+           (a->u.bytes.len < b->u.bytes.len);
+  }
   default:
     ahc_die("comparing functions");
   }
@@ -2794,7 +2849,7 @@ static AhcTask worker_shells[AHC_MAX_WORKERS];
 static char *worker_stack_top[AHC_MAX_WORKERS];
 static char *worker_parked_sp[AHC_MAX_WORKERS];
 static OwnBlock
-  *gc_pub_active[AHC_MAX_WORKERS + 1][3][OWN_NCLASS];
+  *gc_pub_active[AHC_MAX_WORKERS + 1][4][OWN_NCLASS];
 #endif
 static pthread_mutex_t idle_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t idle_cv = PTHREAD_COND_INITIALIZER;
@@ -3222,12 +3277,18 @@ static void gc_trace(AhcNode *o) {
     case AHC_BIGINT:
       gc_push(o->u.big.d);
       break;
+    case AHC_BYTES:
+      gc_push(o->u.bytes.b);             /* payload is atomic: kept
+                                            alive, never scanned */
+      break;
     default:                              /* INT DOUBLE CHAR PTR */
       break;
     }
-  } else {
+  } else if (b->kind != 3) {
     /* ptr-array: homogeneous node pointers; misc: conservative.
-       Either way every word goes through the filter. */
+       Either way every word goes through the filter. Atomic (3)
+       blocks hold no pointers by contract - scanning them was the
+       false-retention hazard the atomic kind exists to remove. */
     gc_scan_range((const char *)o, (const char *)o + sz);
   }
 }
@@ -3332,7 +3393,7 @@ static long gc_sweep(int major) {
   /* flag the blocks threads are actively bumping; they also stay
      dirty (their bumps continue into the next cycle) */
   for (w = 0; w <= AHC_MAX_WORKERS; w++)
-    for (k = 0; k < 3; k++)
+    for (k = 0; k < 4; k++)
       for (c = 0; c < OWN_NCLASS; c++)
         if (gc_pub_active[w][k][c]) {
           gc_pub_active[w][k][c]->gc_active = 1;
@@ -3446,7 +3507,7 @@ static long gc_sweep(int major) {
     }
   }
   for (w = 0; w <= AHC_MAX_WORKERS; w++)
-    for (k = 0; k < 3; k++)
+    for (k = 0; k < 4; k++)
       for (c = 0; c < OWN_NCLASS; c++)
         if (gc_pub_active[w][k][c]) {
           gc_pub_active[w][k][c]->gc_active = 0;
@@ -3570,12 +3631,13 @@ static void own_verify_closure(void) {
     if (own_bstate[bi] == OWN_B_LARGE_HEAD) {
       char *o = (char *)b + OWN_HDR;
       size_t w;
-      if (own_marked(o))
+      if (own_marked(o) && b->kind != 3)   /* atomic: no edges */
         for (w = 0; w + 8 <= b->size_class; w += 8)
           own_vcheck(o, "large", *(void **)(o + w));
       bi += b->nblocks - 1;
       continue;
     }
+    if (b->kind == 3) continue;            /* atomic: no edges */
     sc = b->size_class;
     for (off = OWN_HDR; off + sc <= b->bump; off += sc) {
       char *o = (char *)b + off;
@@ -3592,6 +3654,8 @@ static void own_verify_closure(void) {
           own_vcheck(o, "bh.owner", n->u.bh.owner);
           own_vcheck(o, "bh.waiters", n->u.bh.waiters); break;
         case AHC_BIGINT: own_vcheck(o, "big.d", n->u.big.d); break;
+        case AHC_BYTES:
+          own_vcheck(o, "bytes.b", n->u.bytes.b); break;
         default: break;
         }
       } else {

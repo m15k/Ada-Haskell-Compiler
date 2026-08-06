@@ -188,6 +188,16 @@ fresh one taken from the global pool under a lock paid once per
 structural - and it is deliberately the SAME shape at 1 thread
 and at 32.
 
+*(String milestone: the atomic owner kind named above is now
+implemented as kind 3 - never scanned, only kept alive. Text byte
+payloads and bignum limbs live there; limbs previously sat in the
+conservatively-word-scanned misc kind, where a limb pattern that
+looked like a heap address retained a whole block. The tracer
+skips kind-3 blocks, the closure verifier treats them as edge-free,
+and the sweep needed nothing: it is mark-bit-driven and
+kind-agnostic. Atomic memory is NOT zeroed under Boehm
+(GC_MALLOC_ATOMIC) - callers fully write what they read.)*
+
 **Collection v1 (campaign stage C2)**: stop the world; mark from
 roots (thread-stack extents conservatively, the generated
 `g_Module_*` globals precisely via codegen-emitted root arrays,
