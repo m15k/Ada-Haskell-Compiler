@@ -1456,6 +1456,35 @@ package body AHC.Builtins is
                  ("peekCStringLen",
                   Mono (FN (AP (TC (Env.Ptr_TC), TC (Env.Char_TC)),
                             I_T, IO_T (String_T2))));
+
+               --  Text IO + C-string bridges (lib/Data/Text.hs).
+               --  Handle-free by design: Handle's constructor is
+               --  private to System.IO. Full M_Text marshaling and
+               --  hPutText are the plan's F2.
+               declare
+                  Text_T2 : constant Real_Type_Id :=
+                    TC (Env.Text_TC);
+               begin
+                  Ignore := Def_Global
+                    ("primTextPut",
+                     Mono (FN (Text_T2, IO_T (U_T))));
+                  Ignore := Def_Global
+                    ("primTextReadFile",
+                     Mono (FN (String_T2, IO_T (Text_T2))));
+                  Ignore := Def_Global
+                    ("primTextWriteFile",
+                     Mono (FN (String_T2, Text_T2, IO_T (U_T))));
+                  Ignore := Def_Global
+                    ("primTextFromCStringLen",
+                     Mono (FN (AP (TC (Env.Ptr_TC),
+                                   TC (Env.Char_TC)),
+                               I_T, IO_T (Text_T2))));
+                  Ignore := Def_Global
+                    ("primTextNewCString",
+                     Mono (FN (Text_T2,
+                               IO_T (AP (TC (Env.Ptr_TC),
+                                         TC (Env.Char_TC))))));
+               end;
             end;
          end;
          pragma Unreferenced (Ignore);

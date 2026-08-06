@@ -1318,6 +1318,12 @@ package body AHC.Prelude_Core is
          BP ("primTextIndex", "ahc_prim_text_index");
          BP ("primTextTake", "ahc_prim_text_take");
          BP ("primTextDrop", "ahc_prim_text_drop");
+         BP ("primTextPut", "ahc_prim_text_put");
+         BP ("primTextReadFile", "ahc_prim_text_readfile");
+         BP ("primTextWriteFile", "ahc_prim_text_writefile");
+         BP ("primTextFromCStringLen",
+             "ahc_prim_text_from_cstring_len");
+         BP ("primTextNewCString", "ahc_prim_text_new_cstring");
       end;
 
       --  quot/rem/div/mod are Integral methods now; their prims are

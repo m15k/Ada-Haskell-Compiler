@@ -11,9 +11,10 @@
 -- a real finding, never menu noise. Known-divergent territory from
 -- tests/conformance/EXCLUSIONS.md is avoided by construction:
 -- Int arithmetic stays small (AHC promotes on overflow, the Report
--- leaves it undefined), text stays ASCII, partial functions are
--- never emitted (division is guarded, maximum/minimum get a consed
--- head, recursion is structural on the tail).
+-- leaves it undefined), non-ASCII text is caseless-only (see
+-- safeChars), partial functions are never emitted (division is
+-- guarded, maximum/minimum get a consed head, recursion is
+-- structural on the tail).
 module Main where
 
 import Data.List (intercalate)
@@ -107,11 +108,21 @@ anyTy = freq
 enumCons :: [String]
 enumCons = ["K0", "K1", "K2", "K3"]
 
+-- Non-ASCII is restricted to CASELESS code points (CJK, symbols,
+-- emoji): the generator pipes any Char/String subexpression into
+-- toUpper/toLower/isDigit/isUpper, and on caseless characters
+-- AHC's ASCII-range Data.Char agrees with GHC's Unicode tables
+-- (case maps are identity, classifiers are False, ord/compare/
+-- show/length are codepoint-exact since the string milestone).
+-- Cased non-ASCII (lambda, accented letters) stays excluded until
+-- Data.Char goes Unicode (F3 in the string-milestone plan).
 safeChars :: [Char]
 safeChars = ['a' .. 'z'] ++ ['A' .. 'Z'] ++ ['0' .. '9'] ++ " "
+            ++ "\28450\20013\9733\128077"
 
 safeWords :: [String]
-safeWords = ["fuzz", "oracle", "Ada", "graph", "x1 y2", "thunk", ""]
+safeWords = ["fuzz", "oracle", "Ada", "graph", "x1 y2", "thunk", "",
+             "\28450\23383", "x\9733y", "\128077ok"]
 
 -- ===== environments ===============================================
 

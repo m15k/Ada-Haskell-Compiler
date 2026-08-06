@@ -18,6 +18,8 @@ module Data.Text
   , append, concat, intercalate
   , length, byteLength, null
   , index, take, drop, splitAt
+  , putText, putTextLn, readFileText, writeFileText
+  , textFromCStringLen, textNewCString
   ) where
 
 import Prelude hiding (concat, length, null, take, drop, splitAt)
@@ -69,3 +71,27 @@ drop = primTextDrop
 
 splitAt :: Int -> Text -> (Text, Text)
 splitAt n t = (take n t, drop n t)
+
+-- IO is Handle-free by design (Handle's constructor is private to
+-- System.IO); one fwrite of the slice, no cons-list walk. Input
+-- normalizes to the valid-UTF-8 payload invariant (invalid bytes
+-- become U+FFFD, the runtime's one replacement rule).
+putText :: Text -> IO ()
+putText = primTextPut
+
+putTextLn :: Text -> IO ()
+putTextLn t = putText t >> putStrLn ""
+
+readFileText :: String -> IO Text
+readFileText = primTextReadFile
+
+writeFileText :: String -> Text -> IO ()
+writeFileText = primTextWriteFile
+
+-- C bridges, mirroring peekCStringLen/newCString: exactly n bytes
+-- in (normalized), malloc'd NUL-terminated copy out (caller frees).
+textFromCStringLen :: Ptr Char -> Int -> IO Text
+textFromCStringLen = primTextFromCStringLen
+
+textNewCString :: Text -> IO (Ptr Char)
+textNewCString = primTextNewCString

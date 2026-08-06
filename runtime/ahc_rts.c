@@ -4157,6 +4157,130 @@ static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
   return ahc_mk_fun(io_peek_cstring_len, e);
 }
 
+/* ----- Data.Text IO + C-string bridges --------------------------- */
+
+static const uint8_t *text_bytes(AhcNode *w);  /* fwd: pure prims */
+
+/* Bytes from outside the runtime enter through one normalizer:
+   decode + re-encode, so the valid-UTF-8 payload invariant holds
+   (identity on already-valid input, U+FFFD elsewhere). */
+static AhcNode *text_from_bytes_norm(const uint8_t *p, size_t len) {
+  StrBuf b = {0, 0, 0};
+  size_t i = 0;
+  AhcNode *r;
+  while (i < len) {
+    unsigned char enc[4];
+    int el = utf8_encode(utf8_decode(p, len, &i), enc);
+    for (int k = 0; k < el; k++) sb_ch(&b, (char)enc[k]);
+  }
+  if (b.len > INT32_MAX) ahc_die("Data.Text: size overflow");
+  r = ahc_mk_bytes((const uint8_t *)b.p, (int32_t)b.len);
+  free(b.p);
+  return r;
+}
+
+static AhcNode *io_text_put(AhcNode **env, AhcNode *w) {
+  AhcNode *t = ahc_eval(env[0]);
+  (void)w;
+  if (t->u.bytes.len > 0)
+    fwrite(text_bytes(t), 1, (size_t)t->u.bytes.len, stdout);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_text_put(AhcNode *t) {
+  AhcNode **e = ahc_env(1);
+  e[0] = t;
+  return ahc_mk_fun(io_text_put, e);
+}
+
+static AhcNode *io_text_readfile(AhcNode **env, AhcNode *w) {
+  StrBuf pb = {0, 0, 0};
+  StrBuf cb = {0, 0, 0};
+  FILE *f;
+  int ch;
+  AhcNode *r;
+  (void)w;
+  sb_hs(&pb, env[0]);
+  sb_ch(&pb, 0);
+  f = fopen(pb.p, "r");
+  if (!f) {
+    char eb[512];
+    fflush(stdout);
+    snprintf(eb, sizeof eb, "%s: openFile: does not exist", pb.p);
+    ahc_die(eb);
+  }
+  free(pb.p);
+  while ((ch = fgetc(f)) != EOF) sb_ch(&cb, (char)ch);
+  fclose(f);
+  r = text_from_bytes_norm((const uint8_t *)cb.p, cb.len);
+  free(cb.p);
+  return r;
+}
+static AhcNode *p_text_readfile(AhcNode *path) {
+  AhcNode **e = ahc_env(1);
+  e[0] = path;
+  return ahc_mk_fun(io_text_readfile, e);
+}
+
+static AhcNode *io_text_writefile(AhcNode **env, AhcNode *w) {
+  StrBuf pb = {0, 0, 0};
+  FILE *f;
+  AhcNode *t;
+  (void)w;
+  sb_hs(&pb, env[0]);
+  sb_ch(&pb, 0);
+  f = fopen(pb.p, "w");
+  if (!f) {
+    char eb[512];
+    fflush(stdout);
+    snprintf(eb, sizeof eb, "%s: openFile: cannot open", pb.p);
+    ahc_die(eb);
+  }
+  free(pb.p);
+  t = ahc_eval(env[1]);
+  if (t->u.bytes.len > 0)
+    fwrite(text_bytes(t), 1, (size_t)t->u.bytes.len, f);
+  fclose(f);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_text_writefile(AhcNode *path, AhcNode *t) {
+  AhcNode **e = ahc_env(2);
+  e[0] = path; e[1] = t;
+  return ahc_mk_fun(io_text_writefile, e);
+}
+
+/* Exactly n bytes from a C pointer, normalized. */
+static AhcNode *io_text_from_cstring_len(AhcNode **env, AhcNode *w) {
+  uint8_t *p = (uint8_t *)marshal_ptr(env[0], "textFromCStringLen");
+  AhcNode *n = ahc_eval(env[1]);
+  (void)w;
+  if (n->tag != AHC_INT || n->u.i < 0)
+    ahc_die("textFromCStringLen: bad length");
+  return text_from_bytes_norm(p, (size_t)n->u.i);
+}
+static AhcNode *p_text_from_cstring_len(AhcNode *p, AhcNode *n) {
+  AhcNode **e = ahc_env(2);
+  e[0] = p; e[1] = n;
+  return ahc_mk_fun(io_text_from_cstring_len, e);
+}
+
+/* malloc'd NUL-terminated copy of the slice; release with free.
+   (Interior NULs survive the copy but C sees a shorter string -
+   same contract as newCString.) */
+static AhcNode *io_text_new_cstring(AhcNode **env, AhcNode *w) {
+  AhcNode *t = ahc_eval(env[0]);
+  char *p = (char *)malloc((size_t)t->u.bytes.len + 1);
+  (void)w;
+  if (!p) ahc_die("out of memory");
+  memcpy(p, text_bytes(t), (size_t)t->u.bytes.len);
+  p[t->u.bytes.len] = 0;
+  return ahc_mk_ptr(p);
+}
+static AhcNode *p_text_new_cstring(AhcNode *t) {
+  AhcNode **e = ahc_env(1);
+  e[0] = t;
+  return ahc_mk_fun(io_text_new_cstring, e);
+}
+
 /* ----- wrapper imports: Haskell closures as C function pointers.
    Each wrapper-import site owns a static pool of trampolines and a
    parallel closure-slot array (static data, so the Boehm collector
@@ -5154,7 +5278,10 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_text_pack, *ahc_prim_text_unpack, *ahc_prim_text_append,
   *ahc_prim_text_length, *ahc_prim_text_byte_length,
   *ahc_prim_text_index, *ahc_prim_text_take, *ahc_prim_text_drop,
-  *ahc_prim_text_show;
+  *ahc_prim_text_show,
+  *ahc_prim_text_put, *ahc_prim_text_readfile,
+  *ahc_prim_text_writefile, *ahc_prim_text_from_cstring_len,
+  *ahc_prim_text_new_cstring;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -5364,4 +5491,9 @@ void ahc_rts_init(void) {
   ahc_prim_text_take = mk_prim2(p_text_take);
   ahc_prim_text_drop = mk_prim2(p_text_drop);
   ahc_prim_text_show = mk_prim1(p_text_show);
+  ahc_prim_text_put = mk_prim1(p_text_put);
+  ahc_prim_text_readfile = mk_prim1(p_text_readfile);
+  ahc_prim_text_writefile = mk_prim2(p_text_writefile);
+  ahc_prim_text_from_cstring_len = mk_prim2(p_text_from_cstring_len);
+  ahc_prim_text_new_cstring = mk_prim1(p_text_new_cstring);
 }
