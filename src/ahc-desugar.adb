@@ -956,9 +956,14 @@ package body AHC.Desugar is
                  (Kind => Core.Lit_C, Span => Span,
                   Lit => (Kind => Core.L_Char, Code => N.Char_Value)));
             when Lit_String_E =>
-               return M.Add (Core.Expr_Node'
-                 (Kind => Core.Lit_C, Span => Span,
-                  Lit => (Core.L_String, N.Text)));
+               --  OverloadedStrings (unconditional): the literal is
+               --  IsString a => a, like numeric literals. Literal
+               --  PATTERNS stay [Char] (Lit_Test below).
+               return App1
+                 (Global (Env.From_String_V, Span),
+                  M.Add (Core.Expr_Node'
+                    (Kind => Core.Lit_C, Span => Span,
+                     Lit => (Core.L_String, N.Text))), Span);
 
             when App_E =>
                return App1 (Ds_Expr (N.Fun), Ds_Expr (N.Arg), Span);

@@ -560,8 +560,40 @@ package body AHC.Typechecker is
             for Inst_Id of M.Info (W.C.Class).Instances loop
                declare
                   Inst : constant Instance_Info := M.Info (Inst_Id);
+
+                  --  Instance lookup is TyCon-keyed, which makes an
+                  --  instance at the list TyCon mean "all [a]". For
+                  --  IsString that would be unsound (fromString
+                  --  returns [Char] whatever a is), so THIS class
+                  --  pins the element: a metavar element is unified
+                  --  with Char ("x" at [a] positions), anything else
+                  --  must already BE Char ("x" :: [Bool] falls
+                  --  through to no-instance).
+                  function List_Element_Is_Char return Boolean is
+                  begin
+                     if Class_Id (W.C.Class) /= Env.IsString_Cl
+                       or else Head /= Env.List_TC
+                     then
+                        return True;
+                     end if;
+                     declare
+                        El : constant Real_Type_Id :=
+                          Repr (Args (1));
+                        EN : constant Type_Node := M.Node (El);
+                     begin
+                        if EN.Kind = TMeta_T then
+                           Unify (El, TCon (Env.Char_TC), W.C.Span);
+                           return True;
+                        end if;
+                        return EN.Kind = TCon_T
+                          and then EN.Con =
+                            Real_TyCon_Id (Env.Char_TC);
+                     end;
+                  end List_Element_Is_Char;
                begin
-                  if Inst.Head = Head then
+                  if Inst.Head = Head
+                    and then List_Element_Is_Char
+                  then
                      declare
                         Map : TyVar_Type_Maps.Map;
                      begin
@@ -618,6 +650,7 @@ package body AHC.Typechecker is
                      --  Collect the classes constraining this meta.
                      declare
                         Numeric : Boolean := False;
+                        Stringy : Boolean := False;
                         Solved : Boolean := False;
                      begin
                         for J in I .. W_List.Last_Index loop
@@ -653,19 +686,40 @@ package body AHC.Typechecker is
                                         Env.RealFloat_Cl)
                                  then
                                     Numeric := True;
+                                 elsif NJ.Kind = TMeta_T
+                                   and then NJ.Meta = N.Meta
+                                   and then
+                                     Class_Id (W_List (J).C.Class) =
+                                       Env.IsString_Cl
+                                 then
+                                    Stringy := True;
                                  end if;
                               end;
                            end if;
                         end loop;
 
-                        if Numeric then
-                           for Cand in 1 .. 2 loop
+                        --  String defaulting is not Report 4.3.4
+                        --  (GHC needs ExtendedDefaultRules); [Char]
+                        --  as the sole candidate preserves the
+                        --  pre-OverloadedStrings meaning of every
+                        --  ambiguous literal. Numeric wins a mixed
+                        --  set (can't satisfy both anyway).
+                        if Numeric or else Stringy then
+                           for Cand in 1 .. (if Numeric then 2 else 1)
+                           loop
                               if not Solved then
                                  declare
                                     T : constant Real_Type_Id :=
-                                      TCon (if Cand = 1
-                                            then Env.Integer_TC
-                                            else Env.Double_TC);
+                                      (if not Numeric then
+                                         M.Add (Type_Node'
+                                           (Kind => TApp_T,
+                                            T_Fun =>
+                                              TCon (Env.List_TC),
+                                            T_Arg =>
+                                              TCon (Env.Char_TC)))
+                                       elsif Cand = 1
+                                       then TCon (Env.Integer_TC)
+                                       else TCon (Env.Double_TC));
                                     Ok : Boolean := True;
                                     Mark : constant Natural :=
                                       W_List.Last_Index;
@@ -1637,22 +1691,89 @@ package body AHC.Typechecker is
                   Site : constant Expr_Id := W_List (I).Site;
                   Original : constant Expr_Node :=
                     M.Node (Real_Expr_Id (Site));
-                  Copy : constant Real_Expr_Id :=
-                    M.Add (Original);
-                  Chain : Real_Expr_Id := Copy;
-                  J : Positive := I;
+
+                  --  fromString at a KNOWN wired instance is
+                  --  statically decidable, and literals are hot:
+                  --  [Char] evidence becomes the identity (the
+                  --  optimizer beta-reduces the whole wrapper away,
+                  --  restoring the bare CAF literal) and Text
+                  --  evidence becomes primTextPack directly (codegen
+                  --  then folds pack-of-literal to a static). This
+                  --  keeps every pre-OverloadedStrings program at
+                  --  its old literal cost without a general
+                  --  selector-of-known-dictionary reducer.
+                  function From_String_Shortcut return Boolean is
+                  begin
+                     if Original.Kind /= Var_C
+                       or else Var_Id (Original.V) /= Env.From_String_V
+                       or else W_List (I).Sol /= By_Instance
+                       or else (I < W_List.Last_Index
+                                and then W_List (I + 1).Site = Site)
+                     then
+                        return False;
+                     end if;
+                     declare
+                        Head : constant TyCon_Id :=
+                          M.Info (Real_Instance_Id (W_List (I).Inst))
+                            .Head;
+                     begin
+                        if Head = Env.Text_TC then
+                           M.Exprs.Replace_Element
+                             (Real_Expr_Id (Site), Expr_Node'
+                                (Kind => Var_C,
+                                 Span => Original.Span,
+                                 V => Real_Var_Id
+                                   (Builtins.Var_Maps.Element
+                                      (Env.Values.Find
+                                         (Table.Intern
+                                            ("primTextPack"))))));
+                           return True;
+                        elsif Head = Env.List_TC then
+                           declare
+                              X : constant Real_Var_Id :=
+                                M.Mint_Var
+                                  ((Name => Table.Intern ("s"),
+                                    Span => Original.Span,
+                                    others => <>));
+                           begin
+                              M.Exprs.Replace_Element
+                                (Real_Expr_Id (Site), Expr_Node'
+                                   (Kind => Lam_C,
+                                    Span => Original.Span,
+                                    Binder => X,
+                                    Lam_Body => M.Add (Expr_Node'
+                                      (Kind => Var_C,
+                                       Span => Original.Span,
+                                       V => X))));
+                           end;
+                           return True;
+                        end if;
+                        return False;
+                     end;
+                  end From_String_Shortcut;
                begin
-                  while J <= W_List.Last_Index
-                    and then W_List (J).Site = Site
-                  loop
-                     Chain := M.Add (Expr_Node'
-                       (Kind => App_C, Span => Original.Span,
-                        Fun => Chain, Arg => Build_Ev (J)));
-                     J := J + 1;
-                  end loop;
-                  M.Exprs.Replace_Element
-                    (Real_Expr_Id (Site), M.Node (Chain));
-                  I := J;
+                  if From_String_Shortcut then
+                     I := I + 1;
+                  else
+                     declare
+                        Copy : constant Real_Expr_Id :=
+                          M.Add (Original);
+                        Chain : Real_Expr_Id := Copy;
+                        J : Positive := I;
+                     begin
+                        while J <= W_List.Last_Index
+                          and then W_List (J).Site = Site
+                        loop
+                           Chain := M.Add (Expr_Node'
+                             (Kind => App_C, Span => Original.Span,
+                              Fun => Chain, Arg => Build_Ev (J)));
+                           J := J + 1;
+                        end loop;
+                        M.Exprs.Replace_Element
+                          (Real_Expr_Id (Site), M.Node (Chain));
+                        I := J;
+                     end;
+                  end if;
                end;
             else
                I := I + 1;

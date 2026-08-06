@@ -64,6 +64,23 @@ package body AHC.CodeGen is
       Lit_Next : Natural := 0;
       Lit_Init : Unbounded_String;
 
+      --  Same again for packed Text literals: primTextPack applied
+      --  to a string literal (the fromString-at-Text shortcut)
+      --  becomes one static AHC_BYTES per distinct literal, packed
+      --  once in ahc_init_<unit> instead of at every evaluation.
+      TLit_Map  : Str_Nat_Maps.Map;
+      TLit_Next : Natural := 0;
+
+      --  The wired primTextPack global (the evidence shortcut emits
+      --  direct applications of it); No_Var when absent.
+      Pack_Var : constant Core.Var_Id :=
+        (declare
+           C : constant Builtins.Var_Maps.Cursor :=
+             Env.Values.Find (Table.Intern ("primTextPack"));
+         begin
+           (if Builtins.Var_Maps.Has_Element (C)
+            then Builtins.Var_Maps.Element (C) else Core.No_Var));
+
       function Img (N : Natural) return String is
          S : constant String := N'Image;
       begin
@@ -103,6 +120,49 @@ package body AHC.CodeGen is
          L_Next := L_Next + 1;
          return "l_" & Img (L_Next - 1);
       end Lid;
+
+      --  The pack-of-literal peephole may only bake bytes that are
+      --  already valid UTF-8 (the Text payload invariant); a literal
+      --  carrying invalid source bytes falls back to the runtime
+      --  pack, which normalizes to U+FFFD.
+      function Is_Valid_Utf8 (S : String) return Boolean is
+         I : Natural := S'First;
+         B : Natural;
+         Need : Natural;
+         V, Lo : Natural;
+      begin
+         while I <= S'Last loop
+            B := Character'Pos (S (I));
+            if B < 16#80# then
+               Need := 0; V := B; Lo := 0;
+            elsif B in 16#C2# .. 16#DF# then
+               Need := 1; V := B mod 32; Lo := 16#80#;
+            elsif B in 16#E0# .. 16#EF# then
+               Need := 2; V := B mod 16; Lo := 16#800#;
+            elsif B in 16#F0# .. 16#F4# then
+               Need := 3; V := B mod 8; Lo := 16#1_0000#;
+            else
+               return False;
+            end if;
+            for K in 1 .. Need loop
+               if I + K > S'Last
+                 or else Character'Pos (S (I + K))
+                           not in 16#80# .. 16#BF#
+               then
+                  return False;
+               end if;
+               V := V * 64 + Character'Pos (S (I + K)) mod 64;
+            end loop;
+            if Need > 0
+              and then (V < Lo or else V > 16#10FFFF#
+                        or else V in 16#D800# .. 16#DFFF#)
+            then
+               return False;
+            end if;
+            I := I + Need + 1;
+         end loop;
+         return True;
+      end Is_Valid_Utf8;
 
       function C_Escape (S : String) return String is
          R : Unbounded_String;
@@ -557,8 +617,49 @@ package body AHC.CodeGen is
                     & Img (Info.Arity) & ")";
                end;
             when App_C =>
-               return "ahc_apply(" & Gen_Lazy (N.Fun, Scope) & ", "
-                 & Gen_Lazy (N.Arg, Scope) & ")";
+               --  pack-of-literal peephole: see TLit_Map above.
+               declare
+                  FN : constant Expr_Node := M.Node (N.Fun);
+                  AN : constant Expr_Node := M.Node (N.Arg);
+               begin
+                  if FN.Kind = Var_C and then AN.Kind = Lit_C
+                    and then AN.Lit.Kind = L_String
+                    and then Pack_Var /= Core.No_Var
+                    and then Var_Id (FN.V) = Pack_Var
+                  then
+                     declare
+                        S : constant String :=
+                          (if AN.Lit.Text = Names.No_Name then ""
+                           else Table.Text
+                                  (Names.Real_Name_Id (AN.Lit.Text)));
+                        K : constant Unbounded_String :=
+                          To_Unbounded_String (S);
+                        C : constant Str_Nat_Maps.Cursor :=
+                          TLit_Map.Find (K);
+                     begin
+                        if not Is_Valid_Utf8 (S) then
+                           return "ahc_apply("
+                             & Gen_Lazy (N.Fun, Scope) & ", "
+                             & Gen_Lazy (N.Arg, Scope) & ")";
+                        end if;
+                        if Str_Nat_Maps.Has_Element (C) then
+                           return "lt_"
+                             & Img (Str_Nat_Maps.Element (C));
+                        end if;
+                        TLit_Map.Include (K, TLit_Next);
+                        Append (Decl, "static AhcNode *lt_"
+                                & Img (TLit_Next) & ";" & ASCII.LF);
+                        Append (Lit_Init, "  lt_" & Img (TLit_Next)
+                                & " = ahc_mk_bytes((const uint8_t *)"""
+                                & C_Escape (S) & """, "
+                                & Img (S'Length) & ");" & ASCII.LF);
+                        TLit_Next := TLit_Next + 1;
+                        return "lt_" & Img (TLit_Next - 1);
+                     end;
+                  end if;
+                  return "ahc_apply(" & Gen_Lazy (N.Fun, Scope) & ", "
+                    & Gen_Lazy (N.Arg, Scope) & ")";
+               end;
             when Lam_C =>
                return Lift (N.Lam_Body, Scope, Var_Id (N.Binder), 'f');
             when Let_C =>
@@ -1444,6 +1545,8 @@ package body AHC.CodeGen is
             Lit_Map.Clear;
             Lit_Next := 0;
             Lit_Init := Null_Unbounded_String;
+            TLit_Map.Clear;
+            TLit_Next := 0;
 
             for GI in 1 .. M.Top_Binds.Last_Index loop
                if (if GI <= Owners.Last_Index

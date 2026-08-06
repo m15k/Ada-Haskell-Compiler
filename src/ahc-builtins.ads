@@ -84,7 +84,8 @@ package AHC.Builtins is
 
       Eq_Cl, Ord_Cl, Show_Cl, Functor_Cl, Monad_Cl, Num_Cl, Real_Cl,
       Fractional_Cl, Enum_Cl, Bounded_Cl,
-      Integral_Cl, Floating_Cl, RealFrac_Cl, RealFloat_Cl
+      Integral_Cl, Floating_Cl, RealFrac_Cl, RealFloat_Cl,
+      IsString_Cl
         : Core.Class_Id := Core.No_Class;
 
       --  Selector/global vars the desugarer references directly.
@@ -92,7 +93,7 @@ package AHC.Builtins is
       Map_V, Filter_V, Concat_Map_V, Append_V,
       Enum_From_V, Enum_From_Then_V, Enum_From_To_V,
       Enum_From_Then_To_V,
-      From_Integer_V, From_Rational_V, Negate_V,
+      From_Integer_V, From_Rational_V, From_String_V, Negate_V,
       Error_V, Otherwise_V : Core.Var_Id := Core.No_Var;
    end record;
 

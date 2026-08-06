@@ -140,8 +140,11 @@ In rough order of how often it came up:
   reaches for `<|>` and `many`; AHC has `Applicative` in the Prelude
   but no `Alternative` class and no `Control.Applicative` module. This
   is the most common blocker among otherwise-clean repos.
-- **Extensions.** `LambdaCase` and `OverloadedStrings` dominate,
-  then `ScopedTypeVariables`, `TupleSections`, `BangPatterns`.
+- **Extensions.** `LambdaCase` dominates, then
+  `ScopedTypeVariables`, `TupleSections`, `BangPatterns`.
+  (`OverloadedStrings` is CLOSED as of the string milestone F1:
+  AHC's literal overloading is unconditional, so modules carrying
+  the pragma just work.)
 - **`System.Random`.** Common in games and puzzle generators.
 
 Gaps found this way and since closed: `(!!)`, `FilePath` and `read`

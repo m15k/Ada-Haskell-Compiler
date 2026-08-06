@@ -1637,6 +1637,19 @@ package body AHC.Prelude_Core is
                         Give_Dict (Real_Instance_Id (II), Errs (Cl,
                                    Fill => Ms));
                      end if;
+                  elsif Cl_Id = Env.IsString_Cl then
+                     if Inst.Head = Env.Text_TC then
+                        Ms.Append (V (Lookup ("primTextPack")));
+                     else
+                        --  [Char]: fromString is the identity (the
+                        --  literal already IS the String).
+                        declare
+                           S : constant Real_Var_Id := Fresh ("s");
+                        begin
+                           Ms.Append (Lam (S, V (Var_Id (S))));
+                        end;
+                     end if;
+                     Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Enum_Cl
                     and then Inst.Head = Env.Char_TC
                   then

@@ -817,6 +817,25 @@ package body AHC.Builtins is
             Finish_Class (Cl);
          end;
 
+         --  IsString: string literals are overloaded like numeric
+         --  ones (OverloadedStrings, unconditional - AHC ignores
+         --  LANGUAGE pragmas, GHC-oracled tests carry the pragma
+         --  for GHC's benefit). The desugarer wraps literal EXPRS
+         --  in fromString; literal patterns stay [Char].
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("IsString", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+         begin
+            Env.IsString_Cl := Class_Id (Cl);
+            Env.From_String_V := Var_Id (Def_Method
+              (Cl, "fromString",
+               Poly1 (A, FN (LST (TC (Env.Char_TC)), TV (A)),
+                      Ctx1 (Cl, TV (A))),
+               False));
+            Finish_Class (Cl);
+         end;
+
          pragma Unreferenced (Ignore);
       end;
 
@@ -869,6 +888,11 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Text_TC));
          Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Text_TC));
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Text_TC));
+         Def_Instance (Cl (Env.IsString_Cl), TCn (Env.Text_TC));
+         --  IsString [Char]: instance lookup is TyCon-keyed, so this
+         --  registers at the list TyCon; Solve pins the element to
+         --  Char for THIS class ("x" :: [Bool] stays rejected).
+         Def_Instance (Cl (Env.IsString_Cl), TCn (Env.List_TC));
 
          --  Eq/Ord (Ptr a) / (FunPtr a): address comparison, so no
          --  context on a.
