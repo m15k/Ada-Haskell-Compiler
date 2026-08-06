@@ -55,6 +55,15 @@ package body AHC.CodeGen is
       L_Map : Var_Nat_Maps.Map;
       L_Next : Natural := 0;
 
+      --  Per-unit string-literal statics (reset for every unit): each
+      --  distinct literal becomes one `static AhcNode *ls_<n>` built
+      --  once in ahc_init_<unit>, not once per evaluation. Statics
+      --  are GC roots via the data-segment scan; strings are
+      --  immutable, so sharing is invisible.
+      Lit_Map  : Str_Nat_Maps.Map;
+      Lit_Next : Natural := 0;
+      Lit_Init : Unbounded_String;
+
       function Img (N : Natural) return String is
          S : constant String := N'Image;
       begin
@@ -513,17 +522,31 @@ package body AHC.CodeGen is
                   when L_Char =>
                      return "ahc_mk_char(" & Img (N.Lit.Code) & "L)";
                   when L_String =>
-                     if N.Lit.Text = Names.No_Name then
-                        return "ahc_mk_string_len("""", 0)";
-                     end if;
                      --  Byte length rides along: strlen would stop
                      --  at an embedded \NUL.
                      declare
                         S : constant String :=
-                          Table.Text (Names.Real_Name_Id (N.Lit.Text));
+                          (if N.Lit.Text = Names.No_Name then ""
+                           else Table.Text
+                                  (Names.Real_Name_Id (N.Lit.Text)));
+                        K : constant Unbounded_String :=
+                          To_Unbounded_String (S);
+                        C : constant Str_Nat_Maps.Cursor :=
+                          Lit_Map.Find (K);
                      begin
-                        return "ahc_mk_string_len(""" & C_Escape (S)
-                          & """, " & Img (S'Length) & ")";
+                        if Str_Nat_Maps.Has_Element (C) then
+                           return "ls_"
+                             & Img (Str_Nat_Maps.Element (C));
+                        end if;
+                        Lit_Map.Include (K, Lit_Next);
+                        Append (Decl, "static AhcNode *ls_"
+                                & Img (Lit_Next) & ";" & ASCII.LF);
+                        Append (Lit_Init, "  ls_" & Img (Lit_Next)
+                                & " = ahc_mk_string_len("""
+                                & C_Escape (S) & """, "
+                                & Img (S'Length) & ");" & ASCII.LF);
+                        Lit_Next := Lit_Next + 1;
+                        return "ls_" & Img (Lit_Next - 1);
                      end;
                end case;
             when Con_C =>
@@ -1418,6 +1441,9 @@ package body AHC.CodeGen is
             Fn_Counter := 0;
             L_Map.Clear;
             L_Next := 0;
+            Lit_Map.Clear;
+            Lit_Next := 0;
+            Lit_Init := Null_Unbounded_String;
 
             for GI in 1 .. M.Top_Binds.Last_Index loop
                if (if GI <= Owners.Last_Index
@@ -1454,6 +1480,10 @@ package body AHC.CodeGen is
             Append (F.Text, Fns);
             Append (F.Text, "void ahc_init_" & Mangle (U)
                     & "(void) {" & ASCII.LF);
+            --  Literal statics first: top-bind CAF graphs may
+            --  reference them (init only builds graphs, never
+            --  evaluates, so this ordering suffices).
+            Append (F.Text, Lit_Init);
             Append (F.Text, Init);
             Append (F.Text, "}" & ASCII.LF);
 

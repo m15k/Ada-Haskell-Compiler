@@ -341,6 +341,11 @@ package body AHC.Optimizer is
                           Simp (B.Rhs, Env);
                         RN : constant Expr_Node := M.Node (SR);
                      begin
+                        --  Duplicating a Lit_C string here is free:
+                        --  codegen dedups literals into per-unit
+                        --  statics, so every copy names the same
+                        --  ls_<n>. Revisit if that hoisting is ever
+                        --  reverted.
                         if not N.Is_Rec
                           and then RN.Kind in Var_C | Lit_C | Con_C
                         then
