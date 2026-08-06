@@ -60,6 +60,7 @@ AhcNode *ahc_mk_con(int contag, int arity);    /* fields set after    */
 AhcNode *ahc_mk_confun(int contag, int arity); /* curried worker      */
 AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
+AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
 AhcNode *ahc_mk_missing(const char *what);     /* dies when forced    */
 AhcNode *ahc_mk_ptr(void *p);                  /* foreign pointer     */
 

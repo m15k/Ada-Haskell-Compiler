@@ -15,7 +15,7 @@ the reason a conformance program does not exist for it.
 | 3.14 | ~~`fail` at `Maybe`/`[]`~~ WORKS | refutable do-binds fail to Nothing / skip per the Report (ch03_14_faildo.hs); IO's fail errors, as GHC's does |
 | ch. 4 | Class-hierarchy corners | `Functor`/`Applicative` (pure/`<*>`/`*>`/`<*`/`<$>`, ch04_applicative.hs) and `Read` work at Maybe/[]/IO; `Monad` does NOT have `Applicative` as superclass (the 2010 shape - `return` and `pure` are separate but agree) |
 
-| lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs stay in ASCII |
+| lib | `Data.Char` classification is ASCII-only | GHC's predicates are Unicode-aware; conformance programs keep CLASSIFICATION (isAlpha etc.) inputs in ASCII. Literals, `length`, patterns, `show`, and IO are fully codepoint-correct as of the string milestones (one `Char` per code point, UTF-8 at every byte boundary - ch02_06_unicode_strings.hs); the one deliberate divergence is invalid UTF-8 on INPUT, which decodes to U+FFFD instead of throwing (tests/exec/utf8_invalid_input.hs; docs/io-design-note.md "Text encoding") |
 | lib | ~~`Data.List.foldl'` is `foldl`~~ WORKS | `seq` is a real primitive (force to WHNF), `($!)` builds on it, and `foldl'` keeps its accumulator evaluated (ch06_02_seq.hs values; tests/exec/seq_strict.hs pins the forcing itself) |
 | lib | `Data.Bits` is monomorphic at `Int` | GHC's is `Bits a`-polymorphic; AHC's is often MORE permissive at defaulting boundaries, GHC-oracle tests annotate |
 | lib | `Data.Ix` uses are not defaultable | AHC's Report-4.3.4 defaulting covers Prelude classes only; annotate `range (3, 7) :: [Int]` |

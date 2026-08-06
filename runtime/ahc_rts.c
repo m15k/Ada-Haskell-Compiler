@@ -304,6 +304,61 @@ static void waitlist_append(AhcTask **list, AhcTask *t) {
   *list = t;
 }
 
+/* ----- UTF-8 --------------------------------------------------------
+   Char nodes hold Unicode code points; byte streams (stdio, files,
+   C strings) hold UTF-8. These two functions are the ONLY encode/
+   decode points in the runtime (docs/io-design-note.md, "Text
+   encoding"). Decoding is total: an invalid sequence consumes its
+   lead byte plus any following continuation bytes and yields one
+   U+FFFD. Encoding is total: the unencodable code points (lone
+   surrogates, reachable only via chr) emit U+FFFD. */
+
+static int utf8_encode(long cp, unsigned char out[4]) {
+  if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+    cp = 0xFFFD;
+  if (cp < 0x80) { out[0] = (unsigned char)cp; return 1; }
+  if (cp < 0x800) {
+    out[0] = (unsigned char)(0xC0 | (cp >> 6));
+    out[1] = (unsigned char)(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    out[0] = (unsigned char)(0xE0 | (cp >> 12));
+    out[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (unsigned char)(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = (unsigned char)(0xF0 | (cp >> 18));
+  out[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+  out[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+  out[3] = (unsigned char)(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+/* Decode one code point at s[*i], advancing *i past the bytes
+   consumed. Overlong forms, surrogates, and values beyond U+10FFFF
+   are invalid. */
+static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
+  unsigned char b = s[(*i)++];
+  long cp;
+  int need, k;
+  if (b < 0x80) return b;
+  if (b < 0xC2) return 0xFFFD;   /* stray continuation / overlong lead */
+  if (b < 0xE0) { need = 1; cp = b & 0x1F; }
+  else if (b < 0xF0) { need = 2; cp = b & 0x0F; }
+  else if (b < 0xF5) { need = 3; cp = b & 0x07; }
+  else return 0xFFFD;
+  for (k = 0; k < need; k++) {
+    if (*i >= len || (s[*i] & 0xC0) != 0x80) return 0xFFFD;
+    cp = (cp << 6) | (s[*i] & 0x3F);
+    (*i)++;
+  }
+  if ((need == 2 && cp < 0x800) || (need == 3 && cp < 0x10000) ||
+      (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+    return 0xFFFD;
+  return cp;
+}
+
 void ahc_die(const char *msg) {
   die_unwind_if_armed(msg);
   fputs("ahc: ", stderr);
@@ -332,8 +387,12 @@ static void die_msg_list(const char *prefix, AhcNode *cell) {
     buf[n++] = *prefix++;
   cell = ahc_eval(cell);
   while (cell->tag == AHC_CON && cell->u.con.contag == 2) {
-    if (n + 1 < sizeof buf)
-      buf[n++] = (char)ahc_eval(cell->u.con.fields[0])->u.c;
+    unsigned char enc[4];
+    int el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
+    if (n + (size_t)el + 1 < sizeof buf) {
+      memcpy(buf + n, enc, (size_t)el);
+      n += (size_t)el;
+    }
     cell = ahc_eval(cell->u.con.fields[1]);
   }
   buf[n] = 0;
@@ -998,17 +1057,38 @@ static AhcNode *mk_bool(int b) {
   return ahc_mk_con(b ? TRUE_TAG : FALSE_TAG, 0);
 }
 
-AhcNode *ahc_mk_string(const char *s) {
-  size_t len = strlen(s);
-  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
-  for (size_t i = len; i > 0; i--) {
-    AhcNode *ch = ahc_mk_char((unsigned char)s[i - 1]);
+/* UTF-8 decode a byte range into [Char]. The scratch array of code
+   points lets the spine still build back-to-front, child first
+   (construction-order invariant, collector note section 15), while
+   decoding runs forward. NUL bytes are data, not terminators. */
+AhcNode *ahc_mk_string_len(const char *s, size_t len) {
+  const unsigned char *u = (const unsigned char *)s;
+  long *cps = NULL;
+  size_t n = 0, cap = 0, i = 0;
+  AhcNode *acc;
+  while (i < len) {
+    long cp = utf8_decode(u, len, &i);
+    if (n == cap) {
+      cap = cap ? cap * 2 : 64;
+      cps = realloc(cps, cap * sizeof *cps);
+      if (!cps) ahc_die("out of memory");
+    }
+    cps[n++] = cp;
+  }
+  acc = ahc_mk_con(NIL_TAG, 0);
+  while (n > 0) {
+    AhcNode *ch = ahc_mk_char(cps[--n]);
     AhcNode *c = ahc_mk_con(CONS_TAG, 2);   /* child first */
     c->u.con.fields[0] = ch;
     c->u.con.fields[1] = acc;
     acc = c;
   }
+  free(cps);
   return acc;
+}
+
+AhcNode *ahc_mk_string(const char *s) {
+  return ahc_mk_string_len(s, strlen(s));
 }
 
 /* ----- Integer bignum -------------------------------------------- */
@@ -1728,7 +1808,11 @@ static AhcNode *p_signum(AhcNode *a) {
    value). */
 static AhcNode *p_from_integer(AhcNode *a) { return a; }
 static AhcNode *p_ord(AhcNode *a) { return ahc_mk_int(ahc_eval(a)->u.c); }
-static AhcNode *p_chr(AhcNode *a) { return ahc_mk_char(ahc_eval(a)->u.i); }
+static AhcNode *p_chr(AhcNode *a) {
+  long v = ahc_eval(a)->u.i;
+  if (v < 0 || v > 0x10FFFF) ahc_die("Prelude.chr: bad argument");
+  return ahc_mk_char(v);
+}
 
 static AhcNode *p_eq_char(AhcNode *a, AhcNode *b) {
   return mk_bool(ahc_eval(a)->u.c == ahc_eval(b)->u.c);
@@ -1927,7 +2011,9 @@ static AhcNode *the_world;
 static void put_list(AhcNode *s, FILE *out) {
   AhcNode *cell = ahc_eval(s);
   while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
-    fputc((int)ahc_eval(cell->u.con.fields[0])->u.c, out);
+    unsigned char enc[4];
+    int el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
+    fwrite(enc, 1, (size_t)el, out);
     cell = ahc_eval(cell->u.con.fields[1]);
   }
 }
@@ -3806,11 +3892,14 @@ static void sb_cstr(StrBuf *b, const char *s) {
   while (*s) sb_ch(b, *s++);
 }
 
-/* Flatten a Haskell string (evaluated cons spine of chars). */
+/* Flatten a Haskell string (evaluated cons spine of chars) to
+   UTF-8 bytes. */
 static void sb_hs(StrBuf *b, AhcNode *s) {
   AhcNode *w = ahc_eval(s);
   while (w->u.con.contag == CONS_TAG) {
-    sb_ch(b, (char)ahc_eval(w->u.con.fields[0])->u.c);
+    unsigned char enc[4];
+    int el = utf8_encode(ahc_eval(w->u.con.fields[0])->u.c, enc);
+    for (int k = 0; k < el; k++) sb_ch(b, (char)enc[k]);
     w = ahc_eval(w->u.con.fields[1]);
   }
 }
@@ -3988,23 +4077,14 @@ static AhcNode *p_new_cstring(AhcNode *s) {
   return ahc_mk_fun(io_new_cstring, e);
 }
 
-/* peekCStringLen: exactly n bytes (NULs included). */
+/* peekCStringLen: exactly n bytes (NULs included), UTF-8 decoded. */
 static AhcNode *io_peek_cstring_len(AhcNode **env, AhcNode *w) {
   char *p = (char *)marshal_ptr(env[0], "peekCStringLen");
   AhcNode *n = ahc_eval(env[1]);
-  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
-  long i;
   (void)w;
   if (n->tag != AHC_INT || n->u.i < 0)
     ahc_die("peekCStringLen: bad length");
-  for (i = n->u.i; i > 0; i--) {
-    AhcNode *ch = ahc_mk_char((unsigned char)p[i - 1]);
-    AhcNode *c = ahc_mk_con(CONS_TAG, 2);   /* child first */
-    c->u.con.fields[0] = ch;
-    c->u.con.fields[1] = acc;
-    acc = c;
-  }
-  return acc;
+  return ahc_mk_string_len(p, (size_t)n->u.i);
 }
 
 static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
@@ -4088,7 +4168,7 @@ static AhcNode *io_getline(AhcNode **env, AhcNode *w) {
   if (ch == EOF && len == 0)
     ahc_die("Prelude.getLine: end of file");
   if (buf) buf[len] = 0;
-  r = ahc_mk_string(buf ? buf : "");
+  r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
   return r;
 }
@@ -4118,7 +4198,7 @@ static AhcNode *io_getcontents(AhcNode **env, AhcNode *w) {
     buf[len++] = (char)ch;
   }
   if (buf) buf[len] = 0;
-  r = ahc_mk_string(buf ? buf : "");
+  r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
   return r;
 }
@@ -4151,7 +4231,7 @@ static AhcNode *io_readfile(AhcNode **env, AhcNode *w) {
   }
   fclose(f);
   if (buf) buf[len] = 0;
-  r = ahc_mk_string(buf ? buf : "");
+  r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
   return r;
 }
@@ -4273,7 +4353,7 @@ static AhcNode *io_h_get_line(AhcNode **env, AhcNode *w) {
   if (ch == EOF && len == 0)
     ahc_die("hGetLine: end of file");
   if (buf) buf[len] = 0;
-  r = ahc_mk_string(buf ? buf : "");
+  r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
   return r;
 }
@@ -4285,10 +4365,23 @@ static AhcNode *p_h_get_line(AhcNode *h) {
 
 static AhcNode *io_h_get_char(AhcNode **env, AhcNode *w) {
   FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetChar");
+  unsigned char seq[4];
+  size_t have = 1, want, i = 0;
   int ch = fgetc(f);
   (void)w;
   if (ch == EOF) ahc_die("hGetChar: end of file");
-  return ahc_mk_char(ch);
+  seq[0] = (unsigned char)ch;
+  want = seq[0] < 0xC2 ? 1        /* ASCII, or invalid lead alone */
+       : seq[0] < 0xE0 ? 2
+       : seq[0] < 0xF0 ? 3
+       : seq[0] < 0xF5 ? 4 : 1;
+  while (have < want) {
+    ch = fgetc(f);
+    if (ch == EOF) break;
+    if ((ch & 0xC0) != 0x80) { ungetc(ch, f); break; }
+    seq[have++] = (unsigned char)ch;
+  }
+  return ahc_mk_char(utf8_decode(seq, have, &i));
 }
 static AhcNode *p_h_get_char(AhcNode *h) {
   AhcNode **e = ahc_env(1);
@@ -4312,7 +4405,7 @@ static AhcNode *io_h_get_contents(AhcNode **env, AhcNode *w) {
     buf[len++] = (char)ch;
   }
   if (buf) buf[len] = 0;
-  r = ahc_mk_string(buf ? buf : "");
+  r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
   return r;
 }
@@ -4446,9 +4539,12 @@ static AhcNode *p_int_to_d(AhcNode *a) {
 static AhcNode *p_show_string(AhcNode *xs) {
   StrBuf b = {0, 0, 0};
   AhcNode *w = ahc_eval(xs);
+  int esc = 0;   /* last char was a decimal escape ("\955\&5") */
   sb_ch(&b, '"');
   while (w->u.con.contag == CONS_TAG) {
     long v = ahc_eval(w->u.con.fields[0])->u.c;
+    if (esc && v >= '0' && v <= '9') sb_cstr(&b, "\\&");
+    esc = 0;
     switch (v) {
     case '"':  sb_cstr(&b, "\\\""); break;
     case '\\': sb_cstr(&b, "\\\\"); break;
@@ -4461,6 +4557,7 @@ static AhcNode *p_show_string(AhcNode *xs) {
         char tmp[16];
         snprintf(tmp, sizeof tmp, "\\%ld", v);
         sb_cstr(&b, tmp);
+        esc = 1;
       }
     }
     w = ahc_eval(w->u.con.fields[1]);

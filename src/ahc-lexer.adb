@@ -634,6 +634,58 @@ package body AHC.Lexer is
          Start  : constant Positive := Pos;
          Value  : Code_Point := 16#FFFD#;
          Broken : Boolean := False;
+
+         --  A raw non-ASCII character literal ('λ'): the lead byte
+         --  is already consumed into Value; pull the continuation
+         --  bytes of one UTF-8 sequence. Source files must be valid
+         --  UTF-8 - malformed input is an invalid literal here, not
+         --  a U+FFFD (that replacement policy is the runtime's, for
+         --  data; source text can and should be rejected).
+         procedure Decode_Utf8_Tail is
+            Lead : constant Natural := Natural (Value);
+            V    : Natural;   --  accumulate outside Code_Point's range
+            Need : Natural;
+
+            procedure Fail is
+            begin
+               Error (Diagnostics.Lex_Invalid_Literal, Start,
+                      "invalid UTF-8 in character literal");
+               Broken := True;
+            end Fail;
+         begin
+            if Lead in 16#C2# .. 16#DF# then
+               Need := 1;
+               V := Lead mod 32;
+            elsif Lead in 16#E0# .. 16#EF# then
+               Need := 2;
+               V := Lead mod 16;
+            elsif Lead in 16#F0# .. 16#F4# then
+               Need := 3;
+               V := Lead mod 8;
+            else
+               Fail;
+               return;
+            end if;
+            for I in 1 .. Need loop
+               if Pos > Len
+                 or else Character'Pos (Peek) not in 16#80# .. 16#BF#
+               then
+                  Fail;
+                  return;
+               end if;
+               V := V * 64 + Character'Pos (Peek) mod 64;
+               Pos := Pos + 1;
+            end loop;
+            if V > 16#10FFFF#
+              or else V in 16#D800# .. 16#DFFF#
+              or else (Need = 2 and then V < 16#800#)
+              or else (Need = 3 and then V < 16#1_0000#)
+            then
+               Fail;
+            else
+               Value := Code_Point (V);
+            end if;
+         end Decode_Utf8_Tail;
       begin
          Pos := Pos + 1;  --  opening quote
 
@@ -665,6 +717,9 @@ package body AHC.Lexer is
          else
             Value := Character'Pos (Peek);
             Pos := Pos + 1;
+            if Value >= 16#80# then
+               Decode_Utf8_Tail;
+            end if;
          end if;
 
          if Pos <= Len and then Peek = ''' then

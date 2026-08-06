@@ -15,7 +15,11 @@ for hs in tests/exec/*.hs; do
   if ! scripts/ahc-build.sh "$hs" "$tmp/$base" >/dev/null 2>"$tmp/err"; then
     echo "BUILD-FAIL $hs"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
   fi
-  got=$("$tmp/$base" 2>&1)
+  if [ -f "tests/exec/$base.stdin" ]; then
+    got=$("$tmp/$base" < "tests/exec/$base.stdin" 2>&1)
+  else
+    got=$("$tmp/$base" 2>&1)
+  fi
   if $update; then
     printf '%s\n' "$got" > "$exp"; echo "updated $exp"
   elif [ ! -f "$exp" ]; then

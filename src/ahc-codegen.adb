@@ -514,12 +514,17 @@ package body AHC.CodeGen is
                      return "ahc_mk_char(" & Img (N.Lit.Code) & "L)";
                   when L_String =>
                      if N.Lit.Text = Names.No_Name then
-                        return "ahc_mk_string("""")";
+                        return "ahc_mk_string_len("""", 0)";
                      end if;
-                     return "ahc_mk_string("""
-                       & C_Escape (Table.Text
-                           (Names.Real_Name_Id (N.Lit.Text)))
-                       & """)";
+                     --  Byte length rides along: strlen would stop
+                     --  at an embedded \NUL.
+                     declare
+                        S : constant String :=
+                          Table.Text (Names.Real_Name_Id (N.Lit.Text));
+                     begin
+                        return "ahc_mk_string_len(""" & C_Escape (S)
+                          & """, " & Img (S'Length) & ")";
+                     end;
                end case;
             when Con_C =>
                declare

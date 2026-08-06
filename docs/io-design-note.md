@@ -186,3 +186,39 @@ ahttpd reworked on the new prims is the milestone's proof:
 - **Windows/IOCP**, **async exceptions**, **Handle integration**
   (System.IO stays synchronous), **fd ownership** (the runtime
   never closes what it did not open).
+
+## Text encoding (string milestone, phase A1)
+
+`Char` nodes hold Unicode code points (0..10FFFF); every byte
+stream — stdio, files, C strings, error messages — holds UTF-8.
+The runtime has exactly one decoder (`utf8_decode`, reached through
+`ahc_mk_string_len`) and one encoder (`utf8_encode`, reached through
+`put_list`/`sb_hs`), so a new byte boundary cannot quietly invent a
+third convention.
+
+Policy, chosen for totality:
+
+- **Invalid UTF-8 on input decodes to U+FFFD, never an error.** An
+  invalid sequence consumes its lead byte plus any following
+  continuation bytes and yields one replacement char. `getContents`
+  over binary garbage must not kill a program; this is the one
+  deliberate divergence from GHC, which throws (pinned by
+  tests/exec/utf8_invalid_input.hs).
+- **Overlong forms, surrogate encodings, and values beyond U+10FFFF
+  are invalid** on input (same replacement).
+- **`chr` gains GHC's range check** (0..10FFFF), so the only
+  unencodable values a `Char` can hold are lone surrogates
+  (`chr 0xD800`); the encoder writes those as U+FFFD rather than
+  emitting ill-formed bytes.
+- **NUL is data.** String literals and the buffer-reading IO paths
+  carry explicit lengths (`ahc_mk_string_len`); only the
+  `strlen`-shaped C-string boundaries (`peekCString`) terminate at
+  NUL, as they must.
+- Source files must be valid UTF-8: the lexer REJECTS a malformed
+  raw char literal instead of replacing (data gets U+FFFD, source
+  gets a diagnostic). String-literal bytes pass through the intern
+  table and are decoded by the runtime; escapes were always
+  UTF-8-encoded there.
+- The packed `Text` type (phase B) keeps its payload valid UTF-8 by
+  construction; its `pack`/IO boundaries normalize with the same
+  replacement rule.
