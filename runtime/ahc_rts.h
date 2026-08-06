@@ -160,7 +160,11 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_poke_i64, *ahc_prim_poke_u8, *ahc_prim_poke_u16,
   *ahc_prim_poke_u32, *ahc_prim_poke_u64,
   *ahc_prim_poke_d, *ahc_prim_poke_p,
-  *ahc_prim_new_cstring, *ahc_prim_peek_cstring_len;
+  *ahc_prim_new_cstring, *ahc_prim_peek_cstring_len,
+  *ahc_prim_text_pack, *ahc_prim_text_unpack, *ahc_prim_text_append,
+  *ahc_prim_text_length, *ahc_prim_text_byte_length,
+  *ahc_prim_text_index, *ahc_prim_text_take, *ahc_prim_text_drop,
+  *ahc_prim_text_show;
 
 void ahc_rts_init(void);
 

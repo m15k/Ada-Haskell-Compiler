@@ -73,7 +73,7 @@ package AHC.Builtins is
       --  Well-known handles.
       Int_TC, Integer_TC, Float_TC, Double_TC, Char_TC, Bool_TC,
       Unit_TC, List_TC, IO_TC, Ordering_TC, Rational_TC, Maybe_TC,
-      Arrow_TC, Ptr_TC, FunPtr_TC
+      Arrow_TC, Ptr_TC, FunPtr_TC, Text_TC
         : Core.TyCon_Id := Core.No_TyCon;
       CFix_TCs : C_Fix_TC_Array := [others => Core.No_TyCon];
       Tuple_TCs : Tuple_TC_Array := [others => Core.No_TyCon];

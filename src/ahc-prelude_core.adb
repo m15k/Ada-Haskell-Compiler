@@ -256,6 +256,8 @@ package body AHC.Prelude_Core is
         Prim ("primshowChar", "ahc_prim_show_char");
       P_ShowB : constant Real_Var_Id :=
         Prim ("primshowBool", "ahc_prim_show_bool");
+      P_ShowT : constant Real_Var_Id :=
+        Prim ("primshowText", "ahc_prim_text_show");
       P_EnumFT : constant Real_Var_Id :=
         Prim ("primenumFromTo", "ahc_prim_enum_from_to_int");
       P_EnumF : constant Real_Var_Id :=
@@ -1308,6 +1310,14 @@ package body AHC.Prelude_Core is
          BP ("pokePtr", "ahc_prim_poke_p");
          BP ("newCString", "ahc_prim_new_cstring");
          BP ("peekCStringLen", "ahc_prim_peek_cstring_len");
+         BP ("primTextPack", "ahc_prim_text_pack");
+         BP ("primTextUnpack", "ahc_prim_text_unpack");
+         BP ("primTextAppend", "ahc_prim_text_append");
+         BP ("primTextLength", "ahc_prim_text_length");
+         BP ("primTextByteLength", "ahc_prim_text_byte_length");
+         BP ("primTextIndex", "ahc_prim_text_index");
+         BP ("primTextTake", "ahc_prim_text_take");
+         BP ("primTextDrop", "ahc_prim_text_drop");
       end;
 
       --  quot/rem/div/mod are Integral methods now; their prims are
@@ -1547,6 +1557,12 @@ package body AHC.Prelude_Core is
                         Ms.Append (V (P_ShowB));
                         Ms.Append (F_SP (V (P_ShowB)));
                         Ms.Append (F_SL (V (P_ShowB)));
+                     elsif Inst.Head = Env.Text_TC then
+                        --  Rendered like show String (quoted,
+                        --  escaped); precedence never binds.
+                        Ms.Append (V (P_ShowT));
+                        Ms.Append (F_SP (V (P_ShowT)));
+                        Ms.Append (F_SL (V (P_ShowT)));
                      elsif Inst.Head = Env.Double_TC
                        or else Inst.Head = Env.Float_TC
                      then

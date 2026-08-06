@@ -4600,30 +4600,36 @@ static AhcNode *p_int_to_d(AhcNode *a) {
 
 /* Show Char's showList: the whole char list as one quoted, escaped
    string literal - this is how show "abc" becomes "\"abc\"". */
+/* One string-literal character, escaped per Report 11.4. esc
+   tracks "last emit was a decimal escape" for the \& digit guard
+   ("\955\&5"). */
+static void sb_show_cp(StrBuf *b, long v, int *esc) {
+  if (*esc && v >= '0' && v <= '9') sb_cstr(b, "\\&");
+  *esc = 0;
+  switch (v) {
+  case '"':  sb_cstr(b, "\\\""); break;
+  case '\\': sb_cstr(b, "\\\\"); break;
+  case '\n': sb_cstr(b, "\\n"); break;
+  case '\t': sb_cstr(b, "\\t"); break;
+  case '\r': sb_cstr(b, "\\r"); break;
+  default:
+    if (v >= 32 && v <= 126) sb_ch(b, (char)v);
+    else {
+      char tmp[16];
+      snprintf(tmp, sizeof tmp, "\\%ld", v);
+      sb_cstr(b, tmp);
+      *esc = 1;
+    }
+  }
+}
+
 static AhcNode *p_show_string(AhcNode *xs) {
   StrBuf b = {0, 0, 0};
   AhcNode *w = ahc_eval(xs);
-  int esc = 0;   /* last char was a decimal escape ("\955\&5") */
+  int esc = 0;
   sb_ch(&b, '"');
   while (w->u.con.contag == CONS_TAG) {
-    long v = ahc_eval(w->u.con.fields[0])->u.c;
-    if (esc && v >= '0' && v <= '9') sb_cstr(&b, "\\&");
-    esc = 0;
-    switch (v) {
-    case '"':  sb_cstr(&b, "\\\""); break;
-    case '\\': sb_cstr(&b, "\\\\"); break;
-    case '\n': sb_cstr(&b, "\\n"); break;
-    case '\t': sb_cstr(&b, "\\t"); break;
-    case '\r': sb_cstr(&b, "\\r"); break;
-    default:
-      if (v >= 32 && v <= 126) sb_ch(&b, (char)v);
-      else {
-        char tmp[16];
-        snprintf(tmp, sizeof tmp, "\\%ld", v);
-        sb_cstr(&b, tmp);
-        esc = 1;
-      }
-    }
+    sb_show_cp(&b, ahc_eval(w->u.con.fields[0])->u.c, &esc);
     w = ahc_eval(w->u.con.fields[1]);
   }
   sb_ch(&b, '"');
@@ -4643,6 +4649,116 @@ static AhcNode *p_shows_list(AhcNode *f, AhcNode *xs) {
     w = ahc_eval(w->u.con.fields[1]);
   }
   sb_ch(&b, ']');
+  return sb_take(&b);
+}
+
+/* ----- Data.Text primops ----------------------------------------- */
+/* Code-point API over byte-offset internals (lib/Data/Text.hs).
+   The pack boundary establishes the payload invariant - always
+   valid UTF-8 - because sb_hs encodes through utf8_encode, which
+   replaces anything unencodable. */
+
+static const uint8_t *text_bytes(AhcNode *w) {
+  return w->u.bytes.b + w->u.bytes.off;
+}
+
+/* Byte offset of code point n in w's slice, clamped to [0, len]:
+   skip n lead bytes, swallowing continuations. */
+static int32_t text_cp_byte(AhcNode *w, long n) {
+  const uint8_t *p = text_bytes(w);
+  int32_t off = 0, len = w->u.bytes.len;
+  while (n > 0 && off < len) {
+    off++;
+    while (off < len && (p[off] & 0xC0) == 0x80) off++;
+    n--;
+  }
+  return off;
+}
+
+static AhcNode *p_text_pack(AhcNode *s) {
+  StrBuf b = {0, 0, 0};
+  AhcNode *r;
+  sb_hs(&b, s);
+  if (b.len > INT32_MAX) ahc_die("Data.Text: size overflow");
+  r = ahc_mk_bytes((const uint8_t *)b.p, (int32_t)b.len);
+  free(b.p);
+  return r;
+}
+
+static AhcNode *p_text_unpack(AhcNode *t) {
+  AhcNode *w = ahc_eval(t);
+  return ahc_mk_string_len((const char *)text_bytes(w),
+                           (size_t)w->u.bytes.len);
+}
+
+static AhcNode *p_text_append(AhcNode *a, AhcNode *b) {
+  AhcNode *x = ahc_eval(a);
+  AhcNode *y = ahc_eval(b);
+  size_t total = (size_t)x->u.bytes.len + (size_t)y->u.bytes.len;
+  uint8_t *p;
+  AhcNode *r;
+  if (total > INT32_MAX) ahc_die("Data.Text: size overflow");
+  p = (uint8_t *)AHC_ALLOC_ATOMIC(total > 0 ? total : 1);
+  if (!p) ahc_die("out of memory");
+  memcpy(p, text_bytes(x), (size_t)x->u.bytes.len);
+  memcpy(p + x->u.bytes.len, text_bytes(y), (size_t)y->u.bytes.len);
+  r = alloc_node();               /* payload before node */
+  r->tag = AHC_BYTES;
+  r->u.bytes.len = (int32_t)total;
+  r->u.bytes.off = 0;
+  r->u.bytes.b = p;
+  return r;
+}
+
+static AhcNode *p_text_length(AhcNode *t) {
+  AhcNode *w = ahc_eval(t);
+  const uint8_t *p = text_bytes(w);
+  int32_t i, len = w->u.bytes.len;
+  long n = 0;
+  for (i = 0; i < len; i++)
+    if ((p[i] & 0xC0) != 0x80) n++;
+  return ahc_mk_int(n);
+}
+
+static AhcNode *p_text_byte_length(AhcNode *t) {
+  return ahc_mk_int((long)ahc_eval(t)->u.bytes.len);
+}
+
+static AhcNode *p_text_index(AhcNode *t, AhcNode *i) {
+  AhcNode *w = ahc_eval(t);
+  long n = ahc_eval(i)->u.i;
+  size_t at;
+  if (n < 0) ahc_die("Data.Text.index: index out of bounds");
+  at = (size_t)text_cp_byte(w, n);
+  if (at >= (size_t)w->u.bytes.len)
+    ahc_die("Data.Text.index: index out of bounds");
+  return ahc_mk_char(utf8_decode(text_bytes(w),
+                                 (size_t)w->u.bytes.len, &at));
+}
+
+static AhcNode *p_text_take(AhcNode *n, AhcNode *t) {
+  long k = ahc_eval(n)->u.i;
+  AhcNode *w = ahc_eval(t);
+  int32_t at = k <= 0 ? 0 : text_cp_byte(w, k);
+  return ahc_mk_bytes_slice(w, 0, at);
+}
+
+static AhcNode *p_text_drop(AhcNode *n, AhcNode *t) {
+  long k = ahc_eval(n)->u.i;
+  AhcNode *w = ahc_eval(t);
+  int32_t at = k <= 0 ? 0 : text_cp_byte(w, k);
+  return ahc_mk_bytes_slice(w, at, w->u.bytes.len - at);
+}
+
+static AhcNode *p_text_show(AhcNode *t) {
+  AhcNode *w = ahc_eval(t);
+  const uint8_t *p = text_bytes(w);
+  size_t i = 0, len = (size_t)w->u.bytes.len;
+  StrBuf b = {0, 0, 0};
+  int esc = 0;
+  sb_ch(&b, '"');
+  while (i < len) sb_show_cp(&b, utf8_decode(p, len, &i), &esc);
+  sb_ch(&b, '"');
   return sb_take(&b);
 }
 
@@ -5034,7 +5150,11 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_poke_i64, *ahc_prim_poke_u8, *ahc_prim_poke_u16,
   *ahc_prim_poke_u32, *ahc_prim_poke_u64,
   *ahc_prim_poke_d, *ahc_prim_poke_p,
-  *ahc_prim_new_cstring, *ahc_prim_peek_cstring_len;
+  *ahc_prim_new_cstring, *ahc_prim_peek_cstring_len,
+  *ahc_prim_text_pack, *ahc_prim_text_unpack, *ahc_prim_text_append,
+  *ahc_prim_text_length, *ahc_prim_text_byte_length,
+  *ahc_prim_text_index, *ahc_prim_text_take, *ahc_prim_text_drop,
+  *ahc_prim_text_show;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -5235,4 +5355,13 @@ void ahc_rts_init(void) {
   ahc_prim_poke_p = mk_prim3(p_poke_p);
   ahc_prim_new_cstring = mk_prim1(p_new_cstring);
   ahc_prim_peek_cstring_len = mk_prim2(p_peek_cstring_len);
+  ahc_prim_text_pack = mk_prim1(p_text_pack);
+  ahc_prim_text_unpack = mk_prim1(p_text_unpack);
+  ahc_prim_text_append = mk_prim2(p_text_append);
+  ahc_prim_text_length = mk_prim1(p_text_length);
+  ahc_prim_text_byte_length = mk_prim1(p_text_byte_length);
+  ahc_prim_text_index = mk_prim2(p_text_index);
+  ahc_prim_text_take = mk_prim2(p_text_take);
+  ahc_prim_text_drop = mk_prim2(p_text_drop);
+  ahc_prim_text_show = mk_prim1(p_text_show);
 }

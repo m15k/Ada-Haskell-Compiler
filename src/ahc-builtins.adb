@@ -247,6 +247,10 @@ package body AHC.Builtins is
       --  pointee (or the pointed-to function's Haskell type).
       Env.Ptr_TC      := TyCon_Id (Def_TyCon ("Ptr", 1, Star1));
       Env.FunPtr_TC   := TyCon_Id (Def_TyCon ("FunPtr", 1, Star1));
+      --  The one packed string type (AHC_BYTES at runtime): wired in
+      --  like Int, so the NAME needs no import; the API lives in
+      --  lib/Data/Text.hs.
+      Env.Text_TC     := TyCon_Id (Def_TyCon ("Text", 0, Star_K));
 
       --  Fixed-width C types: distinct tycons whose runtime nodes
       --  are plain AHC_INT - only the FFI boundary knows the width.
@@ -859,6 +863,12 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Ordering_TC));
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ordering_TC));
+         --  Text: Eq/Ord ride the generic poly_cmp fallback (its
+         --  AHC_BYTES case is byte order == code-point order); Show
+         --  gets a prim body in Prelude_Core.
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Text_TC));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Text_TC));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Text_TC));
 
          --  Eq/Ord (Ptr a) / (FunPtr a): address comparison, so no
          --  context on a.
@@ -1080,7 +1090,30 @@ package body AHC.Builtins is
          declare
             String_T2 : constant Real_Type_Id :=
               LST (TC (Env.Char_TC));
+            Text_T : constant Real_Type_Id := TC (Env.Text_TC);
          begin
+            --  Data.Text primops (lib/Data/Text.hs wraps these).
+            Ignore := Def_Global
+              ("primTextPack", Mono (FN (String_T2, Text_T)));
+            Ignore := Def_Global
+              ("primTextUnpack", Mono (FN (Text_T, String_T2)));
+            Ignore := Def_Global
+              ("primTextAppend", Mono (FN (Text_T, Text_T, Text_T)));
+            Ignore := Def_Global
+              ("primTextLength",
+               Mono (FN (Text_T, TC (Env.Int_TC))));
+            Ignore := Def_Global
+              ("primTextByteLength",
+               Mono (FN (Text_T, TC (Env.Int_TC))));
+            Ignore := Def_Global
+              ("primTextIndex",
+               Mono (FN (Text_T, TC (Env.Int_TC), TC (Env.Char_TC))));
+            Ignore := Def_Global
+              ("primTextTake",
+               Mono (FN (TC (Env.Int_TC), Text_T, Text_T)));
+            Ignore := Def_Global
+              ("primTextDrop",
+               Mono (FN (TC (Env.Int_TC), Text_T, Text_T)));
             Ignore := Def_Global
               ("ord", Mono (FN (TC (Env.Char_TC), TC (Env.Int_TC))));
             Ignore := Def_Global
