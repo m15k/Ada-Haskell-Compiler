@@ -6,6 +6,7 @@
 module Main where
 
 import Control.Exception (try)
+import qualified Data.Text as T
 import Foreign.C.String (CString, peekCString)
 import Foreign.C.Types (CLong)
 
@@ -48,3 +49,5 @@ main = do
 
   alive <- evalExpr "6*7"
   putStrLn ("still alive  = " ++ show alive)
+  g <- greet (T.pack "wörld λ")
+  putStrLn ("greet        = " ++ T.unpack g)

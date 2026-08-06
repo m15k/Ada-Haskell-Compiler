@@ -4160,6 +4160,7 @@ static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
 /* ----- Data.Text IO + C-string bridges --------------------------- */
 
 static const uint8_t *text_bytes(AhcNode *w);  /* fwd: pure prims */
+static FILE *ahc_handle(long i, const char *what);  /* fwd: registry */
 
 /* Bytes from outside the runtime enter through one normalizer:
    decode + re-encode, so the valid-UTF-8 payload invariant holds
@@ -4190,6 +4191,37 @@ static AhcNode *p_text_put(AhcNode *t) {
   AhcNode **e = ahc_env(1);
   e[0] = t;
   return ahc_mk_fun(io_text_put, e);
+}
+
+static AhcNode *io_text_hput(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hPutText");
+  AhcNode *t = ahc_eval(env[1]);
+  (void)w;
+  if (t->u.bytes.len > 0)
+    fwrite(text_bytes(t), 1, (size_t)t->u.bytes.len, f);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_text_hput(AhcNode *h, AhcNode *t) {
+  AhcNode **e = ahc_env(2);
+  e[0] = h; e[1] = t;
+  return ahc_mk_fun(io_text_hput, e);
+}
+
+static AhcNode *io_text_hgetcontents(AhcNode **env, AhcNode *w) {
+  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetContentsText");
+  StrBuf cb = {0, 0, 0};
+  int ch;
+  AhcNode *r;
+  (void)w;
+  while ((ch = fgetc(f)) != EOF) sb_ch(&cb, (char)ch);
+  r = text_from_bytes_norm((const uint8_t *)cb.p, cb.len);
+  free(cb.p);
+  return r;
+}
+static AhcNode *p_text_hgetcontents(AhcNode *h) {
+  AhcNode **e = ahc_env(1);
+  e[0] = h;
+  return ahc_mk_fun(io_text_hgetcontents, e);
 }
 
 static AhcNode *io_text_readfile(AhcNode **env, AhcNode *w) {
@@ -4265,15 +4297,26 @@ static AhcNode *p_text_from_cstring_len(AhcNode *p, AhcNode *n) {
 
 /* malloc'd NUL-terminated copy of the slice; release with free.
    (Interior NULs survive the copy but C sees a shorter string -
-   same contract as newCString.) */
-static AhcNode *io_text_new_cstring(AhcNode **env, AhcNode *w) {
-  AhcNode *t = ahc_eval(env[0]);
-  char *p = (char *)malloc((size_t)t->u.bytes.len + 1);
-  (void)w;
+   same contract as newCString.) Shared by newCString-for-Text and
+   the M_Text argument marshal. */
+char *ahc_marshal_text(AhcNode *t) {
+  AhcNode *w = ahc_eval(t);
+  char *p = (char *)malloc((size_t)w->u.bytes.len + 1);
   if (!p) ahc_die("out of memory");
-  memcpy(p, text_bytes(t), (size_t)t->u.bytes.len);
-  p[t->u.bytes.len] = 0;
-  return ahc_mk_ptr(p);
+  memcpy(p, text_bytes(w), (size_t)w->u.bytes.len);
+  p[w->u.bytes.len] = 0;
+  return p;
+}
+
+/* M_Text result marshal: NUL-terminated C string in, normalized
+   Text out. */
+AhcNode *ahc_mk_text(const char *s) {
+  return text_from_bytes_norm((const uint8_t *)s, strlen(s));
+}
+
+static AhcNode *io_text_new_cstring(AhcNode **env, AhcNode *w) {
+  (void)w;
+  return ahc_mk_ptr(ahc_marshal_text(env[0]));
 }
 static AhcNode *p_text_new_cstring(AhcNode *t) {
   AhcNode **e = ahc_env(1);
@@ -5281,7 +5324,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_text_show,
   *ahc_prim_text_put, *ahc_prim_text_readfile,
   *ahc_prim_text_writefile, *ahc_prim_text_from_cstring_len,
-  *ahc_prim_text_new_cstring;
+  *ahc_prim_text_new_cstring,
+  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -5496,4 +5540,6 @@ void ahc_rts_init(void) {
   ahc_prim_text_writefile = mk_prim2(p_text_writefile);
   ahc_prim_text_from_cstring_len = mk_prim2(p_text_from_cstring_len);
   ahc_prim_text_new_cstring = mk_prim1(p_text_new_cstring);
+  ahc_prim_text_hput = mk_prim2(p_text_hput);
+  ahc_prim_text_hgetcontents = mk_prim1(p_text_hgetcontents);
 }

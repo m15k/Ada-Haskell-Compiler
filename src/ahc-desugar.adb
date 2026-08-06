@@ -1567,9 +1567,10 @@ package body AHC.Desugar is
                      & "': " & Msg);
          end Err;
 
-         --  The v1 marshallable universe: Int, Double, Char, Bool,
-         --  (), String, Ptr a. Anything else (bare tyvars included)
-         --  fails; tyvars are thereby allowed only under Ptr.
+         --  The marshallable universe: Int, Double, Char, Bool,
+         --  (), String, Text, Ptr a, and the fixed-width C types.
+         --  Anything else (bare tyvars included) fails; tyvars are
+         --  thereby allowed only under Ptr.
          function Classify
            (T : Core.Type_Id; K : out Core.Marshal_Kind)
             return Boolean
@@ -1598,6 +1599,8 @@ package body AHC.Desugar is
                         K := Core.M_Bool;
                      elsif Core.TyCon_Id (TN.Con) = Env.Unit_TC then
                         K := Core.M_Unit;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Text_TC then
+                        K := Core.M_Text;
                      else
                         for CK in Builtins.C_Fix_Kind loop
                            if Core.TyCon_Id (TN.Con)

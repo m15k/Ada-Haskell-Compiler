@@ -46,7 +46,7 @@ package body AHC.Bindgen is
                when M_Double => "double",
                when M_Bool => "bool",
                when M_Unit => "void",
-               when M_String =>
+               when M_String | M_Text =>
                  (if Ret then "std::string"
                   else "const std::string &"),
                when M_Ptr => "void *",
@@ -103,7 +103,7 @@ package body AHC.Bindgen is
                      Append (Call, (if I > 1 then ", " else "")
                              & (case F.Args (I) is
                                   when M_Bool => A & " ? 1 : 0",
-                                  when M_String => A & ".c_str()",
+                                  when M_String | M_Text => A & ".c_str()",
                                   when others => A));
                   end;
                end loop;
@@ -116,7 +116,7 @@ package body AHC.Bindgen is
                      Append (R, "    int r_ = " & Call & ";" & LF
                              & "    check_();" & LF
                              & "    return r_ != 0;" & LF);
-                  when M_String =>
+                  when M_String | M_Text =>
                      Append (R, "    char *r_ = " & Call & ";" & LF
                              & "    check_();" & LF
                              & "    std::string s_(r_);" & LF
@@ -147,7 +147,7 @@ package body AHC.Bindgen is
                when M_Double => "f64",
                when M_Bool => "c_int",
                when M_Unit => "()",
-               when M_String =>
+               when M_String | M_Text =>
                  (if Ret then "*mut c_char" else "*const c_char"),
                when M_Ptr => "*mut c_void",
                when M_I8 => "i8",   when M_I16 => "i16",
@@ -161,7 +161,7 @@ package body AHC.Bindgen is
                when M_Double => "f64",
                when M_Bool => "bool",
                when M_Unit => "()",
-               when M_String => "String",
+               when M_String | M_Text => "String",
                when M_Ptr => "*mut c_void",
                when others => Raw (K, False));
 
@@ -232,13 +232,13 @@ package body AHC.Bindgen is
                for I in 1 .. N loop
                   Append (R, (if I > 1 then ", " else "")
                           & Arg (I - 1) & ": "
-                          & (if F.Args (I) = M_String then "&str"
+                          & (if F.Args (I) in M_String | M_Text then "&str"
                              else Pub (F.Args (I))));
                end loop;
                Append (R, ") -> Result<" & Pub (F.Res)
                        & ", String> {" & LF);
                for I in 1 .. N loop
-                  if F.Args (I) = M_String then
+                  if F.Args (I) in M_String | M_Text then
                      Append (R, "    let " & Arg (I - 1)
                              & "_c = CString::new(" & Arg (I - 1)
                              & ").map_err(|_| ""interior NUL"""
@@ -254,7 +254,7 @@ package body AHC.Bindgen is
                                when M_Bool =>
                                  "if " & Arg (I - 1)
                                  & " { 1 } else { 0 }",
-                               when M_String =>
+                               when M_String | M_Text =>
                                  Arg (I - 1) & "_c.as_ptr()",
                                when others => Arg (I - 1)));
                end loop;
@@ -273,7 +273,7 @@ package body AHC.Bindgen is
                      Append (R, "        let r_ = " & Call & ";" & LF
                              & "        err_check()?;" & LF
                              & "        Ok(r_ as i64)" & LF);
-                  when M_String =>
+                  when M_String | M_Text =>
                      Append (R, "        let r_ = " & Call & ";" & LF
                              & "        err_check()?;" & LF
                              & "        let s_ = CStr::from_ptr(r_)"
@@ -305,7 +305,7 @@ package body AHC.Bindgen is
                when M_Double => "float64",
                when M_Bool => "bool",
                when M_Unit => "",
-               when M_String => "string",
+               when M_String | M_Text => "string",
                when M_Ptr => "unsafe.Pointer",
                when M_I8 => "int8",   when M_I16 => "int16",
                when M_I32 => "int32", when M_I64 => "int64",
@@ -318,7 +318,7 @@ package body AHC.Bindgen is
                when M_Int | M_Char => "C.long(" & A & ")",
                when M_Double => "C.double(" & A & ")",
                when M_Bool => "b2c(" & A & ")",
-               when M_String => A & "_c",
+               when M_String | M_Text => A & "_c",
                when M_Ptr => A,
                when Fixed_Marshal =>
                  "C." & Fix_C (K) & "(" & A & ")",
@@ -415,7 +415,7 @@ package body AHC.Bindgen is
                Append (R, "        var e error" & LF);
                Append (R, "        do(func() {" & LF);
                for I in 1 .. N loop
-                  if F.Args (I) = M_String then
+                  if F.Args (I) in M_String | M_Text then
                      Append (R, "                " & Arg (I - 1)
                              & "_c := C.CString(" & Arg (I - 1)
                              & ")" & LF);
@@ -435,7 +435,7 @@ package body AHC.Bindgen is
                      Append (R, "                r_ := " & Call & LF
                              & "                e = lastErr()" & LF
                              & "                r = r_ != 0" & LF);
-                  when M_String =>
+                  when M_String | M_Text =>
                      Append (R, "                p_ := " & Call & LF
                              & "                e = lastErr()" & LF
                              & "                if e == nil {" & LF
@@ -453,7 +453,7 @@ package body AHC.Bindgen is
                              & "                e = lastErr()" & LF);
                end case;
                for I in 1 .. N loop
-                  if F.Args (I) = M_String then
+                  if F.Args (I) in M_String | M_Text then
                      Append (R, "                C.free(unsafe.Pointer("
                              & Arg (I - 1) & "_c))" & LF);
                   end if;
@@ -482,7 +482,7 @@ package body AHC.Bindgen is
                when M_Double => "CDouble",
                when M_Bool => "CInt",
                when M_Unit => "()",
-               when M_String => "CString",
+               when M_String | M_Text => "CString",
                when M_Ptr => "Ptr ()",
                when M_I8 => "Int8",   when M_I16 => "Int16",
                when M_I32 => "Int32", when M_I64 => "Int64",
@@ -491,6 +491,24 @@ package body AHC.Bindgen is
 
          function Arg (I : Natural) return String
          is ("a" & Integer'Image (I) (2 .. Integer'Image (I)'Length));
+
+         --  Text crosses as CString like String; the public type is
+         --  T.Text, so the import appears only when some export
+         --  actually uses it.
+         function Uses_Text return Boolean is
+         begin
+            for F of Exports loop
+               if F.Res = M_Text then
+                  return True;
+               end if;
+               for K of F.Args loop
+                  if K = M_Text then
+                     return True;
+                  end if;
+               end loop;
+            end loop;
+            return False;
+         end Uses_Text;
 
       begin
          Append (R,
@@ -506,6 +524,8 @@ package body AHC.Bindgen is
            & "module AhcLib where" & LF & LF
            & "import Data.Int" & LF
            & "import Data.Word" & LF
+           & (if Uses_Text
+              then "import qualified Data.Text as T" & LF else "")
            & "import Foreign.C.String" & LF
            & "import Foreign.C.Types" & LF
            & "import Foreign.Marshal.Alloc (free)" & LF
@@ -536,6 +556,7 @@ package body AHC.Bindgen is
                   Append (R,
                           (case F.Args (I) is
                              when M_String => "String",
+                             when M_Text => "T.Text",
                              when M_Bool => "Bool",
                              when others => Raw (F.Args (I)))
                           & " -> ");
@@ -543,6 +564,7 @@ package body AHC.Bindgen is
                Append (R, "IO ("
                        & (case F.Res is
                             when M_String => "String",
+                            when M_Text => "T.Text",
                             when M_Bool => "Bool",
                             when others => Raw (F.Res))
                        & ")" & LF);
@@ -562,13 +584,18 @@ package body AHC.Bindgen is
                                 & Arg (I - 1) & " (\c"
                                 & Arg (I - 1) & " -> " & LF);
                         Append (Ind, "  ");
+                     elsif F.Args (I) = M_Text then
+                        Append (R, Ind & "withCString (T.unpack "
+                                & Arg (I - 1) & ") (\c"
+                                & Arg (I - 1) & " -> " & LF);
+                        Append (Ind, "  ");
                      end if;
                   end loop;
                   Append (Call, Raw_Name);
                   for I in 1 .. N loop
                      Append (Call, " "
                              & (case F.Args (I) is
-                                  when M_String =>
+                                  when M_String | M_Text =>
                                     "c" & Arg (I - 1),
                                   when M_Bool =>
                                     "(if " & Arg (I - 1)
@@ -583,6 +610,11 @@ package body AHC.Bindgen is
                                 & " r_" & LF
                                 & Ind & "   free r_" & LF
                                 & Ind & "   return s_");
+                     when M_Text =>
+                        Append (R, Ind & "   s_ <- peekCString"
+                                & " r_" & LF
+                                & Ind & "   free r_" & LF
+                                & Ind & "   return (T.pack s_)");
                      when M_Bool =>
                         Append (R, Ind
                                 & "   return (r_ /= 0)");
@@ -590,7 +622,7 @@ package body AHC.Bindgen is
                         Append (R, Ind & "   return r_");
                   end case;
                   for I in 1 .. N loop
-                     if F.Args (I) = M_String then
+                     if F.Args (I) in M_String | M_Text then
                         Append (R, ")");
                      end if;
                   end loop;

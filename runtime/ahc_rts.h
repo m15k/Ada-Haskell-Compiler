@@ -76,6 +76,8 @@ AhcNode *ahc_mk_ptr(void *p);                  /* foreign pointer     */
 typedef AhcNode *(*AhcPrimN)(AhcNode **args);
 AhcNode *ahc_mk_primn(int arity, AhcPrimN f);
 char *ahc_marshal_cstring(AhcNode *s);
+char *ahc_marshal_text(AhcNode *t);           /* malloc'd, NUL-term */
+AhcNode *ahc_mk_text(const char *s);          /* normalized inbound */
 void ahc_free_cstring(char *s);
 
 /* Wrapper imports: claim a slot in the site's trampoline pool for
@@ -167,7 +169,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_text_show,
   *ahc_prim_text_put, *ahc_prim_text_readfile,
   *ahc_prim_text_writefile, *ahc_prim_text_from_cstring_len,
-  *ahc_prim_text_new_cstring;
+  *ahc_prim_text_new_cstring,
+  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents;
 
 void ahc_rts_init(void);
 

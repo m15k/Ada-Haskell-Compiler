@@ -8,3 +8,4 @@ analyze:
   -> 15 words
 evalExpr(bad): user error (error: expected a number at '')
 still alive  = 42
+greet        = ★ héllo, wörld λ ★

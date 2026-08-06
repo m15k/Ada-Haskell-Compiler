@@ -391,7 +391,11 @@ package AHC.Core is
      (M_Int, M_Double, M_Char, M_Bool, M_Unit, M_String, M_Ptr,
       --  Fixed-width C types (Int8..Word64): range-checked at the
       --  boundary, AHC_INT nodes on the Haskell side.
-      M_I8, M_I16, M_I32, M_I64, M_U8, M_U16, M_U32, M_U64);
+      M_I8, M_I16, M_I32, M_I64, M_U8, M_U16, M_U32, M_U64,
+      --  Packed Text: const char* at the C ABI like M_String
+      --  (copied both ways, UTF-8, normalized inbound), but the
+      --  Haskell side is an AHC_BYTES slice.
+      M_Text);
 
    subtype Fixed_Marshal is Marshal_Kind range M_I8 .. M_U64;
 

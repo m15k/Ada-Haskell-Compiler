@@ -35,4 +35,5 @@ fn main() {
     }
 
     println!("still alive  = {}", eng::evalExpr("6*7").unwrap());
+    println!("greet        = {}", eng::greet("wörld λ").unwrap());
 }

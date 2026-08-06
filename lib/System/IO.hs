@@ -7,6 +7,7 @@ module System.IO
   , hPutStr, hPutStrLn, hPutChar, hPrint
   , hGetLine, hGetChar, hGetContents, hIsEOF, hFlush
   , writeFile, appendFile
+  , hPutText, hGetContentsText
   ) where
 
 -- Handle is ABSTRACT: the constructor stays private, so the only
@@ -69,6 +70,15 @@ hGetChar (MkHandle i) = primHGetChar i
 -- observable results agree).
 hGetContents :: Handle -> IO String
 hGetContents (MkHandle i) = primHGetContents i
+
+-- Text IO at a Handle lives HERE, not in Data.Text: MkHandle is
+-- private, and the wired-in Text type name needs no import. One
+-- fwrite of the packed slice; input normalizes to valid UTF-8.
+hPutText :: Handle -> Text -> IO ()
+hPutText (MkHandle i) t = primTextHPut i t
+
+hGetContentsText :: Handle -> IO Text
+hGetContentsText (MkHandle i) = primTextHGetContents i
 
 hIsEOF :: Handle -> IO Bool
 hIsEOF (MkHandle i) = primHIsEOF i

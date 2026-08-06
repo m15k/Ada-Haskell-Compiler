@@ -1508,6 +1508,12 @@ package body AHC.Builtins is
                      Mono (FN (Text_T2,
                                IO_T (AP (TC (Env.Ptr_TC),
                                          TC (Env.Char_TC))))));
+                  Ignore := Def_Global
+                    ("primTextHPut",
+                     Mono (FN (I_T, Text_T2, IO_T (U_T))));
+                  Ignore := Def_Global
+                    ("primTextHGetContents",
+                     Mono (FN (I_T, IO_T (Text_T2))));
                end;
             end;
          end;

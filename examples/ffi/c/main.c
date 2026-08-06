@@ -44,5 +44,10 @@ int main(void) {
     printf("evalExpr(bad) = %ld (unexpected)\n", bad);
 
   printf("still alive  = %ld\n", evalExpr("6*7"));
+
+  /* Packed Text: UTF-8 const char* both ways. */
+  char *g = greet("w\xc3\xb6rld \xce\xbb");
+  printf("greet        = %s\n", g);
+  free(g);
   return 0;
 }

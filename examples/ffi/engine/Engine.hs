@@ -16,6 +16,7 @@ module Engine where
 
 import Data.Char (isAlpha, isDigit, isSpace, ord, toLower)
 import Data.List (group, intercalate, sort, sortBy)
+import qualified Data.Text as T
 
 --  OUTBOUND: provided by whatever language embeds this library.
 foreign import ccall "host_log" hostLog :: String -> IO ()
@@ -120,3 +121,13 @@ analyze txt = do
            ++ show (length (lines txt)) ++ " lines")
   hostLog ("engine: ranked -> " ++ wordFreq txt)
   return (fromIntegral (length (words txt)))
+
+------------------------------------------------------------------
+--  6. Packed Text across the boundary (M_Text): const char* at
+--     the C ABI, UTF-8 both ways, native string in every host.
+------------------------------------------------------------------
+
+foreign export ccall greet :: Text -> Text
+
+greet :: Text -> Text
+greet name = T.append "\9733 h\233llo, " (T.append name " \9733")

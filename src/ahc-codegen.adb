@@ -905,6 +905,7 @@ package body AHC.CodeGen is
             when M_Bool   => "int",
             when M_Unit   => "void",
             when M_String => "const char *",
+            when M_Text   => "const char *",
             when M_Ptr    => "void *",
             when M_I8     => "int8_t",
             when M_I16    => "int16_t",
@@ -1023,6 +1024,10 @@ package body AHC.CodeGen is
                         Append (R, "  char *x" & Ix
                                 & " = ahc_marshal_cstring(" & S
                                 & ");" & LF);
+                     when M_Text =>
+                        Append (R, "  char *x" & Ix
+                                & " = ahc_marshal_text(" & S
+                                & ");" & LF);
                      when M_Ptr =>
                         Append (R, "  void *x" & Ix
                                 & " = ahc_eval(" & S & ")->u.p;"
@@ -1066,7 +1071,7 @@ package body AHC.CodeGen is
                   Append (R, "  long rv = " & Call & ";" & LF);
                when M_Bool =>
                   Append (R, "  int rv = " & Call & ";" & LF);
-               when M_String =>
+               when M_String | M_Text =>
                   Append (R, "  const char *rv = " & Call & ";"
                           & LF);
                when M_Ptr =>
@@ -1077,7 +1082,7 @@ package body AHC.CodeGen is
             end case;
 
             for I in 1 .. NArgs loop
-               if F.Args (I) = M_String then
+               if F.Args (I) in M_String | M_Text then
                   Append (R, "  ahc_free_cstring(x" & Img (I - 1)
                           & ");" & LF);
                end if;
@@ -1099,6 +1104,10 @@ package body AHC.CodeGen is
                   Append (R, "  if (!rv) ahc_die(""FFI: NULL string "
                           & "result"");" & LF
                           & "  return ahc_mk_string(rv);" & LF);
+               when M_Text =>
+                  Append (R, "  if (!rv) ahc_die(""FFI: NULL text "
+                          & "result"");" & LF
+                          & "  return ahc_mk_text(rv);" & LF);
                when M_Ptr =>
                   Append (R, "  return ahc_mk_ptr(rv);" & LF);
                when Fixed_Marshal =>
@@ -1115,7 +1124,7 @@ package body AHC.CodeGen is
             Pool : constant := 32;
             NCB : constant Natural := Natural (F.CB_Args.Length);
             RT : constant String :=
-              (if F.CB_Res = M_String then "char *"
+              (if F.CB_Res in M_String | M_Text then "char *"
                else C_Type (F.CB_Res));
 
             function Args_Decl return String is
@@ -1161,6 +1170,8 @@ package body AHC.CodeGen is
                                  "ahc_mk_con(" & A & " ? 2 : 1, 0)",
                                when M_String =>
                                  "ahc_mk_string(" & A & ")",
+                               when M_Text   =>
+                                 "ahc_mk_text(" & A & ")",
                                when M_Ptr    =>
                                  "ahc_mk_ptr(" & A & ")",
                                when Fixed_Marshal =>
@@ -1190,6 +1201,9 @@ package body AHC.CodeGen is
                           & LF);
                when M_String =>
                   Append (Fns, "  return ahc_marshal_cstring(r);"
+                          & LF);
+               when M_Text =>
+                  Append (Fns, "  return ahc_marshal_text(r);"
                           & LF);
                when M_Ptr =>
                   Append (Fns, "  return r->u.p;" & LF);
@@ -1296,7 +1310,7 @@ package body AHC.CodeGen is
       --  Result type as seen by the C caller: an exported String
       --  comes back as a malloc'd char* the caller frees.
       function C_Ret_Type (K : Marshal_Kind) return String
-      is (if K = M_String then "char *" else C_Type (K));
+      is (if K in M_String | M_Text then "char *" else C_Type (K));
 
       function Export_Proto (F : Foreign_Import) return String is
          R : Unbounded_String;
@@ -1345,6 +1359,8 @@ package body AHC.CodeGen is
                               "ahc_mk_con(" & A & " ? 2 : 1, 0)",
                             when M_String =>
                               "ahc_mk_string(" & A & ")",
+                            when M_Text   =>
+                              "ahc_mk_text(" & A & ")",
                             when M_Ptr    => "ahc_mk_ptr(" & A & ")",
                             when Fixed_Marshal =>
                               Fix_Box (F.Args (I), A),
@@ -1377,6 +1393,9 @@ package body AHC.CodeGen is
                        & "ahc_err_disarm(); return v_; }" & LF);
             when M_String =>
                Append (Fns, "  { char *v_ = ahc_marshal_cstring(r); "
+                       & "ahc_err_disarm(); return v_; }" & LF);
+            when M_Text =>
+               Append (Fns, "  { char *v_ = ahc_marshal_text(r); "
                        & "ahc_err_disarm(); return v_; }" & LF);
             when M_Ptr =>
                Append (Fns, "  { void *v_ = r->u.p; "

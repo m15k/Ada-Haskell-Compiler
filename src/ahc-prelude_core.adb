@@ -1324,6 +1324,8 @@ package body AHC.Prelude_Core is
          BP ("primTextFromCStringLen",
              "ahc_prim_text_from_cstring_len");
          BP ("primTextNewCString", "ahc_prim_text_new_cstring");
+         BP ("primTextHPut", "ahc_prim_text_hput");
+         BP ("primTextHGetContents", "ahc_prim_text_hgetcontents");
       end;
 
       --  quot/rem/div/mod are Integral methods now; their prims are

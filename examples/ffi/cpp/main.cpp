@@ -34,5 +34,6 @@ int main() {
   }
 
   std::printf("still alive  = %ld\n", eng.evalExpr("6*7"));
+  std::printf("greet        = %s\n", eng.greet("wörld λ").c_str());
   return 0;
 }

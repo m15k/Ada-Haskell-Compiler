@@ -45,4 +45,6 @@ func main() {
 
 	alive, _ := ahc.EvalExpr("6*7")
 	fmt.Printf("still alive  = %d\n", alive)
+	g, _ := ahc.Greet("wörld λ")
+	fmt.Printf("greet        = %s\n", g)
 }

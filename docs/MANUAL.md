@@ -960,6 +960,7 @@ The v1 marshallable types, and what they become in C:
 | `Bool`             | `int`          | 0/1                          |
 | `()`               | `void`         | result position only         |
 | `String`           | `const char *` | copied both ways, O(n)       |
+| `Text`             | `const char *` | UTF-8, copied both ways; inbound bytes normalize to valid UTF-8 (U+FFFD) |
 | `Ptr a`            | `void *`       | phantom `a`; `Eq`/`Ord`      |
 
 `nullPtr :: Ptr a` and `peekCString :: Ptr Char -> IO String` make
