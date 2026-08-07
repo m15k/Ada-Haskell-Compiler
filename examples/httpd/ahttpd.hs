@@ -72,6 +72,21 @@ readRequest fd buf = do
     then waitRead (fromIntegral fd) >> readRequest fd buf
     else return (fromIntegral n)
 
+-- The connection is O_NONBLOCK, so a write can refuse outright
+-- (EAGAIN) or accept only part of the body. Ignoring the result is
+-- how a CI runner got an EMPTY response while the server's own log
+-- said the request had been served: park on the fd until it is
+-- writable and finish the job. This is waitWrite's reason to exist.
+writeAll :: CInt -> String -> IO ()
+writeAll fd s =
+  if null s
+    then return ()
+    else do
+      k <- c_write fd s (fromIntegral (length s))
+      if k <= 0
+        then waitWrite (fromIntegral fd) >> writeAll fd s
+        else writeAll fd (drop (fromIntegral k) s)
+
 parseNat :: String -> Maybe Int
 parseNat s =
   if not (null s) && all (\c -> c >= '0' && c <= '9') s
@@ -178,7 +193,7 @@ handle fd quitCh = do
                   ++ status r)
         return r
   let body = either id id result
-  _ <- c_write fd body (fromIntegral (length body))
+  writeAll fd body
   _ <- c_close fd
   case result of
     Left _  -> send quitCh ()

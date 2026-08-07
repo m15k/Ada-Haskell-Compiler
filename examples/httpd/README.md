@@ -35,7 +35,9 @@ shutdown; the harness never needs `kill`).
 - **Scheduler-integrated IO** (M127): the accept loop *parks* on
   the listen fd — `waitReadOr lfd quitCh`, Ada's
   accept-or-terminate — and each connection's handler parks on its
-  own fd (`waitRead`) while the client dawdles. An idle server
+  own fd (`waitRead`) while the client dawdles — and parks again on
+  `waitWrite` if a response cannot be written in one go, since these
+  sockets are nonblocking in both directions. An idle server
   costs ~zero CPU (the harness asserts it), and connections
   overlap: the harness opens a silent connection, serves another
   client meanwhile, then completes the first. Both answers are
