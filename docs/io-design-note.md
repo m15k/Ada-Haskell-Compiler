@@ -219,6 +219,16 @@ Policy, chosen for totality:
   gets a diagnostic). String-literal bytes pass through the intern
   table and are decoded by the runtime; escapes were always
   UTF-8-encoded there.
+- **Literals are not data.** A numeric escape may name a lone
+  surrogate (`"\xD800"`), which the Report says denotes that very
+  `Char` and which UTF-8 cannot represent. The lexer WTF-8-encodes
+  it into the intern table and codegen materializes literals with
+  `ahc_mk_string_lit`, whose decoder accepts surrogate encodings —
+  so a literal round-trips exactly and agrees with the equivalent
+  char-literal list. Every byte arriving from OUTSIDE the program
+  still goes through the strict decoder and the U+FFFD rule. The
+  encoder is unchanged: writing such a `Char` out emits U+FFFD,
+  and packing it into `Text` does too (as GHC's `text` does).
 - The packed `Text` type (phase B) keeps its payload valid UTF-8 by
   construction; its `pack`/IO boundaries normalize with the same
   replacement rule.

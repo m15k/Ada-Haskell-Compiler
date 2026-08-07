@@ -526,7 +526,9 @@ package body AHC.Bindgen is
            & "import Data.Word" & LF
            & (if Uses_Text
               then "import qualified Data.Text as T" & LF else "")
-           & "import Foreign.C.String" & LF
+           & "import Foreign.C.String (CString)" & LF
+           & "import GHC.IO.Encoding (utf8)" & LF
+           & "import qualified GHC.Foreign as GF" & LF
            & "import Foreign.C.Types" & LF
            & "import Foreign.Marshal.Alloc (free)" & LF
            & "import Foreign.Ptr" & LF & LF
@@ -537,7 +539,7 @@ package body AHC.Bindgen is
            & "ahcCheck :: IO ()" & LF
            & "ahcCheck = do" & LF
            & "  e <- c_ahcLastError" & LF
-           & "  s <- peekCString e" & LF
+           & "  s <- GF.peekCString utf8 e" & LF
            & "  if null s then return ()"
            & " else ioError (userError s)" & LF & LF);
          for F of Exports loop
@@ -580,12 +582,12 @@ package body AHC.Bindgen is
                begin
                   for I in 1 .. N loop
                      if F.Args (I) = M_String then
-                        Append (R, Ind & "withCString "
+                        Append (R, Ind & "GF.withCString utf8 "
                                 & Arg (I - 1) & " (\c"
                                 & Arg (I - 1) & " -> " & LF);
                         Append (Ind, "  ");
                      elsif F.Args (I) = M_Text then
-                        Append (R, Ind & "withCString (T.unpack "
+                        Append (R, Ind & "GF.withCString utf8 (T.unpack "
                                 & Arg (I - 1) & ") (\c"
                                 & Arg (I - 1) & " -> " & LF);
                         Append (Ind, "  ");
@@ -606,13 +608,13 @@ package body AHC.Bindgen is
                   Append (R, Ind & "   ahcCheck" & LF);
                   case F.Res is
                      when M_String =>
-                        Append (R, Ind & "   s_ <- peekCString"
-                                & " r_" & LF
+                        Append (R, Ind & "   s_ <- GF.peekCString"
+                                & " utf8 r_" & LF
                                 & Ind & "   free r_" & LF
                                 & Ind & "   return s_");
                      when M_Text =>
-                        Append (R, Ind & "   s_ <- peekCString"
-                                & " r_" & LF
+                        Append (R, Ind & "   s_ <- GF.peekCString"
+                                & " utf8 r_" & LF
                                 & Ind & "   free r_" & LF
                                 & Ind & "   return (T.pack s_)");
                      when M_Bool =>

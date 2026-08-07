@@ -961,6 +961,18 @@ The v1 marshallable types, and what they become in C:
 | `()`               | `void`         | result position only         |
 | `String`           | `const char *` | copied both ways, O(n)       |
 | `Text`             | `const char *` | UTF-8, copied both ways; inbound bytes normalize to valid UTF-8 (U+FFFD) |
+
+A `const char *` is NUL-terminated, so neither `String` nor `Text`
+may carry an interior NUL across the boundary. `Text` says so out
+loud — the marshal dies with *"FFI: Text contains an interior NUL"*
+rather than handing each host a differently-truncated copy (Rust
+would raise, C/C++/Go/GHC would silently stop at the NUL). A NULL
+pointer arriving where a `String` or `Text` argument is expected
+dies the same way instead of faulting inside `strlen`, so a `--lib`
+host gets `ahc_last_error()` and keeps running. Arguments are
+forced and range-checked BEFORE any marshal buffer is allocated,
+so an argument that dies cannot leak the buffers of its
+neighbours.
 | `Ptr a`            | `void *`       | phantom `a`; `Eq`/`Ord`      |
 
 `nullPtr :: Ptr a` and `peekCString :: Ptr Char -> IO String` make

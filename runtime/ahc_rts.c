@@ -345,9 +345,16 @@ static int utf8_encode(long cp, unsigned char out[4]) {
 }
 
 /* Decode one code point at s[*i], advancing *i past the bytes
-   consumed. Overlong forms, surrogates, and values beyond U+10FFFF
-   are invalid. */
-static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
+   consumed. Overlong forms and values beyond U+10FFFF are always
+   invalid. Surrogates are invalid in DATA (the U+FFFD policy) but
+   valid when Wtf8 is set, which is how STRING LITERALS round-trip:
+   the lexer WTF-8-encodes '\xD800' into the intern table and the
+   Report says the literal denotes that very Char, so materializing
+   a literal must not silently replace it. Only literals pass
+   Wtf8 = 1; every byte arriving from outside uses the strict form
+   (docs/io-design-note.md, "Text encoding"). */
+static long utf8_decode_gen(const unsigned char *s, size_t len,
+                            size_t *i, int wtf8) {
   unsigned char b = s[(*i)++];
   long cp;
   int need, k;
@@ -363,9 +370,13 @@ static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
     (*i)++;
   }
   if ((need == 2 && cp < 0x800) || (need == 3 && cp < 0x10000) ||
-      (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+      (!wtf8 && cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
     return 0xFFFD;
   return cp;
+}
+
+static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
+  return utf8_decode_gen(s, len, i, 0);
 }
 
 void ahc_die(const char *msg) {
@@ -1070,13 +1081,13 @@ static AhcNode *mk_bool(int b) {
    points lets the spine still build back-to-front, child first
    (construction-order invariant, collector note section 15), while
    decoding runs forward. NUL bytes are data, not terminators. */
-AhcNode *ahc_mk_string_len(const char *s, size_t len) {
+static AhcNode *mk_string_gen(const char *s, size_t len, int wtf8) {
   const unsigned char *u = (const unsigned char *)s;
   long *cps = NULL;
   size_t n = 0, cap = 0, i = 0;
   AhcNode *acc;
   while (i < len) {
-    long cp = utf8_decode(u, len, &i);
+    long cp = utf8_decode_gen(u, len, &i, wtf8);
     if (n == cap) {
       cap = cap ? cap * 2 : 64;
       cps = realloc(cps, cap * sizeof *cps);
@@ -1096,7 +1107,23 @@ AhcNode *ahc_mk_string_len(const char *s, size_t len) {
   return acc;
 }
 
+/* Data: strict, so invalid input (including lone surrogates) is
+   one U+FFFD per rejected sequence. */
+AhcNode *ahc_mk_string_len(const char *s, size_t len) {
+  return mk_string_gen(s, len, 0);
+}
+
+/* A source string literal: WTF-8, so '\xD800' inside a literal
+   denotes the Char the Report says it does (codegen only). */
+AhcNode *ahc_mk_string_lit(const char *s, size_t len) {
+  return mk_string_gen(s, len, 1);
+}
+
 AhcNode *ahc_mk_string(const char *s) {
+  /* Reached from export/callback argument marshalling, where the
+     host controls the pointer: die into the armed frame rather
+     than segfaulting inside strlen. */
+  if (!s) ahc_die("FFI: NULL where String was expected");
   return ahc_mk_string_len(s, strlen(s));
 }
 
@@ -1914,24 +1941,62 @@ static AhcNode *p_show_int(AhcNode *a) {
   free(img);
   return r;
 }
-/* Report 11.4 (Show Char): common escapes by name, other
-   non-printables as decimal escapes. */
+/* Report 11.4 showLitChar: the ASCII mnemonics for the control
+   characters and DEL, single-letter escapes where the Report gives
+   one, a decimal escape above DEL. Writes at most 11 bytes plus a
+   terminator into Out and returns the length. Esc (when non-NULL)
+   receives the "needs a \& guard next" state: 1 after a decimal
+   escape (a following digit would extend it), 2 after \SO (a
+   following 'H' would read as \SOH). Quotes are the caller's
+   business - a String escapes '"', a Char escapes '\''. */
+static size_t show_lit_char(char *out, long v, int *esc) {
+  static const char *const tab[32] = {
+    "NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "a",
+    "b", "t", "n", "v", "f", "r", "SO", "SI",
+    "DLE", "DC1", "DC2", "DC3", "DC4", "NAK", "SYN", "ETB",
+    "CAN", "EM", "SUB", "ESC", "FS", "GS", "RS", "US"
+  };
+  size_t n = 0;
+  if (esc) *esc = 0;
+  if (v > 126) {
+    if (v == 127) {
+      memcpy(out, "\\DEL", 4);
+      return 4;
+    }
+    n = (size_t)snprintf(out, 12, "\\%ld", v);
+    if (esc) *esc = 1;
+    return n;
+  }
+  if (v == '\\') {
+    memcpy(out, "\\\\", 2);
+    return 2;
+  }
+  if (v >= 32) {
+    out[0] = (char)v;
+    return 1;
+  }
+  out[0] = '\\';
+  n = strlen(tab[v]);
+  memcpy(out + 1, tab[v], n);
+  if (v == 14 && esc) *esc = 2;   /* \SO */
+  return n + 1;
+}
+
 static AhcNode *p_show_char(AhcNode *a) {
   long v = ahc_eval(a)->u.c;
   char buf[16];
-  switch (v) {
-  case '\n': return ahc_mk_string("'\\n'");
-  case '\t': return ahc_mk_string("'\\t'");
-  case '\r': return ahc_mk_string("'\\r'");
-  case '\\': return ahc_mk_string("'\\\\'");
-  case '\'': return ahc_mk_string("'\\''");
-  default:
-    if (v >= 32 && v <= 126)
-      snprintf(buf, sizeof buf, "'%c'", (char)v);
-    else
-      snprintf(buf, sizeof buf, "'\\%ld'", v);
-    return ahc_mk_string(buf);
+  size_t n = 1;
+  buf[0] = '\'';
+  if (v == '\'') {
+    buf[1] = '\\';
+    buf[2] = '\'';
+    n = 3;
+  } else {
+    n += show_lit_char(buf + 1, v, NULL);
   }
+  buf[n] = '\'';
+  buf[n + 1] = 0;
+  return ahc_mk_string(buf);
 }
 static AhcNode *p_show_bool(AhcNode *a) {
   return ahc_mk_string(ahc_eval(a)->u.con.contag == TRUE_TAG
@@ -4012,10 +4077,14 @@ static void sb_hs(StrBuf *b, AhcNode *s) {
   }
 }
 
+/* The length rides along: a generic showList over a user Show that
+   emits a raw '\NUL' would otherwise truncate the whole rendering
+   at the first NUL byte (NUL is data - the same rule the string
+   literals follow). */
 static AhcNode *sb_take(StrBuf *b) {
   AhcNode *r;
   sb_ch(b, 0);
-  r = ahc_mk_string(b->p);
+  r = ahc_mk_string_len(b->p, b->len - 1);
   free(b->p);
   return r;
 }
@@ -4343,18 +4412,46 @@ static AhcNode *p_text_from_cstring_len(AhcNode *p, AhcNode *n) {
    (Interior NULs survive the copy but C sees a shorter string -
    same contract as newCString.) Shared by newCString-for-Text and
    the M_Text argument marshal. */
+/* Force an owning FFI argument without allocating. Codegen runs
+   these for every String/Text argument BEFORE it marshals any of
+   them, so a bottom in the list (or an interior NUL) dies while
+   there is still nothing to leak. */
+void ahc_force_string(AhcNode *s) {
+  AhcNode *w = ahc_eval(s);
+  while (w->tag == AHC_CON && w->u.con.contag == CONS_TAG) {
+    ahc_eval(w->u.con.fields[0]);
+    w = ahc_eval(w->u.con.fields[1]);
+  }
+}
+
+void ahc_force_text(AhcNode *t) {
+  AhcNode *w = ahc_eval(t);
+  if (memchr(text_bytes(w), 0, (size_t)w->u.bytes.len) != NULL)
+    ahc_die("FFI: Text contains an interior NUL");
+}
+
 char *ahc_marshal_text(AhcNode *t) {
   AhcNode *w = ahc_eval(t);
-  char *p = (char *)malloc((size_t)w->u.bytes.len + 1);
+  int32_t n = w->u.bytes.len;
+  const uint8_t *b = text_bytes(w);
+  char *p;
+  /* A NUL-terminated wire format cannot carry an interior NUL, and
+     each host would hide that differently (Rust errors, C/C++/Go/
+     GHC silently truncate). Refuse it once, here, so every spoke
+     reports the same clean failure instead of losing data. */
+  if (memchr(b, 0, (size_t)n) != NULL)
+    ahc_die("FFI: Text contains an interior NUL");
+  p = (char *)malloc((size_t)n + 1);
   if (!p) ahc_die("out of memory");
-  memcpy(p, text_bytes(w), (size_t)w->u.bytes.len);
-  p[w->u.bytes.len] = 0;
+  memcpy(p, b, (size_t)n);
+  p[n] = 0;
   return p;
 }
 
 /* M_Text result marshal: NUL-terminated C string in, normalized
    Text out. */
 AhcNode *ahc_mk_text(const char *s) {
+  if (!s) ahc_die("FFI: NULL where Text was expected");
   return text_from_bytes_norm((const uint8_t *)s, strlen(s));
 }
 
@@ -4811,27 +4908,22 @@ static AhcNode *p_int_to_d(AhcNode *a) {
 
 /* Show Char's showList: the whole char list as one quoted, escaped
    string literal - this is how show "abc" becomes "\"abc\"". */
-/* One string-literal character, escaped per Report 11.4. esc
-   tracks "last emit was a decimal escape" for the \& digit guard
-   ("\955\&5"). */
+/* One string-literal character, escaped per Report 11.4 (showLitChar
+   plus the string's own '"' escape). *esc carries the \& guard state
+   between calls: "\955\&5", "\SO\&H". */
 static void sb_show_cp(StrBuf *b, long v, int *esc) {
-  if (*esc && v >= '0' && v <= '9') sb_cstr(b, "\\&");
-  *esc = 0;
-  switch (v) {
-  case '"':  sb_cstr(b, "\\\""); break;
-  case '\\': sb_cstr(b, "\\\\"); break;
-  case '\n': sb_cstr(b, "\\n"); break;
-  case '\t': sb_cstr(b, "\\t"); break;
-  case '\r': sb_cstr(b, "\\r"); break;
-  default:
-    if (v >= 32 && v <= 126) sb_ch(b, (char)v);
-    else {
-      char tmp[16];
-      snprintf(tmp, sizeof tmp, "\\%ld", v);
-      sb_cstr(b, tmp);
-      *esc = 1;
-    }
+  char tmp[16];
+  size_t n, k;
+  if ((*esc == 1 && v >= '0' && v <= '9')
+      || (*esc == 2 && v == 'H'))
+    sb_cstr(b, "\\&");
+  if (v == '"') {
+    sb_cstr(b, "\\\"");
+    *esc = 0;
+    return;
   }
+  n = show_lit_char(tmp, v, esc);
+  for (k = 0; k < n; k++) sb_ch(b, tmp[k]);
 }
 
 static AhcNode *p_show_string(AhcNode *xs) {

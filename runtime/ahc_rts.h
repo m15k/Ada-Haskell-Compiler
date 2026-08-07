@@ -65,6 +65,7 @@ AhcNode *ahc_mk_confun(int contag, int arity); /* curried worker      */
 AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
+AhcNode *ahc_mk_string_lit(const char *s, size_t len); /* WTF-8 lits  */
 AhcNode *ahc_mk_bytes(const uint8_t *src, int32_t len); /* copies     */
 AhcNode *ahc_mk_bytes_slice(AhcNode *t, int32_t off, int32_t len);
 AhcNode *ahc_mk_missing(const char *what);     /* dies when forced    */
@@ -77,6 +78,8 @@ typedef AhcNode *(*AhcPrimN)(AhcNode **args);
 AhcNode *ahc_mk_primn(int arity, AhcPrimN f);
 char *ahc_marshal_cstring(AhcNode *s);
 char *ahc_marshal_text(AhcNode *t);           /* malloc'd, NUL-term */
+void ahc_force_string(AhcNode *s);            /* pre-marshal force  */
+void ahc_force_text(AhcNode *t);
 AhcNode *ahc_mk_text(const char *s);          /* normalized inbound */
 void ahc_free_cstring(char *s);
 

@@ -602,7 +602,7 @@ package body AHC.CodeGen is
                         Append (Decl, "static AhcNode *ls_"
                                 & Img (Lit_Next) & ";" & ASCII.LF);
                         Append (Lit_Init, "  ls_" & Img (Lit_Next)
-                                & " = ahc_mk_string_len("""
+                                & " = ahc_mk_string_lit("""
                                 & C_Escape (S) & """, "
                                 & Img (S'Length) & ");" & ASCII.LF);
                         Lit_Next := Lit_Next + 1;
@@ -994,12 +994,24 @@ package body AHC.CodeGen is
             R : Unbounded_String;
             Call : Unbounded_String;
          begin
+            --  Pass 1: evaluate and range-check every argument.
+            --  Everything that can DIE happens here, before pass 2
+            --  takes a malloc'd buffer: a later check that dies
+            --  would unwind past the free (an --lib export catches
+            --  the error and keeps running) and leak every buffer
+            --  already taken.
             for I in 1 .. NArgs loop
                declare
                   Ix : constant String := Img (I - 1);
                   S : constant String := Src & "[" & Ix & "]";
                begin
                   case F.Args (I) is
+                     when M_String =>
+                        Append (R, "  ahc_force_string(" & S & ");"
+                                & LF);
+                     when M_Text =>
+                        Append (R, "  ahc_force_text(" & S & ");"
+                                & LF);
                      when M_Int =>
                         Append (R, "  AhcNode *e" & Ix
                                 & " = ahc_eval(" & S & ");" & LF
@@ -1020,14 +1032,6 @@ package body AHC.CodeGen is
                         Append (R, "  int x" & Ix
                                 & " = (ahc_eval(" & S
                                 & ")->u.con.contag == 2);" & LF);
-                     when M_String =>
-                        Append (R, "  char *x" & Ix
-                                & " = ahc_marshal_cstring(" & S
-                                & ");" & LF);
-                     when M_Text =>
-                        Append (R, "  char *x" & Ix
-                                & " = ahc_marshal_text(" & S
-                                & ");" & LF);
                      when M_Ptr =>
                         Append (R, "  void *x" & Ix
                                 & " = ahc_eval(" & S & ")->u.p;"
@@ -1048,6 +1052,24 @@ package body AHC.CodeGen is
                      when M_Unit =>
                         null;   --  rejected during desugaring
                   end case;
+               end;
+            end loop;
+
+            --  Pass 2: the owning marshals, malloc and copy only.
+            for I in 1 .. NArgs loop
+               declare
+                  Ix : constant String := Img (I - 1);
+                  S : constant String := Src & "[" & Ix & "]";
+               begin
+                  if F.Args (I) = M_String then
+                     Append (R, "  char *x" & Ix
+                             & " = ahc_marshal_cstring(" & S & ");"
+                             & LF);
+                  elsif F.Args (I) = M_Text then
+                     Append (R, "  char *x" & Ix
+                             & " = ahc_marshal_text(" & S & ");"
+                             & LF);
+                  end if;
                end;
             end loop;
 
