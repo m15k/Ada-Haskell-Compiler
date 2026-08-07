@@ -1514,6 +1514,27 @@ package body AHC.Builtins is
                   Ignore := Def_Global
                     ("primTextHGetContents",
                      Mono (FN (I_T, IO_T (Text_T2))));
+
+                  --  Unicode Data.Char (tables from the oracle GHC;
+                  --  lib/Data/Char.hs wraps these).
+                  declare
+                     Ch_T : constant Real_Type_Id :=
+                       TC (Env.Char_TC);
+                     CB : constant Real_Type_Id :=
+                       FN (Ch_T, TC (Env.Bool_TC));
+                     CC : constant Real_Type_Id := FN (Ch_T, Ch_T);
+                  begin
+                     Ignore := Def_Global ("primIsUpperU", Mono (CB));
+                     Ignore := Def_Global ("primIsLowerU", Mono (CB));
+                     Ignore := Def_Global ("primIsAlphaU", Mono (CB));
+                     Ignore := Def_Global
+                       ("primIsAlphaNumU", Mono (CB));
+                     Ignore := Def_Global
+                       ("primIsPunctuationU", Mono (CB));
+                     Ignore := Def_Global ("primIsSpaceU", Mono (CB));
+                     Ignore := Def_Global ("primToUpperU", Mono (CC));
+                     Ignore := Def_Global ("primToLowerU", Mono (CC));
+                  end;
                end;
             end;
          end;

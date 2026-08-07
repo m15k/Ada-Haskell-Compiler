@@ -1857,6 +1857,50 @@ static AhcNode *p_chr(AhcNode *a) {
   return ahc_mk_char(v);
 }
 
+/* ----- Unicode classification / case mapping ---------------------
+   Tables generated from the oracle GHC's own Data.Char
+   (tests/gen_unicode.hs), so agreement is by construction. */
+#include "ahc_unicode.h"
+
+static int uc_mask(long cp) {
+  if (cp < 0 || cp > 0x10FFFF) return 0;
+  return ahc_uc_pages[ahc_uc_index[cp >> 8]][cp & 0xFF];
+}
+
+#define UC_PRED(name, bit) \
+  static AhcNode *name(AhcNode *a) { \
+    return mk_bool((uc_mask(ahc_eval(a)->u.c) & (bit)) != 0); \
+  }
+UC_PRED(p_uc_is_upper, 1)
+UC_PRED(p_uc_is_lower, 2)
+UC_PRED(p_uc_is_alpha, 4)
+UC_PRED(p_uc_is_alnum, 8)
+UC_PRED(p_uc_is_punct, 16)
+UC_PRED(p_uc_is_space, 32)
+
+static long uc_case(const AhcUcRun *rs, int n, long cp) {
+  int lo = 0, hi = n - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (cp < rs[mid].s) hi = mid - 1;
+    else if (cp >= (long)rs[mid].s + rs[mid].n) lo = mid + 1;
+    else return cp + rs[mid].d;
+  }
+  return cp;
+}
+
+static AhcNode *p_uc_to_upper(AhcNode *a) {
+  long c = ahc_eval(a)->u.c;
+  return ahc_mk_char(uc_case(ahc_uc_upper,
+    (int)(sizeof ahc_uc_upper / sizeof ahc_uc_upper[0]), c));
+}
+
+static AhcNode *p_uc_to_lower(AhcNode *a) {
+  long c = ahc_eval(a)->u.c;
+  return ahc_mk_char(uc_case(ahc_uc_lower,
+    (int)(sizeof ahc_uc_lower / sizeof ahc_uc_lower[0]), c));
+}
+
 static AhcNode *p_eq_char(AhcNode *a, AhcNode *b) {
   return mk_bool(ahc_eval(a)->u.c == ahc_eval(b)->u.c);
 }
@@ -5325,7 +5369,11 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_text_put, *ahc_prim_text_readfile,
   *ahc_prim_text_writefile, *ahc_prim_text_from_cstring_len,
   *ahc_prim_text_new_cstring,
-  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents;
+  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents,
+  *ahc_prim_uc_is_upper, *ahc_prim_uc_is_lower,
+  *ahc_prim_uc_is_alpha, *ahc_prim_uc_is_alnum,
+  *ahc_prim_uc_is_punct, *ahc_prim_uc_is_space,
+  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -5542,4 +5590,12 @@ void ahc_rts_init(void) {
   ahc_prim_text_new_cstring = mk_prim1(p_text_new_cstring);
   ahc_prim_text_hput = mk_prim2(p_text_hput);
   ahc_prim_text_hgetcontents = mk_prim1(p_text_hgetcontents);
+  ahc_prim_uc_is_upper = mk_prim1(p_uc_is_upper);
+  ahc_prim_uc_is_lower = mk_prim1(p_uc_is_lower);
+  ahc_prim_uc_is_alpha = mk_prim1(p_uc_is_alpha);
+  ahc_prim_uc_is_alnum = mk_prim1(p_uc_is_alnum);
+  ahc_prim_uc_is_punct = mk_prim1(p_uc_is_punct);
+  ahc_prim_uc_is_space = mk_prim1(p_uc_is_space);
+  ahc_prim_uc_to_upper = mk_prim1(p_uc_to_upper);
+  ahc_prim_uc_to_lower = mk_prim1(p_uc_to_lower);
 }

@@ -321,10 +321,12 @@ lines s = case break (== '\n') s of
   (l, [])      -> [l]
   (l, _ : r)   -> l : lines r
 
+-- Splits on isSpace like the Report's (Unicode-aware since the
+-- string milestone F3; primIsSpaceU is the Data.Char table prim).
 words :: String -> [String]
-words s = case dropWhile (== ' ') s of
+words s = case dropWhile primIsSpaceU s of
   [] -> []
-  t  -> case break (== ' ') t of
+  t  -> case break primIsSpaceU t of
     (w, r) -> w : words r
 
 until :: (a -> Bool) -> (a -> a) -> a -> a

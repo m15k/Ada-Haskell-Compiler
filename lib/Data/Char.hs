@@ -6,24 +6,28 @@ module Data.Char
   , digitToInt, intToDigit
   ) where
 
+-- Classification and case mapping are UNICODE-aware, backed by
+-- tables generated from the oracle GHC's own Data.Char
+-- (tests/gen_unicode.hs -> runtime/ahc_unicode.h), so agreement is
+-- by construction. The digit predicates stay ASCII, as in GHC.
+
 isUpper :: Char -> Bool
-isUpper c = c >= 'A' && c <= 'Z'
+isUpper = primIsUpperU
 
 isLower :: Char -> Bool
-isLower c = c >= 'a' && c <= 'z'
+isLower = primIsLowerU
 
 isAlpha :: Char -> Bool
-isAlpha c = isUpper c || isLower c
+isAlpha = primIsAlphaU
 
 isDigit :: Char -> Bool
 isDigit c = c >= '0' && c <= '9'
 
 isAlphaNum :: Char -> Bool
-isAlphaNum c = isAlpha c || isDigit c
+isAlphaNum = primIsAlphaNumU
 
 isSpace :: Char -> Bool
-isSpace c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
-         || c == '\f' || c == '\v'
+isSpace = primIsSpaceU
 
 isHexDigit :: Char -> Bool
 isHexDigit c = isDigit c || (c >= 'a' && c <= 'f')
@@ -33,13 +37,13 @@ isOctDigit :: Char -> Bool
 isOctDigit c = c >= '0' && c <= '7'
 
 isPunctuation :: Char -> Bool
-isPunctuation c = elem c "!\"#%&'()*,-./:;?@[\\]_{}"
+isPunctuation = primIsPunctuationU
 
 toUpper :: Char -> Char
-toUpper c = if isLower c then chr (ord c - 32) else c
+toUpper = primToUpperU
 
 toLower :: Char -> Char
-toLower c = if isUpper c then chr (ord c + 32) else c
+toLower = primToLowerU
 
 digitToInt :: Char -> Int
 digitToInt c

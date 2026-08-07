@@ -144,10 +144,7 @@ adding a production is:
 The generator also deliberately AVOIDS territory where divergence
 is known and documented rather than wrong (see EXCLUSIONS.md):
 Int arithmetic stays far from overflow (the Report leaves it
-undefined; AHC promotes), non-ASCII text is CASELESS code points
-only - CJK/symbols/emoji, where AHC's ASCII-range Data.Char agrees
-with GHC's Unicode tables; cased letters wait on Unicode Data.Char
-(string-milestone F3) - no `divMod`/`!!` (absent from AHC), and Double
+undefined; AHC promotes), no `divMod`/`!!` (absent from AHC), and Double
 exponents stay modest (literals rounding into the subnormal range
 are a documented one-ulp limit of the exact-literal conversion).
 

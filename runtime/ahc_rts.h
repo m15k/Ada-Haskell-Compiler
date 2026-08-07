@@ -170,7 +170,11 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_text_put, *ahc_prim_text_readfile,
   *ahc_prim_text_writefile, *ahc_prim_text_from_cstring_len,
   *ahc_prim_text_new_cstring,
-  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents;
+  *ahc_prim_text_hput, *ahc_prim_text_hgetcontents,
+  *ahc_prim_uc_is_upper, *ahc_prim_uc_is_lower,
+  *ahc_prim_uc_is_alpha, *ahc_prim_uc_is_alnum,
+  *ahc_prim_uc_is_punct, *ahc_prim_uc_is_space,
+  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower;
 
 void ahc_rts_init(void);
 

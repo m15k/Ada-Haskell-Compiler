@@ -3,9 +3,9 @@ factorial(30)= 265252859812191058636308480000000
 evalExpr     = 9
 wordFreq     = the:4, dog:2, fox:2, and:1, barks:1
 analyze:
-  [c++] engine: 15 words in 2 lines
+  [c++] engine: 16 words in 2 lines
   [c++] engine: ranked -> the:4, dog:2, fox:2, and:1, barks:1
-  -> 15 words
+  -> 16 words
 evalExpr(bad): error: expected a number at ''
 still alive  = 42
 greet        = ★ héllo, wörld λ ★

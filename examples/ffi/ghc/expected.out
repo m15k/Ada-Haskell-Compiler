@@ -3,9 +3,9 @@ factorial(30)= 265252859812191058636308480000000
 evalExpr     = 9
 wordFreq     = the:4, dog:2, fox:2, and:1, barks:1
 analyze:
-  [ghc] engine: 15 words in 2 lines
+  [ghc] engine: 16 words in 2 lines
   [ghc] engine: ranked -> the:4, dog:2, fox:2, and:1, barks:1
-  -> 15 words
+  -> 16 words
 evalExpr(bad): user error (error: expected a number at '')
 still alive  = 42
 greet        = ★ héllo, wörld λ ★
