@@ -594,63 +594,70 @@ package body AHC.Build is
          return False;
       end if;
 
-      if Opts.Lib then
-         --  A static archive (runtime object included) plus the
-         --  generated export header. The host controls the stack.
-         if Ada.Directories.Exists (Out_Path) then
-            Ada.Directories.Delete_File (Out_Path);
+      --  The runtime's Floating prims are libm calls (exp, log,
+      --  sqrt, pow, the trig family). Darwin carries them in
+      --  libSystem, which every link already gets; everywhere else
+      --  libm is a separate archive. This matters in BOTH tails: an
+      --  executable's own link needs it, and a library's printed
+      --  "link with:" line must advertise it - an archive does not
+      --  link, its HOST does, and the first Linux run of the export
+      --  harness failed on exactly the math surface because the
+      --  advertisement omitted what only Darwin could omit.
+      declare
+         Ok : Boolean;
+         Uname : constant String := Capture ("uname", "-s", Ok => Ok);
+         Libm  : constant String :=
+           (if Uname /= "Darwin" then " -lm" else "");
+      begin
+         if Opts.Lib then
+            --  A static archive (runtime object included) plus the
+            --  generated export header. The host controls the stack.
+            if Ada.Directories.Exists (Out_Path) then
+               Ada.Directories.Delete_File (Out_Path);
+            end if;
+            declare
+               Args : String_Vectors.Vector;
+            begin
+               Args.Append ("rcs");
+               Args.Append (Out_Path);
+               for O of Objects loop
+                  Args.Append (O);
+               end loop;
+               if not Run ("ar", Args, Opts.Verbose) then
+                  return False;
+               end if;
+            end;
+            Ada.Text_IO.Put_Line
+              ("built " & Out_Path & " (header: " & Build_Dir
+               & "/ahc_exports.h; link with: " & To_String (GC_Ldflags)
+               & " " & To_String (User_Ldflags) & Libm & ")");
+            return True;
          end if;
+
+         --  No stack link flags (M133): the runtime gives main its
+         --  own 1GB mmap'd stack (AHC_MAIN_STACK overrides), the
+         --  same machinery green threads use - which is also the
+         --  only approach that works on Linux, where GNU ld ignores
+         --  -z stacksize and the kernel sizes the main stack from
+         --  RLIMIT_STACK. This deleted Darwin's per-arch flags too
+         --  (arm64's linker caps -stack_size at 512MB; the mmap has
+         --  no such cap).
          declare
             Args : String_Vectors.Vector;
          begin
-            Args.Append ("rcs");
+            Args.Append ("-O1");
+            Args.Append ("-o");
             Args.Append (Out_Path);
             for O of Objects loop
                Args.Append (O);
             end loop;
-            if not Run ("ar", Args, Opts.Verbose) then
+            Append_Words (Args, To_String (GC_Ldflags));
+            Append_Words (Args, To_String (User_Ldflags));
+            Append_Words (Args, Libm);
+            if not Run ("clang", Args, Opts.Verbose) then
                return False;
             end if;
          end;
-         Ada.Text_IO.Put_Line
-           ("built " & Out_Path & " (header: " & Build_Dir
-            & "/ahc_exports.h; link with: " & To_String (GC_Ldflags)
-            & " " & To_String (User_Ldflags) & ")");
-         return True;
-      end if;
-
-      --  No stack link flags (M133): the runtime gives main its own
-      --  1GB mmap'd stack (AHC_MAIN_STACK overrides), the same
-      --  machinery green threads use - which is also the only
-      --  approach that works on Linux, where GNU ld ignores
-      --  -z stacksize and the kernel sizes the main stack from
-      --  RLIMIT_STACK. This deleted Darwin's per-arch flags too
-      --  (arm64's linker caps -stack_size at 512MB; the mmap has no
-      --  such cap).
-      declare
-         Ok : Boolean;
-         Uname : constant String := Capture ("uname", "-s", Ok => Ok);
-         Args  : String_Vectors.Vector;
-      begin
-         Args.Append ("-O1");
-         Args.Append ("-o");
-         Args.Append (Out_Path);
-         for O of Objects loop
-            Args.Append (O);
-         end loop;
-         Append_Words (Args, To_String (GC_Ldflags));
-         Append_Words (Args, To_String (User_Ldflags));
-         --  The runtime's Floating prims are libm calls (exp, log,
-         --  sqrt, pow, the trig family). Darwin carries them in
-         --  libSystem, which every link already gets; everywhere
-         --  else libm is a separate archive and the link fails with
-         --  undefined references to the whole math surface.
-         if Uname /= "Darwin" then
-            Args.Append ("-lm");
-         end if;
-         if not Run ("clang", Args, Opts.Verbose) then
-            return False;
-         end if;
       end;
       Ada.Text_IO.Put_Line ("built " & Out_Path);
       return True;
