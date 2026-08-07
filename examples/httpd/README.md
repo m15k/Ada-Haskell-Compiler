@@ -38,8 +38,14 @@ shutdown; the harness never needs `kill`).
   own fd (`waitRead`) while the client dawdles. An idle server
   costs ~zero CPU (the harness asserts it), and connections
   overlap: the harness opens a silent connection, serves another
-  client meanwhile, then completes the first — with the request
-  log still a byte-exact golden.
+  client meanwhile, then completes the first. Both answers are
+  asserted; their *order* is not. Which of two independent TCP
+  clients the kernel delivers first is not AHC's schedule to
+  determine — the determinism claim is per program **given its
+  inputs**, and `/par/N`'s worker arrival order is where that claim
+  is actually pinned. An earlier version of this harness asserted
+  the cross-client order too, passed on the machine that recorded
+  the golden, and failed on a faster one.
 - **Byte-exact sessions**: responses carry no Date header, so an
   entire client session — headers included — is one golden file.
 

@@ -10,9 +10,15 @@
 #      /par/8's worker ARRIVAL ORDER is in the golden;
 #   4. CONCURRENT HANDLERS: connection A opens and stays silent
 #      (its handler parks on the fd), B is served meanwhile, then
-#      A's request completes - the schedule still deterministic,
-#      pinned by the log golden;
-#   5. the server's own request log is a second golden;
+#      A's request completes. Both are asserted by RESULT, not by
+#      order: which of two independent TCP clients the kernel
+#      delivers first is not AHC's schedule to determine, and
+#      pinning it in the log golden is what made this harness fail
+#      on a machine faster than the one that recorded it. AHC's
+#      determinism claim is per program given its inputs - /par/8's
+#      worker arrival order (check 3) is the real thing;
+#   5. the server's own request log is a second golden, with the two
+#      overlap requests filtered out and asserted separately;
 #   6. /quit - a channel signal since M128 - must end the process
 #      (no kill needed);
 #   7. a port outside 1..65535 must die at the Port refinement
@@ -73,28 +79,32 @@ base="http://127.0.0.1:$port"
   curl -s --max-time 10 "$base/fact/25"
   curl -s --max-time 10 "$base/par/8"
   curl -s --max-time 10 "$base/json"
-  curl -s -i "$base/nope"
+  curl -s -i --max-time 10 "$base/nope"
 } > "$tmp/client.out"
 
 # 4. concurrent handlers: A connects and stays silent (handler
 #    parks in readRequest), B is served, then A completes
+#    B asks for a DISTINCT route so both overlap requests are
+#    identifiable in the log regardless of the order they land in.
 overlap_ok=""
 if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
   sleep 0.3
-  b=$(curl -s --max-time 10 "$base/")
+  b=$(curl -s --max-time 10 "$base/fact/2")
   printf 'GET /fact/10 HTTP/1.0\r\n\r\n' >&3
   #  Bounded: an unclosed connection would otherwise block until the
   #  CI job's timeout - which is exactly what it did on the first
   #  arm64 macOS run (60 minutes, then cancelled).
   aresp=$(perl -e 'alarm 15; local $/; print <STDIN>' <&3 || true)
   exec 3<&-
-  if [ -n "$b" ] && printf '%s' "$aresp" | grep -q 3628800; then
+  #  Both answered correctly is the claim; who finished first is the
+  #  kernel's business.
+  if [ "$b" = "2" ] && printf '%s' "$aresp" | grep -q 3628800; then
     overlap_ok=1
   fi
 fi
 if [ -n "$overlap_ok" ]
 then step "concurrent handlers: A parked, B served, A completed"
-else flunk "concurrent handlers"; fi
+else flunk "concurrent handlers (B=[$b])"; fi
 
 # 6. quit is a channel signal; the response still says bye
 if [ "$(curl -s --max-time 10 "$base/quit")" = "bye" ]
@@ -116,10 +126,19 @@ if diff -q "$tmp/client.out" examples/httpd/tests/client.golden >/dev/null
 then step "client session byte-identical (incl. /par/8 arrival order)"
 else flunk "client session diverged"; diff "$tmp/client.out" examples/httpd/tests/client.golden | head; fi
 
-# 3. the server's request log
-if diff -q "$tmp/log" examples/httpd/tests/server.golden >/dev/null
-then step "server log byte-identical"
-else flunk "server log diverged"; diff "$tmp/log" examples/httpd/tests/server.golden | head; fi
+# 5. the server's request log, minus the two overlap requests -
+#    those are asserted by presence, since their relative order is
+#    the kernel's to choose, not the scheduler's.
+grep -vE '^GET /fact/(2|10) ' "$tmp/log" > "$tmp/log.seq"
+if diff -q "$tmp/log.seq" examples/httpd/tests/server.golden >/dev/null
+then step "server log byte-identical (sequential session)"
+else flunk "server log diverged"; diff "$tmp/log.seq" examples/httpd/tests/server.golden | head; fi
+
+n2=$(grep -c '^GET /fact/2 -> 200 OK$' "$tmp/log")
+n10=$(grep -c '^GET /fact/10 -> 200 OK$' "$tmp/log")
+if [ "$n2" = "1" ] && [ "$n10" = "1" ]
+then step "both overlapped requests logged, order unasserted"
+else flunk "overlap logging (fact/2 x$n2, fact/10 x$n10)"; fi
 
 # 5. the Port refinement fires before any socket call
 msg=$(perl -e 'alarm 15; exec @ARGV' "$tmp/ahttpd" 70000 2>&1)
