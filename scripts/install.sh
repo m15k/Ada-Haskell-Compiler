@@ -53,7 +53,10 @@ fi
 mkdir -p "$prefix/bin" "$share/prelude" "$share/runtime"
 install -m 755 ./bin/ahc "$prefix/bin/ahc"
 install -m 644 prelude/Prelude.hs "$share/prelude/Prelude.hs"
-install -m 644 runtime/ahc_rts.c runtime/ahc_rts.h "$share/runtime/"
+# Every runtime source and header, not a hardcoded list: the day
+# ahc_unicode.h arrived, the old two-file copy shipped an
+# installation whose runtime could not compile.
+install -m 644 runtime/*.c runtime/*.h "$share/runtime/"
 
 # The stdlib keeps its directory shape - module A.B.C lives in
 # A/B/C.hs and the resolver walks that path.

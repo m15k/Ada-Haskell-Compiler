@@ -106,7 +106,11 @@ fi
 if [ -n "$overlap_ok" ]
 then step "concurrent handlers: A parked, B served, A completed"
 else
-  flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)])"
+  #  One immediate retry distinguishes a wedged socket path from a
+  #  one-shot race: if B2 succeeds, the server recovered and the
+  #  failure was a delivery race on the FIRST connection only.
+  b2=$(curl -sS --max-time 5 "$base/fact/3" 2>&1)
+  flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)] retry=[$b2])"
 fi
 
 # 6. quit is a channel signal; the response still says bye

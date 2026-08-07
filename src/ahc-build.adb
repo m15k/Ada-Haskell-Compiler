@@ -519,9 +519,37 @@ package body AHC.Build is
 
          Rts_Inputs : String_Vectors.Vector;
       begin
-         --  The runtime, cached like any unit.
-         Rts_Inputs.Append (Rts_C);
-         Rts_Inputs.Append (Rts_H);
+         --  The runtime, cached like any unit - keyed on EVERY
+         --  .c/.h in the runtime directory (sorted), not a
+         --  hardcoded pair: when ahc_unicode.h arrived, the old
+         --  two-file key meant an edit to it reused stale objects.
+         declare
+            use Ada.Directories;
+            Names  : String_Vectors.Vector;
+            Search : Search_Type;
+            Item   : Directory_Entry_Type;
+         begin
+            Start_Search (Search, Runtime, "",
+                          [Ordinary_File => True, others => False]);
+            while More_Entries (Search) loop
+               Get_Next_Entry (Search, Item);
+               declare
+                  N : constant String := Simple_Name (Item);
+               begin
+                  if N'Length > 2
+                    and then (N (N'Last - 1 .. N'Last) = ".c"
+                              or else N (N'Last - 1 .. N'Last) = ".h")
+                  then
+                     Names.Append (N);
+                  end if;
+               end;
+            end loop;
+            End_Search (Search);
+            Sorting.Sort (Names);
+            for N of Names loop
+               Rts_Inputs.Append (Runtime & "/" & N);
+            end loop;
+         end;
          Stage (Rts_C,
                 Cache & "/rts_" & Hash_Of (Rts_Inputs, Flags_Key)
                 & ".o",
