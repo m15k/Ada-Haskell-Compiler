@@ -66,6 +66,23 @@ fuzzer, EXCLUSIONS instead of weak tests) next to the limits (no GHC
 extensions, no package ecosystem, macOS-only so far), and a License
 section. Contributor material moved to "Working on AHC itself".
 
+**The main stack belongs to the runtime (M133).** Deep lazy chains
+evaluate by C recursion, and the link-time stack that covered them
+was a Darwin-only fix all along: GNU ld answers -z stacksize with
+"ignored" (Linux sizes the main stack from RLIMIT_STACK at exec),
+which is why lib_char_unicode_sums - a fold over all 1.1M code
+points - died silently on CI's Linux leg. ahc_run_main now swaps
+onto a 1GB mmap'd reservation behind a guard page, the machinery
+green threads have used since M102, on every platform: the per-OS,
+per-arch link flags are deleted (arm64's 512MB linker cap with
+them, so Apple Silicon gains depth), overflow is a clean one-line
+report instead of a SIGSEGV, and AHC_MAIN_STACK (floor 1MB)
+overrides the size - which is also what makes the overflow report
+testable in seconds. Library mode is untouched: exports still run
+on the host's stack, per the embedding contract.
+scripts/run_stack.sh pins all three behaviors; the Linux
+conformance run is the milestone's acceptance test.
+
 ## v1.8 (2026-08-01)
 
 The IO release (M126-M129): the green scheduler learns to wait on

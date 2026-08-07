@@ -167,8 +167,10 @@ default build links the Boehm-Demers-Weiser GC (plain malloc
 fallback); `AHC_GC=own` selects AHC's own block-structured
 generational collector, which runs 16% faster than Boehm on the
 sequential bench via a growth-aware collection trigger. Generated
-executables link with a 1GB (virtual, lazily committed) stack so
-million-element thunk chains evaluate instead of overflowing. The runtime covers the full language
+executables run `main` on a 1GB (virtual, lazily committed) mmap'd
+stack with a guard page — the runtime's own, on every platform, so
+million-element thunk chains evaluate instead of overflowing and an
+overflow is a clean report; `AHC_MAIN_STACK` overrides the size. The runtime covers the full language
 as shipped: all numeric types including arbitrary-precision Integer,
 user ADTs with the derive family, user classes and dictionaries, lazy
 infinite structures, `seq`/`($!)`, do-notation IO with stdin/stdout
@@ -493,6 +495,7 @@ scripts/run_sqlite.sh              # the sqlite3 binding
 scripts/run_httpd.sh               # ahttpd: live HTTP session goldens
 scripts/run_build.sh               # ahc build: out-of-tree, -j determinism, failure surface
 scripts/run_install.sh             # install/dist: relocatable, checkout-free, uninstallable
+scripts/run_stack.sh               # main stack: deep chains, clean overflow, size floor
 scripts/run_bench.sh               # benchmark suite (run_parbench.sh: SMP gate)
 scripts/run_c1_gate.sh             # own-collector gates: allocator...
 scripts/run_c2_gate.sh             #   ...collection correctness/footprint...

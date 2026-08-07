@@ -758,11 +758,19 @@ for short programs). This was the right scope call, with one scar
 million-step `foldl` means a million-deep chain of thunks, each
 demanding the next — which AHC evaluates by *C recursion*, one stack
 frame per link. A million frames overflows the default 8MB C stack; the
-symptom was a segfault *after* printing the right answer. The fix:
-generated executables link with a 512MB stack. GHC solves this
+symptom was a segfault *after* printing the right answer. The fix
+went through three shapes: first a 512MB link-time stack, then 1GB —
+and since M133 the runtime itself swaps `main` onto a 1GB mmap'd
+reservation behind a guard page (`AHC_MAIN_STACK` overrides; floor
+1MB), the same machinery green threads use, because that is the only
+shape that works everywhere: GNU ld ignores `-z stacksize` — Linux
+sizes the main stack from RLIMIT_STACK at exec — and Darwin's arm64
+linker caps `-stack_size` at 512MB. One mechanism, every platform,
+and an overflow is a clean one-line report off the guard page
+(`scripts/run_stack.sh` makes it fire on purpose). GHC solves this
 properly with its own growable evaluation stack machine; AHC's
-one-linker-flag version covers practical programs and is honest
-about being a shortcut.
+version covers practical programs and is honest about being a
+reservation, not a growable stack.
 
 **Opting out: `seq`.** The Report's one escape hatch from laziness
 is `seq :: a -> b -> b` — force the first argument to weak head
@@ -2269,9 +2277,13 @@ name means later.
 printed the correct answer and *then* segfaulted — a
 guard-page fault inside `malloc`, from a million-deep evaluation
 recursion unwinding into Boehm bookkeeping. Diagnosed with `lldb`
-after a wrong first theory; fixed with a 512MB link-time stack.
-Rule: in a graph reducer, evaluation depth is program-data-sized;
-size the stack for data, not code.
+after a wrong first theory; fixed with a 512MB link-time stack —
+which CI later exposed as a Darwin-only fix (GNU ld ignores the ELF
+spelling, silently, and had for the project's whole life), so M133
+moved the stack into the runtime itself. Rule: in a graph reducer,
+evaluation depth is program-data-sized; size the stack for data,
+not code — and own the mechanism, because the linker only pretended
+to.
 
 **The worktree disaster.** To A/B-test against an older commit, an
 `alr build` was run in a *git worktree of the same crate* — and

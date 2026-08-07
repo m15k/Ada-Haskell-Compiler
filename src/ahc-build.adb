@@ -591,40 +591,22 @@ package body AHC.Build is
          return True;
       end if;
 
-      --  Graph reduction evaluates long thunk chains by C recursion;
-      --  give the main thread a 1GB (virtual, lazily committed)
-      --  stack so depth limits match practical programs. The linker
-      --  spelling is per-OS.
+      --  No stack link flags (M133): the runtime gives main its own
+      --  1GB mmap'd stack (AHC_MAIN_STACK overrides), the same
+      --  machinery green threads use - which is also the only
+      --  approach that works on Linux, where GNU ld ignores
+      --  -z stacksize and the kernel sizes the main stack from
+      --  RLIMIT_STACK. This deleted Darwin's per-arch flags too
+      --  (arm64's linker caps -stack_size at 512MB; the mmap has no
+      --  such cap).
       declare
-         Ok, Ok_M : Boolean;
+         Ok : Boolean;
          Uname : constant String := Capture ("uname", "-s", Ok => Ok);
-         Arch  : constant String :=
-           Capture ("uname", "-m", Ok => Ok_M);
-         --  Darwin's linker caps -stack_size at 512MB on arm64 and
-         --  rejects anything larger outright, so the 1GB reservation
-         --  (M102: a 2M-deep no-opt thunk chain sat at the old edge)
-         --  is x86_64-only. Deep lazy chains hit their limit sooner
-         --  on Apple Silicon; the green threads' own 64MB stacks are
-         --  unaffected.
-         --
-         --  There is no ELF equivalent: GNU ld answers -z stacksize
-         --  with "ignored", because Linux sizes the main thread's
-         --  stack from RLIMIT_STACK at exec time, not from the
-         --  binary. So nothing is passed there, and deep chains are
-         --  bounded by `ulimit -s` (raising it is the user's lever;
-         --  giving main its own mmap'd stack is a future milestone).
-         Stack : constant String :=
-           (if Uname /= "Darwin" then ""
-            elsif Arch = "arm64" then "-Wl,-stack_size,0x20000000"
-            else "-Wl,-stack_size,0x40000000");
          Args  : String_Vectors.Vector;
       begin
          Args.Append ("-O1");
          Args.Append ("-o");
          Args.Append (Out_Path);
-         if Stack /= "" then
-            Args.Append (Stack);
-         end if;
          for O of Objects loop
             Args.Append (O);
          end loop;

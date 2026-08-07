@@ -2260,8 +2260,79 @@ AhcNode *ahc_run_io(AhcNode *io) {
   return ahc_eval(ahc_apply(io, the_world));
 }
 
+/* ----- the main stack (M133) -------------------------------------
+   Deep lazy chains evaluate by C recursion, and only Darwin's
+   linker could ever grow the MAIN thread's stack: GNU ld answers
+   -z stacksize with "ignored" (Linux sizes it from RLIMIT_STACK at
+   exec), so on Linux a million-deep thunk chain died at the default
+   8MB - lib_char_unicode_sums was CI's proof. The fix is the
+   machinery green threads have used since M102: run the program on
+   a large mmap'd reservation (virtual, lazily committed) behind a
+   guard page, with the clean overflow report. One mechanism on
+   every platform - the per-OS, per-arch link flags are deleted,
+   and arm64's 512MB linker cap goes with them.
+
+   AHC_MAIN_STACK (bytes, floor 1MB) overrides the 1GB default;
+   shrinking it is also what makes the overflow REPORT testable in
+   seconds (scripts/run_stack.sh) instead of after 1GB of frames.
+
+   Library mode is deliberately untouched: exports run on the
+   host's stack (the documented embedding contract), and only the
+   standalone-program path comes through here. */
+
+#define AHC_MAIN_STACK_DEFAULT (1024ul * 1024 * 1024)
+
+static AhcNode *pending_main_io;
+
+static void run_main_on_big_stack(void) {
+#ifdef AHC_USE_BOEHM
+  /* First thing, before any allocation on this stack: tell the
+     collector where this stack's cold end is - the same
+     GC_set_stackbottom dance sched_switch does at every task
+     switch. */
+  struct GC_stack_base sb;
+  sb.mem_base = main_task.stack_top;
+  GC_set_stackbottom(NULL, &sb);
+#endif
+  ahc_eval(ahc_apply(pending_main_io, the_world));
+}
+
 void ahc_run_main(AhcNode *main_io) {
-  ahc_eval(ahc_apply(main_io, the_world));
+  size_t sz = AHC_MAIN_STACK_DEFAULT;
+  char *base;
+  {
+    const char *e = getenv("AHC_MAIN_STACK");
+    if (e && *e) {
+      unsigned long v = strtoul(e, NULL, 10);
+      if (v >= 1024ul * 1024) sz = (size_t)v;
+    }
+  }
+  base = (char *)mmap(NULL, sz + stack_guard_pg,
+                      PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (base == MAP_FAILED) {
+    /* No reservation to be had: run on the OS stack rather than
+       refuse - small programs never notice the difference. */
+    ahc_eval(ahc_apply(main_io, the_world));
+    return;
+  }
+  mprotect(base, stack_guard_pg, PROT_NONE);
+  main_task.stack = base;
+  main_task.stack_top = base + stack_guard_pg + sz;
+  pending_main_io = main_io;
+  {
+    ucontext_t big, back;
+    if (getcontext(&big) != 0) {
+      main_task.stack = NULL;
+      ahc_eval(ahc_apply(main_io, the_world));
+      return;
+    }
+    big.uc_stack.ss_sp = base + stack_guard_pg;
+    big.uc_stack.ss_size = sz;
+    big.uc_link = &back;     /* return here when main finishes */
+    makecontext(&big, run_main_on_big_stack, 0);
+    swapcontext(&back, &big);
+  }
 }
 
 /* ----- green-thread prims (Phase A) ------------------------------ */
@@ -2436,6 +2507,13 @@ static void stack_overflow_handler(int sig, siginfo_t *si, void *uc) {
   char *a = (char *)si->si_addr;
   int i;
   (void)uc;
+  if (main_task.stack && a >= main_task.stack
+      && a < main_task.stack + stack_guard_pg) {
+    static const char msg[] = "ahc: stack overflow\n";
+    ssize_t r = write(2, msg, sizeof msg - 1);
+    (void)r;
+    _exit(1);
+  }
   for (i = 0; i < task_n; i++) {
     AhcTask *t = task_reg[i];
     if (t && t->stack && a >= t->stack
