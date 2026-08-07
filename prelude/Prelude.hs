@@ -529,3 +529,52 @@ instance (Read a, Read b) => Read (a, b) where
         , (')' : r4) <- [skipSpace_ r3]
         ]
       _ -> []
+
+-- Semigroup / Monoid (base-compat beyond the 2010 Report; the
+-- string-milestone F4) ----------------------------------------------
+
+infixr 6 <>
+
+class Semigroup a where
+  (<>) :: a -> a -> a
+
+class Semigroup a => Monoid a where
+  mempty :: a
+  mappend :: a -> a -> a
+  mappend = (<>)
+  mconcat :: [a] -> a
+  mconcat = foldr (<>) mempty
+
+instance Semigroup [a] where
+  (<>) = (++)
+
+instance Monoid [a] where
+  mempty = []
+
+instance Semigroup Text where
+  (<>) = primTextAppend
+
+instance Monoid Text where
+  mempty = primTextPack ""
+
+instance Semigroup Ordering where
+  LT <> _ = LT
+  EQ <> y = y
+  GT <> _ = GT
+
+instance Monoid Ordering where
+  mempty = EQ
+
+instance Semigroup a => Semigroup (Maybe a) where
+  Nothing <> b = b
+  a <> Nothing = a
+  Just x <> Just y = Just (x <> y)
+
+instance Semigroup a => Monoid (Maybe a) where
+  mempty = Nothing
+
+instance Semigroup () where
+  _ <> _ = ()
+
+instance Monoid () where
+  mempty = ()

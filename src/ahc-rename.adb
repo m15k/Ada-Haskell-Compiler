@@ -1494,19 +1494,18 @@ package body AHC.Rename is
                   when Fun_D | Pat_D =>
                      --  Method implementations bind fresh local vars
                      --  (they become dictionary fields, not globals).
-                     if N.Kind = Fun_D then
-                        declare
-                           V : constant Core.Real_Var_Id :=
-                             Mint_Local (N.Fun_Name, N.Span);
+                     declare
+                        procedure Check_Method
+                          (Name : Names.Name_Id;
+                           Span : Diagnostics.Source_Span)
+                        is
                            Known : Boolean := False;
                         begin
-                           Res.Decl_Var.Replace_Element
-                             (Positive (D), Core.Var_Id (V));
                            if Of_Class in 1 .. M.Last_Class then
                               for Mth of M.Classes
                                 (Core.Real_Class_Id (Of_Class)).Methods
                               loop
-                                 if Mth.Name = N.Fun_Name then
+                                 if Mth.Name = Name then
                                     Known := True;
                                  end if;
                               end loop;
@@ -1514,13 +1513,43 @@ package body AHC.Rename is
                                  Bag.Add
                                    (Diagnostics.Error,
                                     Diagnostics.Class_Missing_Method,
-                                    N.Span,
-                                    "'" & Text (N.Fun_Name)
+                                    Span,
+                                    "'" & Text (Name)
                                     & "' is not a method of the class");
                               end if;
                            end if;
-                        end;
-                     end if;
+                        end Check_Method;
+                     begin
+                        if N.Kind = Fun_D then
+                           declare
+                              V : constant Core.Real_Var_Id :=
+                                Mint_Local (N.Fun_Name, N.Span);
+                           begin
+                              Res.Decl_Var.Replace_Element
+                                (Positive (D), Core.Var_Id (V));
+                              Check_Method (N.Fun_Name, N.Span);
+                           end;
+                        elsif Arena.Node (N.Pat).Kind = Var_P then
+                           --  A nullary method body (mempty = ...):
+                           --  the pattern var IS the method name.
+                           --  Top-level Pat_Ds get their pattern
+                           --  renamed by Declare_Group; here we mint
+                           --  the dictionary-field local directly,
+                           --  so desugar's Ds_Group sees a plain
+                           --  Var_Res bind instead of falling into
+                           --  the $pb selector translation.
+                           declare
+                              PN : constant Pat_Node :=
+                                Arena.Node (N.Pat);
+                              V : constant Core.Real_Var_Id :=
+                                Mint_Local (PN.Var, PN.Span);
+                           begin
+                              Set_Pat (N.Pat,
+                                       (Kind => Var_Res, Var => V));
+                              Check_Method (PN.Var, PN.Span);
+                           end;
+                        end if;
+                     end;
                      Rename_Value_Decl (D);
                   when others =>
                      null;

@@ -1901,6 +1901,21 @@ package body AHC.Desugar is
                         Ds_Method_Bodies (N.C_Decls, Binds);
                         M.Classes (Core.Real_Class_Id (Cl))
                           .Default_Binds := Binds;
+                        --  Mark defaults on the methods, so the
+                        --  missing-implementation warning knows a
+                        --  source-class default fills the slot
+                        --  (wired classes set this in Def_Method).
+                        for B of Binds loop
+                           for Mth of M.Classes
+                             (Core.Real_Class_Id (Cl)).Methods
+                           loop
+                              if Names."="
+                                (Mth.Name, M.Info (B.Binder).Name)
+                              then
+                                 Mth.Has_Default := True;
+                              end if;
+                           end loop;
+                        end loop;
                      end if;
                   end;
                when Instance_D =>

@@ -4,7 +4,8 @@
 -- internally offsets are bytes, so byteLength and take/drop slices
 -- are O(1) shares of the parent payload while length/index are O(n)
 -- scans. Eq/Ord/Show come from the builtin instances (byte order
--- over valid UTF-8 IS code-point order). The `Text` type name is
+-- over valid UTF-8 IS code-point order); Semigroup/Monoid are
+-- Prelude instances over append/empty. The `Text` type name is
 -- wired into the compiler like `Int` (a documented divergence:
 -- visible without import; the functions here still need the
 -- import). Import qualified - length/take/drop/null/concat/splitAt
