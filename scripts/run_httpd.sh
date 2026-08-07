@@ -89,7 +89,8 @@ base="http://127.0.0.1:$port"
 overlap_ok=""
 if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
   sleep 0.3
-  b=$(curl -s --max-time 10 "$base/fact/2")
+  b=$(curl -sS --max-time 10 "$base/fact/2" 2> "$tmp/b.err")
+  b_rc=$?
   printf 'GET /fact/10 HTTP/1.0\r\n\r\n' >&3
   #  Bounded: an unclosed connection would otherwise block until the
   #  CI job's timeout - which is exactly what it did on the first
@@ -104,7 +105,9 @@ if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
 fi
 if [ -n "$overlap_ok" ]
 then step "concurrent handlers: A parked, B served, A completed"
-else flunk "concurrent handlers (B=[$b])"; fi
+else
+  flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)])"
+fi
 
 # 6. quit is a channel signal; the response still says bye
 if [ "$(curl -s --max-time 10 "$base/quit")" = "bye" ]

@@ -59,11 +59,16 @@ main = do
 PROG
 expected='[(1,"a"),(2,"b")]
 15511210043330985984000000'
-got=$( cd "$work" && "$prefix/bin/ahc" build Main.hs >/dev/null 2>&1 \
-       && ./Main 2>&1 )
+( cd "$work" && "$prefix/bin/ahc" build Main.hs ) \
+  > "$tmp/inst_build.log" 2>&1
+build_rc=$?
+got=$( cd "$work" && ./Main 2>&1 )
 if [ "$got" = "$expected" ]
 then step "installed compiler builds+runs off-checkout (stdlib, concurrency)"
-else flunk "installed compiler off-checkout: got [$got]"; fi
+else
+  flunk "installed compiler off-checkout (build rc=$build_rc, got [$got])"
+  echo "--- build log:"; cat "$tmp/inst_build.log"
+fi
 
 # The strong form: no path it touches points back into this checkout.
 rm -rf "$work/Main.build" "$work/Main"
