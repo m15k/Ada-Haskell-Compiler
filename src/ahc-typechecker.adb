@@ -639,12 +639,45 @@ package body AHC.Typechecker is
       --  Report 4.3.4 defaulting over the unsolved residuals.
       procedure Try_Default is
       begin
+         --  RETRY BEFORE JUDGING. Solving is order-dependent: a
+         --  constraint whose type was still a metavariable when it
+         --  was first attempted fails, and the substitution that
+         --  would have solved it can arrive afterwards from a
+         --  different constraint. `print (reverse "abc")` is the
+         --  case that exposed this - Show's element wanted is
+         --  attempted while the element is open, then IsString pins
+         --  that element to Char (Solve's list rule above), and
+         --  nothing ever retried the Show. It stayed Unsolved on a
+         --  now-GROUND type, defaulting below ignores non-variables,
+         --  and elaboration emitted $dMISSING, which the compiled
+         --  program printed at run time.
+         --
+         --  So: re-attempt every unsolved constraint until a pass
+         --  makes no progress. Solve only ever moves Unsolved ->
+         --  solved, so this terminates.
+         loop
+            declare
+               Progress : Boolean := False;
+            begin
+               for J in 1 .. W_List.Last_Index loop
+                  if W_List (J).Sol = Unsolved then
+                     Solve (J, 0);
+                     if W_List (J).Sol /= Unsolved then
+                        Progress := True;
+                     end if;
+                  end if;
+               end loop;
+               exit when not Progress;
+            end;
+         end loop;
+
          for I in 1 .. W_List.Last_Index loop
             if W_List (I).Sol = Unsolved then
                declare
                   Z : constant Real_Type_Id :=
                     Repr (W_List (I).C.Arg);
                   N : constant Type_Node := M.Node (Z);
+
                begin
                   if N.Kind = TMeta_T then
                      --  Collect the classes constraining this meta.
@@ -811,6 +844,15 @@ package body AHC.Typechecker is
                         end if;
                      end;
                   end if;
+                  --  NOTE: a constraint still Unsolved here on a
+                  --  NON-variable type is NOT reportable from this
+                  --  point - Try_Default runs while constraints that
+                  --  later discharge against a given (or in a
+                  --  subsequent group) are legitimately open, and
+                  --  erroring here reported 'no instance for Show
+                  --  Char' on Data.Ord. Whatever catches a genuinely
+                  --  undischargeable constraint belongs where
+                  --  elaboration decides to emit $dMISSING.
                end;
             end if;
          end loop;
