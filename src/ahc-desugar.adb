@@ -320,6 +320,67 @@ package body AHC.Desugar is
             return Bool_Case (Test, Inner, Fresh_Ref (Fail), Span);
          end Lit_Test;
 
+         function Is_Newtype_Con (DC : Core.Real_DataCon_Id)
+           return Boolean
+         is (M.Info (Core.Real_TyCon_Id (M.Info (DC).TyCon))
+               .Is_Newtype);
+
+         --  `case scrut of N x -> x`: the wrapped field of a newtype.
+         --  Bound LAZILY by the callers, so demanding the field is
+         --  the only thing that ever demands the wrapper - which is
+         --  what makes a newtype constructor pattern irrefutable
+         --  (Report 4.2.3), in both the positional and the record
+         --  spelling.
+         function Newtype_Projection (DC : Core.Real_DataCon_Id)
+           return Core.Real_Expr_Id
+         is
+            X : constant Core.Real_Var_Id := Fresh ("$m", Span);
+            Xs : Core.Var_Id_Vectors.Vector;
+            PAlts : Core.Alt_Id_Vectors.Vector;
+         begin
+            Xs.Append (Core.Var_Id (X));
+            PAlts.Append (M.Add (Core.Alt_Node'
+              (Kind => Core.Con_Alt, Span => Span,
+               Alt_Body => VarE (X, Span),
+               A_Con => DC, Binders => Xs)));
+            PAlts.Append (M.Add (Core.Alt_Node'
+              (Kind => Core.Default_Alt, Span => Span,
+               Alt_Body => Error_Call
+                 ("impossible: newtype projection", Span))));
+            return M.Add (Core.Expr_Node'
+              (Kind => Core.Case_C, Span => Span,
+               Scrutinee => VarE (Scrut, Span),
+               Alts => PAlts));
+         end Newtype_Projection;
+
+         --  Match one sub-pattern against the newtype's field.
+         function Newtype_Field_Match
+           (DC : Core.Real_DataCon_Id;
+            P  : Real_Pat_Id;
+            Inner : Core.Real_Expr_Id;
+            Fail  : Core.Real_Expr_Id) return Core.Real_Expr_Id
+         is
+            PN : constant Pat_Node := Arena.Node (P);
+            R  : constant Resolution := Res.Pat_Res (Positive (P));
+         begin
+            if PN.Kind = Wild_P then
+               return Inner;
+            elsif PN.Kind = Var_P and then R.Kind = Var_Res then
+               return Let1 (R.Var, Newtype_Projection (DC), Inner,
+                            Span);
+            else
+               declare
+                  B : constant Core.Real_Var_Id := Fresh ("$m", Span);
+                  NPairs : Pair_Vectors.Vector;
+               begin
+                  NPairs.Append (Pair'(Scrut => B, Pat => P));
+                  return Let1
+                    (B, Newtype_Projection (DC),
+                     Match_Seq (NPairs, Inner, Fail), Span);
+               end;
+            end if;
+         end Newtype_Field_Match;
+
          function Con_Match
            (DC : Core.Real_DataCon_Id;
             Sub_Pats : Syntax.Pat_Id_Vectors.Vector)
@@ -337,56 +398,13 @@ package body AHC.Desugar is
             --  sub-pattern (or a use of its variable) demands it.
             --  This is what lets some/many's knot terminate on
             --  newtype-wrapped parsers, exactly as in GHC.
-            if M.Info (Core.Real_TyCon_Id (M.Info (DC).TyCon))
-                 .Is_Newtype
+            if Is_Newtype_Con (DC)
               and then Natural (Sub_Pats.Length) = 1
             then
                declare
-                  P  : constant Syntax.Pat_Id := Sub_Pats (1);
-                  PN : constant Pat_Node :=
-                    Arena.Node (Real_Pat_Id (P));
-                  R  : constant Resolution :=
-                    Res.Pat_Res (Positive (P));
-
-                  function Projection return Core.Real_Expr_Id is
-                     X : constant Core.Real_Var_Id :=
-                       Fresh ("$m", Span);
-                     Xs : Core.Var_Id_Vectors.Vector;
-                     PAlts : Core.Alt_Id_Vectors.Vector;
-                  begin
-                     Xs.Append (Core.Var_Id (X));
-                     PAlts.Append (M.Add (Core.Alt_Node'
-                       (Kind => Core.Con_Alt, Span => Span,
-                        Alt_Body => VarE (X, Span),
-                        A_Con => DC, Binders => Xs)));
-                     PAlts.Append (M.Add (Core.Alt_Node'
-                       (Kind => Core.Default_Alt, Span => Span,
-                        Alt_Body => Error_Call
-                          ("impossible: newtype projection", Span))));
-                     return M.Add (Core.Expr_Node'
-                       (Kind => Core.Case_C, Span => Span,
-                        Scrutinee => VarE (Scrut, Span),
-                        Alts => PAlts));
-                  end Projection;
+                  P1 : constant Syntax.Pat_Id := Sub_Pats (1);
                begin
-                  if PN.Kind = Wild_P then
-                     return Inner;
-                  elsif PN.Kind = Var_P and then R.Kind = Var_Res
-                  then
-                     return Let1 (R.Var, Projection, Inner, Span);
-                  else
-                     declare
-                        B : constant Core.Real_Var_Id :=
-                          Fresh ("$m", Span);
-                        NPairs : Pair_Vectors.Vector;
-                     begin
-                        NPairs.Append
-                          (Pair'(Scrut => B, Pat => P));
-                        return Let1
-                          (B, Projection,
-                           Match_Seq (NPairs, Inner, Fail), Span);
-                     end;
-                  end if;
+                  return Newtype_Field_Match (DC, P1, Inner, Fail);
                end;
             end if;
             for P of Sub_Pats loop
@@ -603,6 +621,18 @@ package body AHC.Desugar is
                begin
                   if R.Kind /= Data_Res then
                      return Inner;
+                  end if;
+                  --  A newtype's record spelling is just as
+                  --  irrefutable as its positional one: R { f = p }
+                  --  must not force the wrapper either, and R {}
+                  --  binds nothing at all.
+                  if Is_Newtype_Con (R.Con) then
+                     if N.Rec_Fields.Is_Empty then
+                        return Inner;
+                     end if;
+                     return Newtype_Field_Match
+                       (R.Con, N.Rec_Fields.First_Element.Value,
+                        Inner, Fail);
                   end if;
                   --  Positional expansion: mentioned fields in place,
                   --  wildcards elsewhere.

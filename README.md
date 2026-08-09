@@ -380,7 +380,11 @@ containers library's observable behavior exactly — toList order, Show
 format, union bias — and oracled against the real thing), Data.Ratio
 (exact fractions over bignum Integer), Data.Complex, Data.Array
 (Int-indexed), Text.Read (a facade over the Prelude's source Read
-class, covering Int/Integer/Bool/lists/pairs), Control.Applicative
+class, covering Int/Integer/Bool/lists/pairs), Data.Text (the one
+packed UTF-8 type, serving both the text and bytes roles GHC splits
+across Text and ByteString — O(1) slicing, a code-point API, and a
+literal that costs nothing under the always-on OverloadedStrings),
+Control.Applicative
 (Alternative with real some/many, Const, WrappedMonad, ZipList,
 optional/asum — enough for hand-rolled parser combinators off
 GitHub) with MonadPlus/guard/msum/mfilter in Control.Monad, and the concurrency modules

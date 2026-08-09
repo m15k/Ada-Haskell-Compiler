@@ -244,6 +244,40 @@ package body AHC.Kinds is
          end;
       end Subst_Syn;
 
+      --  The kind of an already-converted Core type. Expand_Synonym
+      --  applies any SURPLUS arguments itself, bypassing the App_T
+      --  case's KUnify, so it needs the expansion's real kind in
+      --  order to check them the same way.
+      function Kind_Of_Core (T : Core.Real_Type_Id)
+        return Core.Real_Kind_Id
+      is
+         N : constant Core.Type_Node := M.Node (T);
+      begin
+         case N.Kind is
+            when Core.TCon_T =>
+               return Kind_Of_TyCon (N.Con);
+            when Core.TVar_T =>
+               if M.Info (N.Tv).Tv_Kind = Core.No_Kind then
+                  return Fresh_KMeta;
+               end if;
+               return Core.Real_Kind_Id (M.Info (N.Tv).Tv_Kind);
+            when Core.TFun_T =>
+               return Star_K;
+            when Core.TApp_T =>
+               declare
+                  KF : constant Core.Kind_Node :=
+                    M.Node (KZonk (Kind_Of_Core (N.T_Fun)));
+               begin
+                  if KF.Kind = Core.KFun_K then
+                     return KF.KTo;
+                  end if;
+                  return Fresh_KMeta;
+               end;
+            when Core.TMeta_T =>
+               return Fresh_KMeta;   --  not produced by this pass
+         end case;
+      end Kind_Of_Core;
+
       --  Expand synonym Name applied to Args (already converted).
       procedure Expand_Synonym
         (Name  : Names.Name_Id;
@@ -307,14 +341,35 @@ package body AHC.Kinds is
                Out_Kind := K;
             end;
          end if;
-         if Result /= Core.No_Type then
-            for I in Syn.Arity + 1 .. Natural (Args.Length) loop
-               Result := Core.Type_Id
-                 (M.Add (Core.Type_Node'
-                    (Kind => Core.TApp_T,
-                     T_Fun => Core.Real_Type_Id (Result),
-                     T_Arg => Args (I))));
-            end loop;
+         if Result /= Core.No_Type
+           and then Natural (Args.Length) > Syn.Arity
+         then
+            --  Surplus arguments apply to the expansion, and must
+            --  kind-check exactly as Convert's App_T case does:
+            --  without this, `type T = Int` would silently accept
+            --  `T Bool`. Every synonym argument arrives Convert_Star'd,
+            --  so each one is of kind *.
+            declare
+               K : Core.Real_Kind_Id :=
+                 Kind_Of_Core (Core.Real_Type_Id (Result));
+            begin
+               for I in Syn.Arity + 1 .. Natural (Args.Length) loop
+                  declare
+                     KR : constant Core.Real_Kind_Id := Fresh_KMeta;
+                  begin
+                     KUnify (K, M.Add (Core.Kind_Node'
+                       (Kind => Core.KFun_K,
+                        KFrom => Star_K, KTo => KR)), Span);
+                     K := KR;
+                  end;
+                  Result := Core.Type_Id
+                    (M.Add (Core.Type_Node'
+                       (Kind => Core.TApp_T,
+                        T_Fun => Core.Real_Type_Id (Result),
+                        T_Arg => Args (I))));
+               end loop;
+               Out_Kind := Core.Kind_Id (K);
+            end;
          end if;
       end Expand_Synonym;
 

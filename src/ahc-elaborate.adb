@@ -593,7 +593,49 @@ package body AHC.Elaborate is
                                                  (Inst.Head),
                                                Refine =>
                                                  No_Refinement));
+                                          --  Monad does NOT have
+                                          --  Applicative as a
+                                          --  superclass here, so the
+                                          --  instance can genuinely be
+                                          --  missing. Solve_Ev's
+                                          --  contract is that the
+                                          --  typechecker already
+                                          --  proved solvability; it
+                                          --  answers $dMISSING
+                                          --  otherwise, which would
+                                          --  only fail when the
+                                          --  program runs. Say so at
+                                          --  compile time instead.
+                                          Has_App : Boolean := False;
                                        begin
+                                          for I2 of M.Info (App_Cl)
+                                                      .Instances
+                                          loop
+                                             if M.Info (I2).Head =
+                                                  Inst.Head
+                                             then
+                                                Has_App := True;
+                                             end if;
+                                          end loop;
+                                          if not Has_App then
+                                             Bag.Add
+                                               (Diagnostics.Error,
+                                                Diagnostics
+                                                  .Class_No_Instance,
+                                                Inst.Span,
+                                                "no instance for"
+                                                & " 'Applicative "
+                                                & Table.Text
+                                                    (Names.Real_Name_Id
+                                                      (M.Info
+                                                        (Real_TyCon_Id
+                                                          (Inst.Head))
+                                                        .Name))
+                                                & "', required by the"
+                                                & " default for"
+                                                & " 'return'");
+                                             return No_Expr;
+                                          end if;
                                           for HV of Inst.Head_Vars
                                           loop
                                              H := M.Add (Type_Node'

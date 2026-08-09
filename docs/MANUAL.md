@@ -8,7 +8,7 @@ piece of theory is introduced when it is first needed, in plain
 language, before the decision that depends on it. If you read it
 front to back you will understand why every part of AHC is the way
 it is. If you want one thing, the table of contents and the glossary
-(chapter 20) will get you there.
+(chapter 21) will get you there.
 
 ---
 
@@ -27,14 +27,15 @@ it is. If you want one thing, the table of contents and the glossary
 11. [The runtime, part two: green threads and the own collector](#11-the-runtime-part-two)
 12. [Numbers: Int, Integer, and Double](#12-numbers)
 13. [Show: why printing was hard](#13-show)
-14. [The refinement-types extension](#14-refinement-types)
-15. [The optimizer: making it faster without changing it](#15-the-optimizer)
-16. [Testing: GHC as the oracle](#16-testing)
-17. [The standard library](#17-the-standard-library)
-18. [Concurrency: choosing a model](#18-concurrency-choosing-a-model)
-19. [War stories: the bugs and what they taught](#19-war-stories)
-20. [Glossary](#20-glossary)
-21. [Map of the source tree](#21-source-map)
+14. [Strings and Text: two representations, on purpose](#14-strings-and-text)
+15. [The refinement-types extension](#15-refinement-types)
+16. [The optimizer: making it faster without changing it](#16-the-optimizer)
+17. [Testing: GHC as the oracle](#17-testing)
+18. [The standard library](#18-the-standard-library)
+19. [Concurrency: choosing a model](#19-concurrency-choosing-a-model)
+20. [War stories: the bugs and what they taught](#20-war-stories)
+21. [Glossary](#21-glossary)
+22. [Map of the source tree](#22-source-map)
 
 ---
 
@@ -258,7 +259,7 @@ tokens to decide what it is looking at (is `x <- foo` a pattern bind
 or an expression?). Those look-ahead tokens have already been
 processed by the layout engine — so when a parse error then needs a
 block closed, the layout engine's queue is stale. The fix (a late
-war story, chapter 19) exploits a theorem about L: *within a single
+war story, chapter 20) exploits a theorem about L: *within a single
 source line, the algorithm never consults its indentation stack*, so
 the parser may safely synthesize the close itself for same-line
 tokens. Correct-but-subtle code like a nested
@@ -283,7 +284,7 @@ exactly what gets said when parsing fails. The parse-error layout
 rule: it needs the parser to expose its failure points, which is
 natural in hand-written code and painful through a generator.
 And extensibility: the refinement-types extension later added three
-contextual keywords (`in`, `satisfying`, `mod` — see chapter 14);
+contextual keywords (`in`, `satisfying`, `mod` — see chapter 15);
 each was a few lines in a hand-written parser and would have been a
 grammar-conflict headache in a generated one.
 
@@ -332,7 +333,7 @@ everything. With globally unique ids, a transformation can move code
 freely and *variable capture is impossible by construction* — there
 is simply no way for two different variables to collide, because
 they are different integers. This paid off in the optimizer
-(chapter 15), which moves code around with zero capture logic.
+(chapter 16), which moves code around with zero capture logic.
 
 Resolution results are stored in **side tables** indexed by node id
 (`Resolutions` in the renamer), not written into the tree — the
@@ -689,7 +690,7 @@ it becomes selector thunks (Report 4.4.3.2: `a = fst e`,
 `b = snd e` morally). A literal pattern `f 0 = ...` becomes an
 equality *test* (`== 0`), not a match, because numeric literals are
 overloaded. These fine points are exactly what the GHC-oracle test
-suite is good at pinning down (chapter 16).
+suite is good at pinning down (chapter 17).
 
 ---
 
@@ -752,7 +753,7 @@ precise homemade GC would be faster and its own multi-month project;
 Boehm is one linker flag (and the runtime falls back to plain
 `malloc` — never freeing — when Boehm isn't installed, which is fine
 for short programs). This was the right scope call, with one scar
-(the stack-size story, chapter 19).
+(the stack-size story, chapter 20).
 
 **Deep chains and the big stack.** Evaluating a value built by a
 million-step `foldl` means a million-deep chain of thunks, each
@@ -790,7 +791,7 @@ layer, not deep evaluation.
 Once you know evaluation happens at *demand*, several AHC design
 choices become inevitable rather than quirky:
 
-- Refinement checks (chapter 14) fire when the checked value is
+- Refinement checks (chapter 15) fire when the checked value is
   demanded, not when it's passed. An unused out-of-range argument
   never fails — exactly like `error` in an unused argument.
 - `case e of _ -> body` does not evaluate `e` (a wildcard demands
@@ -1406,7 +1407,7 @@ AHC reproduces this exactly: try printing at 1 significant digit,
 re-parse, compare bit-for-bit; if it doesn't round-trip, try 2, up
 to 17; then reformat the digits under GHC's fixed-vs-scientific
 rule. Byte-identical output was non-negotiable because the entire
-test methodology (chapter 16) depends on it.
+test methodology (chapter 17) depends on it.
 
 Two more Double decisions: `round` is round-half-to-EVEN (`round 2.5`
 is `2`, `round 3.5` is `4`) — the Report says so, and C's `rint`
@@ -1488,9 +1489,208 @@ walking any value) fails because constructor *names* don't exist at
 runtime — only numeric tags do. Generating real code was the only
 honest path.
 
+### Escapes
+
+`show` at `Char`, at `String`, and at `Text` all render through one
+helper implementing the Report's `showLitChar`: the ASCII mnemonics
+for the control characters and DEL (`'\a'`, `'\SO'`, `'\DEL'`), a
+decimal escape above DEL, and the `\&` separator wherever an escape
+would otherwise run into the next character — after a decimal
+escape followed by a digit (`"\955\&5"`), and after `\SO` followed
+by `H`, which would otherwise read as `\SOH`. Emitting decimal
+where the Report wants a mnemonic was a real conformance gap that
+survived every suite, because no test ever printed a control
+character.
+
 ---
 
-## 14. Refinement types
+## 14. Strings and Text
+
+### The problem AHC refused to inherit
+
+GHC gives you `String`, `ByteString`, and `Text`, each in strict
+and lazy flavours, plus `Builder` for the append-heavy cases —
+roughly seven types for one idea, bridged by conversions that are
+easy to get quadratically wrong, and papered over with
+`OverloadedStrings`. None of that is anybody's design; it is
+history. `String = [Char]` is in the Report, `ByteString` grew up
+for bytes, `Text` for Unicode, and no one could ever remove any of
+them.
+
+AHC owns the compiler, the Prelude, the runtime, and the FFI at
+once, so it could make the choice GHC never can. There are exactly
+**two** string representations and there will not be a third:
+
+- **`String` = `[Char]`**, the Report's type, a cons list of code
+  points. It is the lingua franca: pattern-matchable, lazy,
+  Report-compatible, and expensive.
+- **`Text`**, one packed UTF-8 byte slice. It serves *both* roles
+  that GHC splits between `Text` and `ByteString` — there is no
+  separate bytes type, because a validated UTF-8 buffer with
+  O(1) slicing is what both use cases actually want.
+
+The cost of one character of `String` is about 64 bytes across
+three separately traced heap objects (a `CHAR` node, a `CONS`
+node, and its two-slot field array). `Text` is one node plus one
+shared byte payload. Use `String` for the Report and for pattern
+matching; reach for `Text` when the size or the traffic matters.
+
+### One decoder, one encoder
+
+`Char` holds a Unicode code point. Every byte stream — stdio,
+files, C strings, even error messages — holds UTF-8. Between them
+the runtime has exactly **one** decoder (`utf8_decode`) and
+**one** encoder (`utf8_encode`). That is a deliberate constraint
+rather than an accident: before it, `Char` nominally held a code
+point while every path that built a `String` produced one `Char`
+per *byte*, so `length "\955"` was 2 and any `Char` above 255 was
+silently truncated on output. A single funnel makes a third
+convention impossible to introduce by accident.
+
+The policy at that funnel, chosen for totality:
+
+- **Invalid UTF-8 on input decodes to U+FFFD, never an error.** A
+  bad sequence consumes its lead byte plus any continuations and
+  yields one replacement character. `getContents` over binary
+  garbage must not kill a program. This is the one deliberate
+  divergence from GHC, which throws.
+- **Overlong forms, surrogate encodings, and anything past
+  U+10FFFF are invalid** on input, and `chr` is range-checked, so
+  the only unencodable value a `Char` can hold is a lone surrogate;
+  the encoder writes those as U+FFFD rather than emitting
+  ill-formed bytes.
+- **NUL is data.** Literals and the buffer-reading IO paths carry
+  explicit lengths; only the genuinely `strlen`-shaped C
+  boundaries stop at NUL.
+
+There is one careful exception. A numeric escape may *name* a lone
+surrogate — `"\xD800"` — and the Report says the literal denotes
+that very `Char` even though UTF-8 cannot represent it. Literals
+are not data: the lexer WTF-8-encodes them and codegen
+materializes them with a decoder that accepts surrogate encodings,
+so a literal round-trips exactly and agrees with the equivalent
+char-literal list. Every byte arriving from *outside* the program
+still takes the strict path. Getting this wrong made
+`"\xD800" == ['\xD800']` false inside AHC itself — a review
+finding, not a test failure, because no test looked.
+
+### Literals cost nothing
+
+A string literal used to be re-consed at every evaluation: codegen
+emitted an inline `ahc_mk_string` call per occurrence, and the
+optimizer cheerfully duplicated it. Now each distinct literal in a
+unit becomes one `static AhcNode *ls_<n>`, deduplicated by content
+and built once in `ahc_init_<unit>()`. Statics are GC roots via the
+existing data-segment scan, and strings are immutable, so the
+sharing is invisible. The optimizer's atom-inlining rule is
+deliberately left alone: duplicated literals now collapse onto the
+same static, so duplication is free.
+
+`OverloadedStrings` rides the machinery numeric literals already
+used. A literal is `IsString a => a`; the desugarer wraps it in
+`fromString` exactly as it wraps numbers in `fromInteger`; and
+defaulting resolves an otherwise-ambiguous literal to `[Char]`, so
+every pre-existing program means what it meant before. It is
+**unconditional** — AHC ignores `LANGUAGE` pragmas, so the pragma
+in a source file is there for GHC's benefit, not AHC's.
+
+The reason that is affordable is that `fromString` at a *known*
+wired instance is resolved when evidence is attached, not at
+runtime: `[Char]` evidence becomes an identity lambda the optimizer
+beta-reduces away, restoring the bare static, and `Text` evidence
+becomes a direct `pack` call that codegen folds into a static
+packed payload. A `Text` literal never packs at runtime.
+
+    greet :: Text
+    greet = "héllo λ"        -- one static AHC_BYTES, built once
+
+### How Text is built
+
+A `Text` is an `AHC_BYTES` node: `{len, off, payload}`. The offset
+is what makes `take`/`drop` O(1) — a slice shares its parent's
+payload instead of copying. The API indexes by **code point** while
+the internals are byte offsets, so `byteLength` and slicing are
+O(1) and `length`/`index` are O(n) scans.
+
+The payload lives in the collector's **atomic** allocation kind:
+kept alive, never scanned. That kind is the reason the type needed
+a runtime milestone rather than a library. The own collector's
+"misc" blocks are conservatively word-scanned, so a byte payload
+would be interpreted as potential pointers and retain whatever it
+happened to resemble. The atomic kind had been named in the
+collector design note for a long time; `Text` is what finally
+required it. Bignum limbs moved there in the same change — they
+are pointer-free too, and were the live example of the hazard.
+
+`Eq` and `Ord` come out free: byte-lexicographic order over
+*valid* UTF-8 **is** code-point order, so one `memcmp` in the
+generic structural comparison serves both.
+
+### Across the FFI
+
+`Text` crosses the C ABI as `const char *`, exactly like `String` —
+UTF-8, copied both ways — in every position: import arguments and
+results, export arguments and results, and callback arguments and
+results. Inbound bytes always pass the normalizer, so a hostile C
+string cannot smuggle invalid UTF-8 into a payload. All five
+bindgen spokes map it to the host's native string type.
+
+Two contracts follow from `const char *` being NUL-terminated, and
+both are enforced rather than left to chance: a `Text` carrying an
+interior NUL is refused at the marshal with a clear error (rather
+than reaching Rust as a raised exception and C, C++, Go, and GHC as
+a silent truncation), and a NULL pointer arriving where a `String`
+or `Text` is expected dies into the armed error frame instead of
+faulting inside `strlen`. Arguments are forced and range-checked
+*before* any marshal buffer is allocated, so an argument that dies
+cannot leak its neighbours' buffers.
+
+### Data.Char is Unicode, exactly
+
+Classification and case mapping are table-driven, and the tables
+are generated **from the oracle GHC's own `Data.Char`**
+(`tests/gen_unicode.hs` emits `runtime/ahc_unicode.h`). That is the
+methodology of chapter 17 applied to data rather than behaviour:
+agreement is by construction, not by chasing a Unicode version.
+The tables are a two-level deduplicated page structure — 130
+unique 256-byte pages cover all 1,114,112 code points — plus
+(start, length, delta) runs for the simple case maps, binary
+searched. A conformance test checksums every code point through
+all eight functions against `runghc`; all of them agree. The digit
+predicates stay ASCII, as GHC's do.
+
+Regenerate the header when the oracle GHC changes:
+
+    runghc tests/gen_unicode.hs > runtime/ahc_unicode.h
+
+### Where this lands relative to GHC
+
+| Aspect | GHC | AHC |
+|---|---|---|
+| Packed types | `Text` and `ByteString`, strict and lazy, plus `Builder` | one `Text`, serving both roles |
+| `String` semantics | `[Char]`, code points | identical |
+| `Data.Char` | Unicode | Unicode, table-identical (generated from GHC) |
+| `OverloadedStrings` | opt-in pragma | always on; ambiguous literals default to `[Char]` |
+| Literal cost | `unpackCString#` off a static address | shared static; a `Text` literal *is* a static payload |
+| Invalid UTF-8 in | throws | U+FFFD (the deliberate divergence) |
+| `Text` over the FFI | `withCString`/`peekCString` by hand | a marshal kind; `Text` in the signature is enough |
+| Interior NUL over the FFI | silently truncates | refused with an error |
+| `Semigroup`/`Monoid` | in `base` | Prelude classes; instances at `[a]`, `Text`, `Ordering`, `Maybe`, `()` |
+
+What AHC does **not** have: lazy `Text`, `Builder`, a separate
+bytes type, or `Data.Text`'s full API surface (the exported subset
+is the common one, oracled function by function against the real
+`text` package). The two agree on representation — `text` has been
+UTF-8 internally since 2.0, which is why the oracle comparison is
+meaningful rather than coincidental — but AHC names the byte count
+`byteLength` and puts it in `Data.Text`, where `text` calls it
+`lengthWord8` and keeps it in `Data.Text.Foreign`. Tests that use
+it therefore cannot be GHC-oracled directly, and live in
+`tests/exec/` instead.
+
+---
+
+## 15. Refinement types
 
 ### The idea, from the original observation
 
@@ -1685,7 +1885,7 @@ reach taken on a real program instead of a fragment.
 
 ---
 
-## 15. The optimizer
+## 16. The optimizer
 
 ### The rule: never change what a program does
 
@@ -1745,7 +1945,7 @@ with it on.
 
 ---
 
-## 16. Testing
+## 17. Testing
 
 ### The philosophy: don't grade your own homework
 
@@ -1790,7 +1990,7 @@ and failed the truth.*
 | `scripts/run_differential.sh` / `_types.sh` | do AHC and GHC agree on what *parses* and what *typechecks*? |
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
 | `scripts/run_conformance.sh` | do compiled programs print what **GHC** prints? |
-| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 19) behave identically compiled by AHC and by GHC? |
+| `scripts/run_examples.sh` | does the dogfood program (`examples/lisp`, a mini-Lisp interpreter - chapter 20) behave identically compiled by AHC and by GHC? |
 | `scripts/run_separate.sh` | is per-module code generation deterministic and the object cache minimal? (no-change/comment rebuilds: zero objects; one-module edits: exactly one) |
 | `scripts/run_bench.sh` | does the optimizer actually pay for itself? (five workloads in `tests/bench/`, each built with and without `--no-opt`, outputs verified identical, then timed — warmup plus interleaved best-of-5, so thermal drift and cache state hit both sides equally) |
 | `scripts/run_fuzz.sh` | what do the hand-written tests miss? (`tests/fuzz/Gen.hs` generates seeded random well-typed programs from a menu pre-verified on both compilers; AHC-compiled output is byte-diffed against GHC per seed; divergences are saved and delta-debug-shrunk automatically; deep parallel campaigns via `run_fuzz_par.sh` — usage, triage, and the menu rule in `docs/fuzzer-guide.md`) |
@@ -1823,20 +2023,23 @@ byte-identical on both compilers before entering the menu, so
 "AHC rejects a generated program" is a finding, not noise. Second,
 known-undefined territory is avoided by construction — Int
 arithmetic stays far from overflow (the Report leaves it
-undefined; AHC promotes), text stays ASCII, and no partial
-function is ever emitted (division is guarded, `maximum` gets a
-consed head, recursion is structural). Divergences are saved to
+undefined; AHC promotes) and no partial function is ever emitted
+(division is guarded, `maximum` gets a consed head, recursion is
+structural). Text used to be held to ASCII for the same reason;
+it now ranges over Unicode, cased letters included, because
+`Data.Char`'s tables are generated from the oracle itself
+(chapter 14) and so cannot disagree with it. Divergences are saved to
 `tests/fuzz-failures/` and shrunk automatically by delta debugging
 (`scripts/shrink_fuzz.py`); the survivors of a shrink are small
 enough to diagnose by hand, and each confirmed bug is then pinned
 as a permanent conformance test. The very first campaign paid for
 the harness: its third seed exposed a new corner of the
-layout-vs-lookahead bug farm (chapter 19) that the entire
+layout-vs-lookahead bug farm (chapter 20) that the entire
 hand-written suite had never touched.
 
 ---
 
-## 17. The standard library
+## 18. The standard library
 
 ### The insight that made it cheap
 
@@ -1884,13 +2087,21 @@ integer-only prims, and `withFile`, `writeFile`, `appendFile`,
 observable behavior - toList order, Show format, union bias - is
 oracled against the real containers library, written because the
 interpreter's environments asked for it (and whose first compile
-found two more compiler bugs - chapter 19); and
+found two more compiler bugs - chapter 20); and
 `Data.Ord`'s `Down` defines only `compare` - the other six `Ord`
 methods come from the builtin-class default machinery (enabler E4),
 which builds Report default methods against the instance's own
 dictionary knot whenever a user instance omits them; an Ord
 instance can even define only `<=`, with `compare` itself defaulting
 through the superclass Eq dictionary.
+
+`Data.Text` is the one library module backed by a dedicated runtime
+representation rather than by ordinary Haskell — the packed
+`AHC_BYTES` slice of chapter 14 — and the one whose *type* name is
+wired in like `Int`, so it needs no import to appear in a
+signature (the functions still do). Its exported surface is the
+common subset of GHC's `text`, oracled function by function
+against the real package.
 
 `Control.Concurrent.Scoped` (chapter 11) is the newest member and
 the first library module that is *deliberately not* a GHC module:
@@ -1901,7 +2112,7 @@ concurrent program whose output is schedule-independent.
 
 ---
 
-## 18. Concurrency: choosing a model
+## 19. Concurrency: choosing a model
 
 Chapter 9 explains how the scheduler and the spark pool are
 *built*. This chapter is about which one to reach for, and when.
@@ -2196,7 +2407,7 @@ and loud, but a different message.
 
 ---
 
-## 19. War stories
+## 20. War stories
 
 Each of these cost real debugging time and produced a rule now
 followed everywhere in the codebase.
@@ -2226,7 +2437,7 @@ close blocks itself, and, at end-of-file, *relocate* an
 already-queued virtual brace. Rule: when two streaming algorithms
 are mutually recursive, buffering in one is a bug farm in the other.
 The rule proved itself again on the differential fuzzer's third
-seed (chapter 16): the same lookahead, drained through a one-line
+seed (chapter 17): the same lookahead, drained through a one-line
 `let` inside an *explicit-brace* case alternative, left the let's
 implicit context open and the case's real `}` unmatched. That fix
 was structural rather than compensating: the bind-vs-expression
@@ -2394,7 +2605,7 @@ you will need it again.
 
 ---
 
-## 20. Glossary
+## 21. Glossary
 
 **Arena** — tree storage as an array of nodes addressed by integer
 ids instead of pointers. *Chapter 2.*
@@ -2402,11 +2613,18 @@ ids instead of pointers. *Chapter 2.*
 **Bignum / limb** — arbitrary-precision integer; a limb is one
 32-bit digit of one. *Chapter 10.*
 
+**Atomic (allocation kind)** — a heap block the collector keeps
+alive but never scans, because its contents are bytes rather than
+pointers. Holds `Text` payloads and bignum limbs. *Chapter 14.*
+
 **Binding group** — a set of mutually recursive definitions that
 must be type-inferred together. *Chapter 5.*
 
 **CAF** — constant applicative form; a top-level value (not
 function), compiled to an initialized C global. *Chapter 9.*
+
+**Code point** — a Unicode scalar value; what one `Char` holds,
+as distinct from the UTF-8 *bytes* that encode it. *Chapter 14.*
 
 **Call-by-need** — evaluate only when demanded, remember the result.
 Haskell's evaluation strategy. *Chapter 8.*
@@ -2503,7 +2721,7 @@ in metavariables, or fails. *Chapter 5.*
 
 ---
 
-## 21. Source map
+## 22. Source map
 
 Where to look for anything, in pipeline order:
 
@@ -2532,9 +2750,10 @@ Where to look for anything, in pipeline order:
 | `src/ahc-codegen.adb` | closure conversion, C emission |
 | `src/ahc_main.adb` | the driver: module discovery, pipeline order, CLI |
 | `runtime/ahc_rts.{h,c}` | nodes, eval, GC hookup, all primitives, bignum |
+| `runtime/ahc_unicode.h` | generated Unicode tables (chapter 14); regenerate with `tests/gen_unicode.hs` |
 | `prelude/Prelude.hs` | the self-compiled Prelude |
-| `lib/**` | the standard library (chapter 17) |
-| `tests/`, `scripts/` | the harnesses (chapter 16) |
+| `lib/**` | the standard library (chapter 18) |
+| `tests/`, `scripts/` | the harnesses (chapter 17) |
 | `docs/refinement-types-design-note.md` | the extension's original design + as-built record |
 | `docs/stdlib-plan.md` | the library plan + status |
 | `CHANGES.md` | the release history |

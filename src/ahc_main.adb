@@ -193,6 +193,44 @@ procedure AHC_Main is
       --  <$> and friends): seeded into every module's base fixity
       --  scope, the operator half of the implicit Prelude import.
       Prelude_Fix : aliased AHC.Fixity.Fixity_Maps.Map;
+
+      --  That seed, filtered by any EXPLICIT `import Prelude ...` in
+      --  the module (Report 5.6.1: the explicit import replaces the
+      --  implicit one). Without this a module that hides an operator
+      --  and defines its own would still parse it at the Prelude's
+      --  precedence.
+      function Prelude_Fixities_For
+        (A : AHC.Syntax.Module_Arena)
+         return AHC.Fixity.Fixity_Maps.Map
+      is
+         use AHC.Fixity;
+         R : Fixity_Maps.Map := Prelude_Fix;
+         P : constant AHC.Names.Name_Id :=
+           AHC.Names.Name_Id (Table.Intern ("Prelude"));
+      begin
+         for Imp of A.Imports loop
+            if Imp.Module = P and then Imp.Has_Spec then
+               declare
+                  Named : Fixity_Maps.Map;
+               begin
+                  for E of Imp.Spec loop
+                     if R.Contains (E.Name.Name) then
+                        Named.Include (E.Name.Name,
+                                       R.Element (E.Name.Name));
+                     end if;
+                  end loop;
+                  if Imp.Hiding then
+                     for C in Named.Iterate loop
+                        R.Exclude (Fixity_Maps.Key (C));
+                     end loop;
+                  else
+                     R := Named;
+                  end if;
+               end;
+            end if;
+         end loop;
+         return R;
+      end Prelude_Fixities_For;
       Group_Origins, Inst_Origins :
         AHC.Diagnostics.Origin_Vectors.Vector;
 
@@ -544,7 +582,14 @@ procedure AHC_Main is
                Tops     : aliased AHC.Fixity.Fixity_Maps.Map;
                --  Prelude fixities first (the implicit import);
                --  explicit imports may then override by name.
-               Base_Fix : AHC.Fixity.Fixity_Maps.Map := Prelude_Fix;
+               --  Report 5.6.1: an explicit `import Prelude ...`
+               --  REPLACES the implicit one, so the operators it
+               --  hides (or leaves out of its list) bring no fixity
+               --  with them - a module that hides `<$>` and defines
+               --  its own gets the default infixl 9, not the
+               --  Prelude's infixl 4.
+               Base_Fix : AHC.Fixity.Fixity_Maps.Map :=
+                 Prelude_Fixities_For (L.Ref.all);
             begin
                Diag_Texts.Append (L.Text);
                L_Tag := Diag_Texts.Last_Index;
