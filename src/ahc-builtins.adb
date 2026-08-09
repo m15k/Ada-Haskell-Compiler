@@ -218,6 +218,7 @@ package body AHC.Builtins is
            ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
              Head_Vars => Head_Vars, Context => Context,
              Dict_Global => Var_Id (Dict),
+             From_Source => False,   --  wired; Prelude_Core binds it
              Method_Binds => Bind_Vectors.Empty_Vector,
              Param_Vars => Var_Id_Vectors.Empty_Vector,
              Span => No_Span));
@@ -573,9 +574,12 @@ package body AHC.Builtins is
                Sch3 (FN (AP (TV (Mv), TV (A)),
                          AP (TV (Mv), TV (B)),
                          AP (TV (Mv), TV (B)))), True));
+            --  return defaults to pure (base's shape; AHC.Elaborate
+            --  solves Applicative at the instance head), so a modern
+            --  instance omitting it draws no warning.
             Env.Return_V := Var_Id (Def_Method
               (Cl, "return",
-               Sch3 (FN (TV (A), AP (TV (Mv), TV (A)))), False));
+               Sch3 (FN (TV (A), AP (TV (Mv), TV (A)))), True));
             Env.Fail_V := Var_Id (Def_Method
               (Cl, "fail",
                Sch3 (FN (LST (TC (Env.Char_TC)),

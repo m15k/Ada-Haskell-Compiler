@@ -1,0 +1,22 @@
+Just 2
+[1,2,3]
+[]
+Nothing
+Just []
+Just (Just 3)
+Just 4
+Just True
+Just (1,2,3)
+Just 4
+Just 2
+Just 1
+Just 3
+[11,40]
+ZipList {getZipList = [1,2,3]}
+[1,2,9]
+"k"
+"abcd"
+Just 5
+Just ("aa","b")
+Nothing
+Just (("aa","bb"),"c")

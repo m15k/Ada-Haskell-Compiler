@@ -280,6 +280,12 @@ package AHC.Core is
       Head_Vars   : TyVar_Id_Vectors.Vector;
       Context     : Constraint_Vectors.Vector;
       Dict_Global : Var_Id := No_Var;
+      --  True only for an instance DECLARATION in user/Prelude source
+      --  (not wired builtins, not deriving clauses). Source instances
+      --  are elaborated by AHC.Elaborate -- even with an empty body,
+      --  where every method comes from a class default; the others get
+      --  their dictionaries from AHC.Prelude_Core.
+      From_Source : Boolean := False;
       --  Desugared method implementations (binder = local var).
       Method_Binds : Bind_Vectors.Vector;
       --  Dictionary lambda parameters, one per Context constraint;

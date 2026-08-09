@@ -27,6 +27,22 @@ either :: (a -> c) -> (b -> c) -> Either a b -> c
 either f _ (Left x) = f x
 either _ g (Right y) = g y
 
+-- Either a is a Functor/Applicative/Monad in its Right component,
+-- as base has it (Left short-circuits).
+instance Functor (Either a) where
+  fmap _ (Left x) = Left x
+  fmap f (Right y) = Right (f y)
+
+instance Applicative (Either a) where
+  pure x = Right x
+  Left e <*> _ = Left e
+  Right f <*> r = fmap f r
+
+instance Monad (Either a) where
+  return x = Right x
+  Left e >>= _ = Left e
+  Right x >>= k = k x
+
 -- Tuples --------------------------------------------------------------
 
 curry :: ((a, b) -> c) -> a -> b -> c
@@ -155,10 +171,17 @@ unlines :: [String] -> String
 unlines [] = ""
 unlines (l : ls) = l ++ "\n" ++ unlines ls
 
+mapM :: Monad m => (a -> m b) -> [a] -> m [b]
+mapM _ [] = return []
+mapM f (x : xs) = f x >>= \y -> mapM f xs >>= \ys -> return (y : ys)
+
 mapM_ :: Monad m => (a -> m b) -> [a] -> m ()
 mapM_ f xs = go xs
   where go [] = return ()
         go (y : ys) = f y >> go ys
+
+sequence :: Monad m => [m a] -> m [a]
+sequence ms = mapM (\m -> m) ms
 
 sequence_ :: Monad m => [m a] -> m ()
 sequence_ [] = return ()
@@ -264,10 +287,14 @@ dblEFThT_ n n' m =
        else \x -> x >= m + (n' - n) / 2)
     (dblEFTh_ n n')
 
-infixl 4 <$>, <*>, *>, <*
+infixl 4 <$>, <$, <*>, *>, <*
 
 (<$>) :: Functor f => (a -> b) -> f a -> f b
 f <$> x = fmap f x
+
+-- GHC's Prelude exports (<$) with Functor; ($>) stays Data.Functor's.
+(<$) :: Functor f => a -> f b -> f a
+(<$) x fb = fmap (\_ -> x) fb
 
 -- Applicative, as GHC's base has it (the Report predates it); an
 -- ordinary source class over the wired Functor.

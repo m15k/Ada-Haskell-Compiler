@@ -7,10 +7,10 @@ package body AHC.Elaborate is
 
    --  An instance needs a dictionary binding iff it came from user
    --  source (its Method_Binds may still be empty if all methods
-   --  default).
+   --  default -- `instance MonadPlus Maybe` with no where-block).
    function Needs_Dict (M : Core.Core_Module; I : Instance_Info)
      return Boolean
-   is (not I.Method_Binds.Is_Empty
+   is (I.From_Source
        and then I.Dict_Global in 1 .. M.Last_Var);
 
    function All_Dictionaries_Built (M : Core.Core_Module) return Boolean
@@ -538,6 +538,101 @@ package body AHC.Elaborate is
                                        return No_Expr;
                                  end case;
                               end;
+                           elsif Inst.Of_Class = Env.Monad_Cl then
+                              case MI is
+                                 when 2 =>
+                                    --  m >> k = m >>= \_ -> k
+                                    declare
+                                       Mv : constant Real_Var_Id :=
+                                         Fresh2 ("m");
+                                       K : constant Real_Var_Id :=
+                                         Fresh2 ("k");
+                                       U : constant Real_Var_Id :=
+                                         Fresh2 ("u");
+                                    begin
+                                       return Expr_Id (Lam2E (Mv,
+                                         Lam2E (K,
+                                           Ap2E (Ap2E (Sib (1),
+                                             V2 (Mv)),
+                                             Lam2E (U, V2 (K))))));
+                                    end;
+                                 when 3 =>
+                                    --  return = pure, base's default:
+                                    --  the whole-program frontend can
+                                    --  solve Applicative at this
+                                    --  instance's head right here.
+                                    --  (Applicative is a Prelude
+                                    --  SOURCE class, so it is found
+                                    --  by name, not an Env id.)
+                                    declare
+                                       App_Cl : Class_Id := No_Class;
+                                       PureF : constant Expr_Id :=
+                                         Global_Named ("pure");
+                                    begin
+                                       for CI2 in 1 .. M.Last_Class
+                                       loop
+                                          if Table.Text
+                                            (M.Info
+                                               (Real_Class_Id (CI2))
+                                               .Name) = "Applicative"
+                                          then
+                                             App_Cl :=
+                                               Class_Id (CI2);
+                                          end if;
+                                       end loop;
+                                       if App_Cl = No_Class
+                                         or else PureF = No_Expr
+                                       then
+                                          return No_Expr;
+                                       end if;
+                                       declare
+                                          H : Real_Type_Id :=
+                                            M.Add (Type_Node'
+                                              (Kind => TCon_T,
+                                               Con => Real_TyCon_Id
+                                                 (Inst.Head),
+                                               Refine =>
+                                                 No_Refinement));
+                                       begin
+                                          for HV of Inst.Head_Vars
+                                          loop
+                                             H := M.Add (Type_Node'
+                                               (Kind => TApp_T,
+                                                T_Fun => H,
+                                                T_Arg => M.Add
+                                                  (Type_Node'
+                                                    (Kind => TVar_T,
+                                                     Tv => HV))));
+                                          end loop;
+                                          return Expr_Id
+                                            (Ap2E (Real_Expr_Id
+                                                     (PureF),
+                                               Solve_Ev
+                                                 (Constraint'
+                                                    (Class => App_Cl,
+                                                     Arg => H,
+                                                     Span => Span),
+                                                  Givens, Span, 0)));
+                                       end;
+                                    end;
+                                 when 4 =>
+                                    --  fail = error (2010's shape)
+                                    declare
+                                       ErrF : constant Expr_Id :=
+                                         Global_Named ("error");
+                                       S2 : constant Real_Var_Id :=
+                                         Fresh2 ("s");
+                                    begin
+                                       if ErrF = No_Expr then
+                                          return No_Expr;
+                                       end if;
+                                       return Expr_Id (Lam2E (S2,
+                                         Ap2E (Real_Expr_Id (ErrF),
+                                               V2 (S2))));
+                                    end;
+                                 when others =>
+                                    return No_Expr;
+                              end case;
                            end if;
                            return No_Expr;
                         end Builtin_Default;

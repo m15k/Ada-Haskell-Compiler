@@ -6,7 +6,36 @@ module Control.Monad
   , filterM, foldM, zipWithM, zipWithM_
   , (>=>), (<=<), join
   , liftM, liftM2, ap
+  , guard, MonadPlus (..), msum, mfilter
   ) where
+
+import Control.Applicative (Alternative (..))
+
+--  guard, as base has it since Alternative subsumed MonadPlus's
+--  role here: pure () passes, empty prunes.
+guard :: Alternative f => Bool -> f ()
+guard True = pure ()
+guard False = empty
+
+--  MonadPlus: Alternative for monads. Both methods default, so the
+--  Report-style `instance MonadPlus []` with no body is the whole
+--  instance. IO's (exception-based in base) is absent, like its
+--  Alternative.
+class (Alternative m, Monad m) => MonadPlus m where
+  mzero :: m a
+  mzero = empty
+  mplus :: m a -> m a -> m a
+  mplus = (<|>)
+
+instance MonadPlus Maybe
+instance MonadPlus []
+
+--  Base's is Foldable; list-only here, as asum.
+msum :: MonadPlus m => [m a] -> m a
+msum = foldr mplus mzero
+
+mfilter :: MonadPlus m => (a -> Bool) -> m a -> m a
+mfilter p ma = ma >>= \a -> if p a then return a else mzero
 
 when :: Monad m => Bool -> m () -> m ()
 when p act = if p then act else return ()
@@ -17,18 +46,13 @@ unless p act = if p then return () else act
 void :: Monad m => m a -> m ()
 void act = act >> return ()
 
-mapM :: Monad m => (a -> m b) -> [a] -> m [b]
-mapM _ [] = return []
-mapM f (x : xs) = f x >>= \y -> mapM f xs >>= \ys -> return (y : ys)
+--  mapM/mapM_/sequence/sequence_ are the Prelude's, re-exported.
 
 forM :: Monad m => [a] -> (a -> m b) -> m [b]
 forM xs f = mapM f xs
 
 forM_ :: Monad m => [a] -> (a -> m b) -> m ()
 forM_ xs f = mapM_ f xs
-
-sequence :: Monad m => [m a] -> m [a]
-sequence ms = mapM (\m -> m) ms
 
 replicateM :: Monad m => Int -> m a -> m [a]
 replicateM n act =

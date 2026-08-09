@@ -1369,8 +1369,12 @@ package body AHC.Prelude_Core is
             is (for some K in Builtins.C_Fix_Kind =>
                   Env.CFix_TCs (K) = T);
          begin
+            --  Source instances -- even empty-bodied ones, whose every
+            --  method is a class default -- are AHC.Elaborate's; this
+            --  loop bodies the wired builtins and deriving clauses.
             if Inst.Method_Binds.Is_Empty
               and then Inst.Dict_Global /= No_Var
+              and then not Inst.From_Source
             then
                declare
                   Cl : constant Real_Class_Id := Real_Class_Id (Cl_Id);

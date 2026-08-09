@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+**Control.Applicative, Alternative, and the road to the first
+GitHub parser.** The most common blocker among otherwise-clean
+GitHub repos was `import Control.Applicative (Alternative (..))` -
+every hand-rolled parser reaches for `<|>` and `many`. Completing it
+end-to-end surfaced (and closed) six deeper gaps; the finish line was
+marcusbfs/haskell-json-parser-from-scratch parsing JSON with output
+byte-identical to GHC.
+
+- **Control.Applicative** (lib/Control/Applicative.hs): Alternative
+  (empty, `<|>` at infixl 3, some/many as their mutually recursive
+  defaults) with instances at Maybe, [] and ZipList; Const (with the
+  `Monoid a => Applicative (Const a)` instance over the Prelude's
+  Monoid), WrappedMonad, ZipList; `<**>`, liftA, liftA3, optional,
+  asum - GHC 9.4.8's export list minus WrappedArrow (no Arrow class),
+  Alternative IO (exception-based in base), and asum's Foldable
+  generality (list-only, as Data.Bits is Int-only). Applicative,
+  liftA2, `<$>` and `<$` re-export from the Prelude.
+- **Control.Monad** gains the Alternative-era surface: guard,
+  MonadPlus (both methods default; the instances are the Report-style
+  empty-bodied `instance MonadPlus []`), msum, mfilter. The EXCLUSIONS
+  row "no MonadPlus class" is struck.
+- **Empty instance bodies now elaborate.** `instance MonadPlus Maybe`
+  with no where-block used to die at runtime ("method 'mzero' has no
+  runtime yet"): Needs_Dict used non-empty Method_Binds as its
+  came-from-source proxy, so all-default instances fell through to
+  Prelude_Core's error stubs. Instance_Info now carries From_Source
+  (set only for instance DECLARATIONS - not wired builtins, not
+  deriving clauses), Elaborate builds every source dictionary, and
+  the default-fill chain does the rest.
+- **Monad defaults are real**: `>>` and fail were flagged has-default
+  but had no Builtin_Default implementation ($mMISSING at runtime);
+  now m >> k = m >>= \_ -> k and fail = error. And return defaults
+  to pure, base's shape: the whole-program frontend solves
+  Applicative at the instance head right in the elaborator, so a
+  modern instance omitting return works (and draws no warning). A
+  2010-style Monad with no Applicative instance and no explicit
+  return fails only if return is used.
+- **Fixities now travel with the implicit Prelude import.** The
+  Prelude's own `infixl 4 <$>, <$, <*>, *>, <*` never reached user
+  modules (only the wired Report 4.4.2 table did), so
+  `f . g <$> x` was "ambiguous use of operators with equal
+  precedence" - `<$>` defaulted to infixl 9 against `.`'s infixr 9.
+  ahc_main now captures the Prelude's top-level fixity declarations
+  and seeds every module's base fixity scope; explicit imports
+  override by name. (Lib-module fixities already travelled via the
+  registry - including class-method operators under `C (..)`, which
+  is how `<|>` carries its infixl 3.)
+- **Nullary synonyms for partial applications** (Report 4.2.2):
+  `type JParser = Parser String JError; charP :: JParser Char` was
+  rejected ("needs 0 arguments"). Expand_Synonym now requires only
+  the synonym itself to be saturated; surplus arguments apply to the
+  expansion.
+- **Either is a Functor/Applicative/Monad** in its Right component,
+  as base has it. do-notation over `Either e` works.
+- **mapM, sequence and `(<$)` join the Prelude** (Report 8 for the
+  first two; GHC's Prelude exports `(<$)` with Functor). Control.Monad
+  and Data.Functor now re-export instead of duplicating.
+- **Newtype constructor patterns are irrefutable** (Report 4.2.3).
+  `f (N _) = 1; f undefined` is 1, as in GHC - Con_Match emits no
+  case on the wrapper; the sub-pattern matches a lazy projection.
+  This is what lets some/many's knot terminate on newtype-wrapped
+  parsers (the JSON parser's stack overflow). The wrapper is still a
+  real node, so `seq (N undefined) ()` is () where GHC diverges -
+  the one remaining newtype divergence, EXCLUSIONS-listed.
+
+Three new conformance programs (lib_control_applicative.hs,
+lib_monadplus.hs, ch04_02_newtype_patterns.hs - 87 total) pin all of
+it byte-identical to GHC 9.4.8, the parser conformance program
+exercising some/many through a real newtype state parser. Core
+goldens regenerated: pure additions plus id renumbering, no existing
+Core changed. All harnesses, the 219 unit tests and the fuzzer green.
+
 **Prelude gaps and an empty-string pattern crash.** Four fixes found
 by compiling base-only Haskell 2010 programs off GitHub, where each
 was the *only* thing standing between AHC and a program that
@@ -35,8 +107,6 @@ otherwise typechecked clean.
 Pinned by ch08_prelude_index_read.hs, both new conformance programs
 byte-identical to GHC 9.4.8. All ten harnesses, the 219 unit tests
 and the fuzzer stay green.
-
-## Unreleased
 
 **Install + release tarballs (M131).** `scripts/install.sh --prefix
 DIR` lays down PREFIX/bin/ahc plus PREFIX/share/ahc/{prelude,lib,

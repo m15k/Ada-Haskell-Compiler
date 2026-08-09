@@ -329,6 +329,66 @@ package body AHC.Desugar is
             Pairs   : Pair_Vectors.Vector;
             Alts    : Core.Alt_Id_Vectors.Vector;
          begin
+            --  A newtype constructor pattern is irrefutable at the
+            --  wrapper (Report 4.2.3): N p matches iff p matches the
+            --  coerced value, and matching never forces the wrapper
+            --  itself. So: no case on Scrut -- the sub-pattern
+            --  matches a LAZY projection, demanded only if the
+            --  sub-pattern (or a use of its variable) demands it.
+            --  This is what lets some/many's knot terminate on
+            --  newtype-wrapped parsers, exactly as in GHC.
+            if M.Info (Core.Real_TyCon_Id (M.Info (DC).TyCon))
+                 .Is_Newtype
+              and then Natural (Sub_Pats.Length) = 1
+            then
+               declare
+                  P  : constant Syntax.Pat_Id := Sub_Pats (1);
+                  PN : constant Pat_Node :=
+                    Arena.Node (Real_Pat_Id (P));
+                  R  : constant Resolution :=
+                    Res.Pat_Res (Positive (P));
+
+                  function Projection return Core.Real_Expr_Id is
+                     X : constant Core.Real_Var_Id :=
+                       Fresh ("$m", Span);
+                     Xs : Core.Var_Id_Vectors.Vector;
+                     PAlts : Core.Alt_Id_Vectors.Vector;
+                  begin
+                     Xs.Append (Core.Var_Id (X));
+                     PAlts.Append (M.Add (Core.Alt_Node'
+                       (Kind => Core.Con_Alt, Span => Span,
+                        Alt_Body => VarE (X, Span),
+                        A_Con => DC, Binders => Xs)));
+                     PAlts.Append (M.Add (Core.Alt_Node'
+                       (Kind => Core.Default_Alt, Span => Span,
+                        Alt_Body => Error_Call
+                          ("impossible: newtype projection", Span))));
+                     return M.Add (Core.Expr_Node'
+                       (Kind => Core.Case_C, Span => Span,
+                        Scrutinee => VarE (Scrut, Span),
+                        Alts => PAlts));
+                  end Projection;
+               begin
+                  if PN.Kind = Wild_P then
+                     return Inner;
+                  elsif PN.Kind = Var_P and then R.Kind = Var_Res
+                  then
+                     return Let1 (R.Var, Projection, Inner, Span);
+                  else
+                     declare
+                        B : constant Core.Real_Var_Id :=
+                          Fresh ("$m", Span);
+                        NPairs : Pair_Vectors.Vector;
+                     begin
+                        NPairs.Append
+                          (Pair'(Scrut => B, Pat => P));
+                        return Let1
+                          (B, Projection,
+                           Match_Seq (NPairs, Inner, Fail), Span);
+                     end;
+                  end if;
+               end;
+            end if;
             for P of Sub_Pats loop
                declare
                   PN : constant Pat_Node := Arena.Node (P);

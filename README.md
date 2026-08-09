@@ -380,7 +380,10 @@ containers library's observable behavior exactly — toList order, Show
 format, union bias — and oracled against the real thing), Data.Ratio
 (exact fractions over bignum Integer), Data.Complex, Data.Array
 (Int-indexed), Text.Read (a facade over the Prelude's source Read
-class, covering Int/Integer/Bool/lists/pairs), and the concurrency modules
+class, covering Int/Integer/Bool/lists/pairs), Control.Applicative
+(Alternative with real some/many, Const, WrappedMonad, ZipList,
+optional/asum — enough for hand-rolled parser combinators off
+GitHub) with MonadPlus/guard/msum/mfilter in Control.Monad, and the concurrency modules
 Control.Concurrent.Scoped / Protected — all ordinary Haskell modules
 compiled by AHC through its own module system. The driver resolves
 imports beside the root file, then `$AHC_LIB`, then `lib/`.

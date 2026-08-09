@@ -4,7 +4,7 @@ AHC implements Haskell 2010 and ships its own small library set — no
 Hackage, no `cabal`, no GHC extensions. That rules out most of GitHub,
 but not the part of it worth reading: single-file interpreters,
 textbook exercise code, algorithm collections, puzzle solvers. This
-page lists nine repositories, none written with AHC in mind, that AHC
+page lists ten repositories, none written with AHC in mind, that AHC
 compiles today, with the exact commands and the output they produce.
 
 Every entry below was cloned fresh and run against `./bin/ahc`. Where a
@@ -13,10 +13,11 @@ both structural (AHC resolves imports beside the root file, so a
 `src/`+`app/` layout needs its modules in one directory), and neither
 touches a line of Haskell.
 
-## The nine
+## The ten
 
 | Repo | Size | What it does under AHC |
 |---|---|---|
+| [marcusbfs/haskell-json-parser-from-scratch](https://github.com/marcusbfs/haskell-json-parser-from-scratch) | 2 modules, 149 loc | Parses JSON via Alternative parser combinators |
 | [ncollins/tic-tac-tonad](https://github.com/ncollins/tic-tac-tonad) | 1 file, 96 loc | Plays a full interactive game |
 | [2016rshah/sudoku-solver](https://github.com/2016rshah/sudoku-solver) | 2 modules, 244 loc | Solves the bundled puzzle set |
 | [OliverMead/mazer-hs](https://github.com/OliverMead/mazer-hs) | 6 modules, 509 loc | Generates and solves mazes in box-drawing characters |
@@ -40,6 +41,21 @@ is on your PATH:
 
 ```bash
 export PATH="$PWD/bin:$PATH"
+```
+
+**JSON parser.** A parser-combinator JSON parser: newtype `Parser`
+with hand-rolled `Functor`/`Applicative`/`Monad`/`Alternative`
+instances, `some`/`many` doing the repetition, do-notation over
+`Either` inside. This is the repo that drove `Control.Applicative`
+(and the empty-string-pattern fix before it) into AHC; its output is
+byte-identical to GHC's.
+
+```bash
+git clone --depth 1 https://github.com/marcusbfs/haskell-json-parser-from-scratch && cd haskell-json-parser-from-scratch && cp src/JsonParser.hs app/Main.hs . && ahc build Main.hs -o jp && echo '{"a": [1, null, true], "b": "x"}' > s.json && ./jp s.json
+```
+
+```
+JsonObject [("a",JsonArray [JsonInteger 1,JsonNull,JsonBool True]),("b",JsonString "x")]
 ```
 
 **Tic-tac-toe.** A hand-rolled `Functor`/`Applicative`/`Monad` over a
@@ -137,9 +153,10 @@ In rough order of how often it came up:
   `random`, `parsec`, `mtl`, `gloss`. Nothing to be done short of the
   package existing in `lib/`.
 - **`Control.Applicative` / `Alternative`.** Every hand-rolled parser
-  reaches for `<|>` and `many`; AHC has `Applicative` in the Prelude
-  but no `Alternative` class and no `Control.Applicative` module. This
-  is the most common blocker among otherwise-clean repos.
+  reaches for `<|>` and `many`. (CLOSED: `Control.Applicative` exists
+  with a real `Alternative` — the JSON parser above is the proof, and
+  the chase closed six deeper gaps with it, from cross-module
+  fixities to irrefutable newtype patterns. See CHANGES.md.)
 - **Extensions.** `LambdaCase` dominates, then
   `ScopedTypeVariables`, `TupleSections`, `BangPatterns`.
   (`OverloadedStrings` is CLOSED as of the string milestone F1:
@@ -147,6 +164,11 @@ In rough order of how often it came up:
   the pragma just work.)
 - **`System.Random`.** Common in games and puzzle generators.
 
-Gaps found this way and since closed: `(!!)`, `FilePath` and `read`
-were all missing from the Prelude, and an empty string literal in
-pattern position (`f "" = ...`) crashed the parser. See CHANGES.md.
+Gaps found this way and since closed: `(!!)`, `FilePath`, `read`,
+`mapM`/`sequence`/`(<$)` were all missing from the Prelude; an empty
+string literal in pattern position (`f "" = ...`) crashed the parser;
+`Either` had no Functor/Applicative/Monad instances; imported fixity
+declarations didn't travel; nullary synonyms couldn't stand for
+partial applications; and newtype constructor patterns forced their
+wrapper (Report 4.2.3 says they must not — the fix that lets
+`some`/`many` terminate). See CHANGES.md.

@@ -189,6 +189,10 @@ procedure AHC_Main is
          "=" => AHC.Source_Text."=");
       Diag_Texts : Text_Vectors.Vector;
       Prelude_Tag : Natural := 0;
+      --  The Prelude's own top-level fixity declarations (infixl 4
+      --  <$> and friends): seeded into every module's base fixity
+      --  scope, the operator half of the implicit Prelude import.
+      Prelude_Fix : aliased AHC.Fixity.Fixity_Maps.Map;
       Group_Origins, Inst_Origins :
         AHC.Diagnostics.Origin_Vectors.Vector;
 
@@ -486,7 +490,9 @@ procedure AHC_Main is
                Bag.Set_Origin (Prelude_Tag);
                AHC.Lexer.Scan (P_Text, Table, Bag, P_Stream);
                AHC.Parser.Parse_Module (P_Stream, Table, Bag, P_Arena);
-               AHC.Fixity.Resolve_Module (P_Arena, Table, Bag);
+               AHC.Fixity.Resolve_Module
+                 (P_Arena, Table, Bag,
+                  Tops => Prelude_Fix'Unchecked_Access);
                if not Bag.Has_Errors then
                   AHC.Rename.Resolve_Module
                     (P_Arena, Table, Bag, M, Env, P_Res);
@@ -536,7 +542,9 @@ procedure AHC_Main is
                L_Annos : AHC.Kinds.Anno_Maps.Map;
                L_Preds : AHC.Kinds.Pred_Vectors.Vector;
                Tops     : aliased AHC.Fixity.Fixity_Maps.Map;
-               Base_Fix : AHC.Fixity.Fixity_Maps.Map;
+               --  Prelude fixities first (the implicit import);
+               --  explicit imports may then override by name.
+               Base_Fix : AHC.Fixity.Fixity_Maps.Map := Prelude_Fix;
             begin
                Diag_Texts.Append (L.Text);
                L_Tag := Diag_Texts.Last_Index;

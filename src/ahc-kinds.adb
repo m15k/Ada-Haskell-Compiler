@@ -268,12 +268,16 @@ package body AHC.Kinds is
                      "cyclic type synonym");
             return;
          end if;
-         if Natural (Args.Length) /= Syn.Arity then
+         if Natural (Args.Length) < Syn.Arity then
             Bag.Add (Diagnostics.Error, Diagnostics.Kind_Error, Span,
                      "type synonym '" & Table.Text (Name)
                      & "' needs" & Syn.Arity'Image & " arguments");
             return;
          end if;
+         --  Report 4.2.2 only requires the synonym itself to be
+         --  saturated; a nullary synonym for a partially applied
+         --  constructor (type P = Parser String) may take further
+         --  arguments, which apply to the expansion.
          if Syn.Core_Rhs /= Core.No_Type then
             --  Cached Core form: the wired-in String, or any user
             --  synonym after its defining module's kind pass ran.
@@ -285,24 +289,33 @@ package body AHC.Kinds is
             else
                Result := Subst_Syn (Syn.Core_Rhs, Syn.Core_Vars, Args);
             end if;
-            return;
+         else
+            declare
+               Local : Tv_Maps.Map;
+               Order2 : TyVar_Vectors.Vector;
+               K : Core.Kind_Id;
+            begin
+               for I in 1 .. Syn.Vars.Last_Index loop
+                  Local.Include
+                    (Syn.Vars (I).Name,
+                     Tv_Entry'(Ty => Args (I),
+                               Tv_Kind => Core.Kind_Id (Star_K)));
+               end loop;
+               Convert (Real_Type_Id (Syn.Syntax_Rhs), Local, Order2,
+                        Implicit => False, Depth => Depth + 1,
+                        Result => Result, Kind => K);
+               Out_Kind := K;
+            end;
          end if;
-         declare
-            Local : Tv_Maps.Map;
-            Order2 : TyVar_Vectors.Vector;
-            K : Core.Kind_Id;
-         begin
-            for I in 1 .. Syn.Vars.Last_Index loop
-               Local.Include
-                 (Syn.Vars (I).Name,
-                  Tv_Entry'(Ty => Args (I),
-                            Tv_Kind => Core.Kind_Id (Star_K)));
+         if Result /= Core.No_Type then
+            for I in Syn.Arity + 1 .. Natural (Args.Length) loop
+               Result := Core.Type_Id
+                 (M.Add (Core.Type_Node'
+                    (Kind => Core.TApp_T,
+                     T_Fun => Core.Real_Type_Id (Result),
+                     T_Arg => Args (I))));
             end loop;
-            Convert (Real_Type_Id (Syn.Syntax_Rhs), Local, Order2,
-                     Implicit => False, Depth => Depth + 1,
-                     Result => Result, Kind => K);
-            Out_Kind := K;
-         end;
+         end if;
       end Expand_Synonym;
 
       procedure Convert

@@ -1256,6 +1256,7 @@ package body AHC.Rename is
                          Head_Vars => Vars,
                          Context => Ctx,
                          Dict_Global => Core.Var_Id (Dict),
+                         From_Source => False,   --  deriving clause
                          Method_Binds =>
                            Core.Bind_Vectors.Empty_Vector,
                          Param_Vars =>
@@ -1469,6 +1470,7 @@ package body AHC.Rename is
                    Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict),
+                   From_Source => True,
                    Method_Binds => Core.Bind_Vectors.Empty_Vector,
                    Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
                    Span => N.Span));
