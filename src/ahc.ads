@@ -6,6 +6,6 @@
 
 package AHC with Pure is
 
-   Version : constant String := "1.8";
+   Version : constant String := "1.9";
 
 end AHC;

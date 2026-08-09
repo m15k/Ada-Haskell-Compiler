@@ -552,6 +552,15 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.9** — the strings release (M130–M133 + the string
+  milestone): two string representations and no more — a
+  code-point-correct `String` and one packed UTF-8 `Text` serving
+  both the text and bytes roles GHC splits — with always-on
+  `OverloadedStrings` at zero literal cost, `Text` across the C
+  ABI, Unicode `Data.Char` generated from the oracle GHC itself,
+  `Semigroup`/`Monoid`, and `Control.Applicative` with real
+  `some`/`many`; plus install/tarball scripts, CI, and the
+  runtime's own main stack.
 - **v1.8** — the IO release (M126–M129): scheduler-integrated IO
   (fd parking via poll(2) when the run queue drains, wakes in
   registration order; tryRecv/selectRecv/waitReadOr — the select
