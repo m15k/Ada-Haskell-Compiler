@@ -218,6 +218,33 @@ package body AHC.Fetch is
       end;
    end Safe_Segment;
 
+   --  The clone URL is handed to `git clone` verbatim. A leading
+   --  '-' would be parsed as an OPTION, not a repository - and
+   --  `git = "--upload-pack=<cmd>"` runs <cmd> during a local-
+   --  transport fetch. Refuse a URL that begins with '-' (never a
+   --  real URL) or carries a space/control char, and belt-and-
+   --  suspenders the argv with an end-of-options "--" at the call.
+   function Safe_URL (S : String) return Boolean is
+   begin
+      if S'Length = 0 or else S (S'First) = '-' then
+         return False;
+      end if;
+      for C of S loop
+         if C <= ' ' then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Safe_URL;
+
+   --  A git refname can never contain ':' - and a ':' in the ref
+   --  is what let a crafted pin make the cache path look like an
+   --  scp-style "host:path", steering the fetch onto a transport
+   --  that honours --upload-pack. Versions and 40-hex commits have
+   --  none; a tag pin with one is invalid anyway.
+   function Safe_Ref (S : String) return Boolean is
+     (Safe_Segment (S) and then (for all C of S => C /= ':'));
+
    function Ensure
      (Clone_URL  : String;
       Ref        : String;
@@ -253,6 +280,7 @@ package body AHC.Fetch is
          Args.Append (Tag);
          Args.Append ("--config");
          Args.Append ("advice.detachedHead=false");
+         Args.Append ("--");   --  end of options: URL is positional
          Args.Append (Clone_URL);
          Args.Append (Tmp);
          return Git (Args);
@@ -263,6 +291,7 @@ package body AHC.Fetch is
       begin
          Args.Append ("clone");
          Args.Append ("--quiet");
+         Args.Append ("--");   --  end of options: URL is positional
          Args.Append (Clone_URL);
          Args.Append (Tmp);
          if not Git (Args) then
@@ -281,10 +310,17 @@ package body AHC.Fetch is
    begin
       Dir := To_Unbounded_String (Where);
 
-      if not Safe_Segment (Ident) or else not Safe_Segment (Ref) then
+      if not Safe_URL (Clone_URL) then
+         Err ("refusing dependency URL '" & Clone_URL
+              & "': a git URL may not begin with '-' (it would be"
+              & " read as a git option) or contain whitespace");
+         return False;
+      end if;
+      if not Safe_Segment (Ident) or else not Safe_Ref (Ref) then
          Err ("refusing dependency " & Ident & "@" & Ref
-              & ": a URL or ref with '..', a space, '@', or a"
-              & " leading '/' could escape the module cache");
+              & ": a URL or ref with '..', ':', whitespace, '@', or"
+              & " a leading '/' could escape the module cache or"
+              & " redirect the fetch");
          return False;
       end if;
 
@@ -301,6 +337,11 @@ package body AHC.Fetch is
       end if;
 
       Ada.Environment_Variables.Set ("GIT_TERMINAL_PROMPT", "0");
+      --  Confine transports to the ones a dependency legitimately
+      --  uses, so neither a crafted URL nor a repo's own config can
+      --  reach the ext:: (arbitrary-command) transport.
+      Ada.Environment_Variables.Set
+        ("GIT_ALLOW_PROTOCOL", "https:http:ssh:git:file");
       --  Never let ssh block the build on a host-key or passphrase
       --  prompt (stdin is inherited); a bad ssh URL fails fast.
       if not Ada.Environment_Variables.Exists ("GIT_SSH_COMMAND") then

@@ -138,5 +138,20 @@ if rebuild >/dev/null 2>&1 && [ "$("$tmp/app/app")" = ok ]
 then step "a repo with symlink loop + escape hashes and builds safely"
 else flunk "symlink-bearing repo"; fi
 
+# 9. security review: a git URL that is really a git option
+#    (--upload-pack=<cmd>) plus a colon-bearing pin was a
+#    supply-chain RCE - it must be refused, and nothing run
+rm -f "$tmp/PWNED"
+{ printf 'main = "Main.hs"\n'
+  printf '[dependencies.evil]\n'
+  printf 'git = "--upload-pack=touch${IFS}%s/PWNED"\n' "$tmp"
+  printf 'pin = "x:y"\n'
+} > "$tmp/app/ahc.toml"
+err=$(rebuild 2>&1)
+if [ $? -ne 0 ] && [ ! -e "$tmp/PWNED" ] \
+   && printf '%s' "$err" | grep -q "may not begin with '-'"
+then step "an --upload-pack git URL is refused (no RCE)"
+else flunk "git option-injection RCE not closed"; fi
+
 [ $fail -eq 0 ] && echo "git deps harness: all green"
 exit $fail
