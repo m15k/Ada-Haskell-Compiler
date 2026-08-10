@@ -23,6 +23,7 @@ with AHC.Builtins;
 with AHC.CodeGen;
 with AHC.Contracts;
 with AHC.Core.Printer;
+with AHC.Deps;
 with AHC.Desugar;
 with AHC.Diagnostics;
 with AHC.Elaborate;
@@ -141,7 +142,8 @@ procedure AHC_Main is
       Refined  : Boolean := True; Optimize : Boolean := True;
       Lib      : Boolean := False;
       Bindgen_Lang : String := "";
-      Quiet    : Boolean := False) is
+      Quiet    : Boolean := False;
+      Manifest_Dir : String := "") is
       Text   : AHC.Source_Text.Source;
       Table  : AHC.Names.Name_Table;
       Bag    : AHC.Diagnostics.Diagnostic_Bag;
@@ -311,11 +313,24 @@ procedure AHC_Main is
       Root_Dir : constant String :=
         Ada.Directories.Containing_Directory (Path);
 
+      --  Dependency roots (M134): the [dependencies.*] closure of
+      --  the project manifest, searched between the project's own
+      --  modules and the stdlib. The manifest sits beside the root
+      --  file unless the caller knows better (a bare `ahc build`
+      --  whose main = "src/app.hs" puts the root below it).
+      Dep_Roots : AHC.Deps.Root_Vectors.Vector;
+      Deps_Ok   : constant Boolean := AHC.Deps.Collect_Roots
+        ((if Manifest_Dir /= "" then Manifest_Dir else Root_Dir),
+         Dep_Roots);
+
       --  Resolve a module name to a file: beside the root file
-      --  first, then the stdlib cascade ($AHC_LIB, the CWD's lib/,
-      --  the installation's lib/ - AHC.Paths). Returns the first
-      --  existing candidate, or the root-relative path for the
-      --  error message.
+      --  first (project shadows dependencies, as local already
+      --  shadows stdlib), then every dependency root - two hits
+      --  there is an ambiguity error, not a silent win for
+      --  manifest order - then the stdlib cascade ($AHC_LIB, the
+      --  CWD's lib/, the installation's lib/ - AHC.Paths). Returns
+      --  the first candidate, or the root-relative path for the
+      --  error message; on ambiguity sets Failed and returns "".
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
@@ -330,6 +345,44 @@ procedure AHC_Main is
             if Ada.Directories.Exists (Local) then
                return Local;
             end if;
+            declare
+               use Ada.Strings.Unbounded;
+               Hit      : Unbounded_String;
+               Hit_From : Unbounded_String;
+            begin
+               for R of Dep_Roots loop
+                  declare
+                     Cand : constant String :=
+                       To_String (R.Dir) & "/" & P & ".hs";
+                  begin
+                     if Ada.Directories.Exists (Cand) then
+                        if Hit = "" then
+                           Hit      := To_Unbounded_String (Cand);
+                           Hit_From := R.Name;
+                        else
+                           Put_Line
+                             (Standard_Error,
+                              "ahc: module '" & Name
+                              & "' found in two dependencies:");
+                           Put_Line
+                             (Standard_Error,
+                              "  " & To_String (Hit)
+                              & " (dependency '"
+                              & To_String (Hit_From) & "')");
+                           Put_Line
+                             (Standard_Error,
+                              "  " & Cand & " (dependency '"
+                              & To_String (R.Name) & "')");
+                           Failed := True;
+                           return "";
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               if Hit /= "" then
+                  return To_String (Hit);
+               end if;
+            end;
             declare
                Std : constant String :=
                  AHC.Paths.Stdlib_File (P & ".hs");
@@ -447,6 +500,11 @@ procedure AHC_Main is
          end;
       end Snapshot_Base;
    begin
+      if not Deps_Ok then
+         Middle_Failed := True;
+         Set_Exit_Status (1);
+         return;
+      end if;
       Prelude_N := Table.Intern ("Prelude");
       begin
          Text := AHC.Source_Text.Load_File (Path);
@@ -1185,6 +1243,7 @@ begin
             Expect_Jobs : Boolean := False;
             Jobs        : Natural := 0;
             Positional  : Natural := 0;
+            From_Manifest : Boolean := False;
 
             function All_Digits (S : String) return Boolean is
               (S'Length > 0
@@ -1261,6 +1320,7 @@ begin
                      Set_Exit_Status (2);
                      return;
                   end if;
+                  From_Manifest := True;
                   Src := Proj.Main;
                   if Dest = "" then
                      Dest := Proj.Output;
@@ -1313,7 +1373,9 @@ begin
                            Refined  => Refined,
                            Optimize => Optimize,
                            Lib      => Lib,
-                           Quiet    => True);
+                           Quiet    => True,
+                           Manifest_Dir =>
+                             (if From_Manifest then "." else ""));
                if not Middle_Failed
                  and then not AHC.Build.Compile_And_Link
                    (To_String (Dest),

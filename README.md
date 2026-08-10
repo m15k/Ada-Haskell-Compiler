@@ -126,8 +126,9 @@ GHC replacement. Read that as a promise and a limit:
   [`tests/conformance/EXCLUSIONS.md`](tests/conformance/EXCLUSIONS.md)
   rather than tested weakly.
 - **The limit.** No GHC extensions, no `base` beyond the subset in
-  `lib/`, and no package ecosystem — a program's dependencies are the
-  modules beside it plus AHC's own standard library. Programs using
+  `lib/`, and no Hackage — a program's dependencies are the modules
+  beside it, AHC's own standard library, and any local module trees
+  its `ahc.toml` names as path dependencies (M134). Programs using
   the Ada extension (refinement types, contracts, deterministic
   concurrency) are AHC-only by construction; ordinary Haskell 2010
   stays portable to GHC, which is exactly how the test suite proves

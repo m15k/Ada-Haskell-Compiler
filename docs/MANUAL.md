@@ -925,6 +925,62 @@ variables override, unknown keys are errors. Cold-building the
 interpreter takes 10.0s at -j1 and 3.7s at -j auto on twelve CPUs;
 a no-change rebuild is 0.8s.
 
+### Projects and dependencies
+
+Since M134 the manifest also names **path dependencies** — the
+first slice of a Go-modules-shaped story (source dependencies,
+no solver), which is the natural fit for a whole-program
+compiler: dependencies must be source anyway, so a "package" is
+just a module tree somewhere else.
+
+    main   = "src/app.hs"
+    output = "app"
+
+    [package]
+    name = "app"
+    version = "0.1.0"
+
+    [dependencies.jsonlite]
+    path = "../jsonlite"
+
+The grammar stays one construct per line: the M129 flat keys keep
+their exact meaning before any section header, `[package]` carries
+identity (both keys optional today), and each `[dependencies.NAME]`
+section names one dependency. No inline tables, no arrays, no
+escapes — unknown syntax is still an error. The keys `git`,
+`version`, and `pin` are reserved for git dependencies and are
+rejected with a message saying so.
+
+**Package root = module root.** A dependency is a directory of
+modules by path, exactly like `lib/`: depending on it appends its
+root to the module search, which probes the project's own directory
+first (local shadows dependencies, as local already shadowed
+stdlib), then every dependency root, then the stdlib cascade. The
+same module found in two dependencies is an ambiguity error naming
+both files — never a silent win for manifest order. A dependency
+may carry its own `ahc.toml`; only its `[dependencies.*]` sections
+matter to a consumer (transitive path dependencies, resolved
+relative to that manifest, cycles detected), while its build keys
+are ignored — a dependency's link needs travel as
+`{-# OPTIONS_AHC_LINK ... #-}` pragmas, which already compose
+because every module in the graph is scanned. Directories are
+deduplicated by normalized path, and one dependency name bound to
+two different directories anywhere in the closure is an error.
+
+There are no new flags: `ahc build` in a project directory picks
+the dependencies up from the manifest, and `ahc check`, `emit`, and
+`bindgen` on a file probe for an `ahc.toml` beside it, so they are
+dependency-aware too. Dependency modules are ordinary units — they
+enter the object cache like everything else, so editing a
+dependency recompiles exactly the affected objects. The trade
+recorded honestly: a dependency is recompiled per consuming
+project (the cache is per output directory, not a shared store).
+`scripts/run_deps.sh` is the harness: transitive resolution through
+a manifest-less module tree, the ambiguity/cycle/missing-directory
+errors, dependency edits reaching the next build, -j byte-identity
+with dependencies in the graph, and the flat-manifest back-compat
+gate.
+
 **The frontend deliberately stays whole-program.** Types, classes
 and instances are still resolved with every module in view — there
 are no interface files. That is not laziness but a trade: the

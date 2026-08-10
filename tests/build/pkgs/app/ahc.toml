@@ -1,0 +1,9 @@
+main   = "Main.hs"
+output = "app"
+
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.liba]
+path = "../liba"

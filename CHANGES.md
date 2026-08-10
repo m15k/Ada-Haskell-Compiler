@@ -1,5 +1,31 @@
 # AHC Changelog
 
+## Unreleased
+
+**M134 - path dependencies (docs/MANUAL.md "Projects and
+dependencies").** The manifest learns the first slice of a
+Go-modules-shaped dependency story - the shape a whole-program
+compiler wants, since dependencies must be source anyway, and the
+one that keeps the no-solver promise. `ahc.toml` gains section
+headers, still one construct per line: the M129 flat keys keep
+their exact meaning before any header, `[package]` carries
+name/version, and each `[dependencies.NAME]` section names a
+directory of modules (`path = "..."`, relative to the manifest).
+Package root = module root: resolution probes the project first,
+then every dependency root, then the stdlib; one module in two
+dependencies is an ambiguity error naming both files. A
+dependency's own manifest contributes only its `[dependencies.*]`
+(transitive, deduplicated by normalized path, cycles and
+name-conflicts are errors); its link needs travel as
+`OPTIONS_AHC_LINK` pragmas, which already compose. No new flags -
+`build`, `check`, `emit`, and `bindgen` all pick the manifest up
+from the root file's directory. The `git`/`version`/`pin` keys
+parse and are rejected by name: git dependencies, minimal version
+selection with root-manifest pins, and an integrity `ahc.sum` are
+the next milestone. New harness `scripts/run_deps.sh`; new unit
+suites for the manifest reader and the root collection (255
+assertions total).
+
 ## v1.9 (2026-08-07)
 
 The strings release (M130-M133 and the string milestone): AHC picks

@@ -1,0 +1,9 @@
+# liba: a dependency with its own dependency. Build keys are
+# absent on purpose - a consumer reads only [dependencies.*].
+
+[package]
+name = "liba"
+version = "0.1.0"
+
+[dependencies.shoutlib]
+path = "../libc"
