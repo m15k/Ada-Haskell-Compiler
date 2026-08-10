@@ -1,7 +1,5 @@
-with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Environment_Variables;
-with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -12,14 +10,17 @@ with GNAT.SHA256;
 with System.Multiprocessors;
 
 with AHC.Paths;
+with AHC.Shell;
 
 package body AHC.Build is
 
    use Ada.Strings.Unbounded;
    use GNAT.OS_Lib;
 
-   package String_Vectors is new Ada.Containers.Indefinite_Vectors
-     (Positive, String);
+   --  The process/file plumbing lives in AHC.Shell (shared with
+   --  the fetcher); these renamings keep the body reading as it
+   --  always has.
+   package String_Vectors renames AHC.Shell.String_Vectors;
    package Sorting is new String_Vectors.Generic_Sorting;
 
    --  One C file to compile: everything decided (paths, flags) at
@@ -36,164 +37,32 @@ package body AHC.Build is
       then Ada.Environment_Variables.Value (Name)
       else "");
 
-   function Slurp (Path : String) return String is
-      use Ada.Streams.Stream_IO;
-      F : File_Type;
-   begin
-      Open (F, In_File, Path);
-      declare
-         Len : constant Natural := Natural (Size (F));
-         S   : String (1 .. Len);
-      begin
-         String'Read (Stream (F), S);
-         Close (F);
-         return S;
-      end;
-   end Slurp;
+   function Slurp (Path : String) return String
+     renames AHC.Shell.Slurp;
 
-   --  $(cat file): command substitution strips trailing newlines.
-   function Trim_Trailing (S : String) return String is
-      Last : Natural := S'Last;
-   begin
-      while Last >= S'First
-        and then (S (Last) = ASCII.LF or else S (Last) = ASCII.CR
-                  or else S (Last) = ' ' or else S (Last) = ASCII.HT)
-      loop
-         Last := Last - 1;
-      end loop;
-      return S (S'First .. Last);
-   end Trim_Trailing;
+   function Trim_Trailing (S : String) return String
+     renames AHC.Shell.Trim_Trailing;
 
-   --  A flags string becomes argv words the way the shell's unquoted
-   --  expansion did: split on whitespace, empties dropped.
    procedure Append_Words
      (Args : in out String_Vectors.Vector; Flags : String)
-   is
-      First : Natural := 0;
-   begin
-      for I in Flags'Range loop
-         if Flags (I) = ' ' or else Flags (I) = ASCII.HT
-           or else Flags (I) = ASCII.LF or else Flags (I) = ASCII.CR
-         then
-            if First /= 0 then
-               Args.Append (Flags (First .. I - 1));
-               First := 0;
-            end if;
-         elsif First = 0 then
-            First := I;
-         end if;
-      end loop;
-      if First /= 0 then
-         Args.Append (Flags (First .. Flags'Last));
-      end if;
-   end Append_Words;
+     renames AHC.Shell.Append_Words;
 
-   function To_Arg_List
-     (Args : String_Vectors.Vector) return Argument_List_Access
-   is
-      A : constant Argument_List_Access :=
-        new Argument_List (1 .. Natural (Args.Length));
-   begin
-      for I in A'Range loop
-         A (I) := new String'(Args (I));
-      end loop;
-      return A;
-   end To_Arg_List;
-
-   procedure Free_Args (A : in out Argument_List_Access) is
-   begin
-      for I in A'Range loop
-         Free (A (I));
-      end loop;
-      Free (A);
-   end Free_Args;
+   procedure Free_Args (A : in out Argument_List_Access)
+     renames AHC.Shell.Free_Args;
 
    procedure Put_Command
      (Prog : String; Args : String_Vectors.Vector)
-   is
-      Line : Unbounded_String := To_Unbounded_String (Prog);
-   begin
-      for W of Args loop
-         Append (Line, " " & W);
-      end loop;
-      Ada.Text_IO.Put_Line
-        (Ada.Text_IO.Standard_Error, To_String (Line));
-   end Put_Command;
+     renames AHC.Shell.Put_Command;
 
-   --  Spawn Prog with Args, stdio inherited (a failing clang prints
-   --  its own message). True when the exit code is zero.
    function Run
      (Prog : String; Args : String_Vectors.Vector; Verbose : Boolean)
       return Boolean
-   is
-      Exe : GNAT.OS_Lib.String_Access := Locate_Exec_On_Path (Prog);
-      Ok  : Boolean;
-   begin
-      if Exe = null then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error,
-            "ahc: cannot find '" & Prog & "' on PATH");
-         return False;
-      end if;
-      if Verbose then
-         Put_Command (Prog, Args);
-      end if;
-      declare
-         A : Argument_List_Access := To_Arg_List (Args);
-      begin
-         Ok := Spawn (Exe.all, A.all) = 0;
-         Free_Args (A);
-      end;
-      Free (Exe);
-      return Ok;
-   end Run;
+     renames AHC.Shell.Run;
 
-   --  Spawn Prog with Args, stdout+stderr captured (the script's
-   --  `2>/dev/null` probes). Returns the trimmed output; Ok is the
-   --  zero-exit test.
    function Capture
      (Prog : String; Arg_1 : String; Arg_2 : String := "";
       Ok : out Boolean) return String
-   is
-      Exe : GNAT.OS_Lib.String_Access := Locate_Exec_On_Path (Prog);
-   begin
-      Ok := False;
-      if Exe = null then
-         return "";
-      end if;
-      declare
-         Tmp_FD   : File_Descriptor;
-         Tmp_Name : GNAT.OS_Lib.String_Access;
-         Rc       : Integer;
-         N_Args   : constant Natural := (if Arg_2 = "" then 1 else 2);
-         Args     : Argument_List (1 .. N_Args);
-      begin
-         Args (1) := new String'(Arg_1);
-         if N_Args = 2 then
-            Args (2) := new String'(Arg_2);
-         end if;
-         Create_Temp_File (Tmp_FD, Tmp_Name);
-         if Tmp_FD = Invalid_FD then
-            Free (Exe);
-            return "";
-         end if;
-         Spawn (Exe.all, Args, Tmp_FD, Rc, Err_To_Out => True);
-         Close (Tmp_FD);
-         Free (Exe);
-         for I in Args'Range loop
-            Free (Args (I));
-         end loop;
-         Ok := Rc = 0;
-         declare
-            Text    : constant String := Slurp (Tmp_Name.all);
-            Success : Boolean;
-         begin
-            Delete_File (Tmp_Name.all, Success);
-            Free (Tmp_Name);
-            return Trim_Trailing (Text);
-         end;
-      end;
-   end Capture;
+     renames AHC.Shell.Capture;
 
    --  The cache key, byte-for-byte the script's recipe:
    --  sha256(cat FILES; printf '%s' FLAGS).

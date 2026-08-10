@@ -981,6 +981,64 @@ errors, dependency edits reaching the next build, -j byte-identity
 with dependencies in the graph, and the flat-manifest back-compat
 gate.
 
+### Git dependencies
+
+Since M135 a dependency can also be a git repository — the rest of
+the Go-modules shape, and still no solver:
+
+    [dependencies.jsonlite]
+    git = "https://github.com/user/jsonlite"
+    version = "1.2.0"        # a minimum; selection may take higher
+
+    [dependencies.fmt]
+    git = "https://github.com/user/fmt"
+    pin = "v2.0.1"           # exact: a tag, or a 40-hex commit
+
+A dependency names exactly one of `path` or `git`; a git dependency
+carries exactly one of `version` or `pin`. Versions are bare
+`X.Y.Z` triples — no prereleases, no ranges — matched against tags
+`vX.Y.Z` (then `X.Y.Z`) in the repository.
+
+**Selection is minimal version selection with root pins.** The
+package identity is the normalized URL (trailing `/` and `.git`
+stripped; the section name is only a local nickname, and one
+nickname meaning two URLs is an error). Over the whole transitive
+closure of manifests, each URL gets the *maximum of the declared
+minimums* — deterministic, monotone, no solver. Pins are the
+override channel, and only the **root** manifest's are obeyed: a
+root pin selects that exact tag or commit, full stop; a transitive
+pin to a version tag merely demotes to a minimum; a transitive pin
+to a bare commit is refused with instructions to pin it in the
+root manifest (commits are incomparable, and refusing is the
+honest no-solver move). A root *path* entry overrides a like-named
+git dependency anywhere in the graph — the local-development
+escape hatch. Because selection is deterministic given the
+manifests, there is no version lockfile.
+
+**`ahc.sum` is the whole lock story — integrity, not versions.**
+Beside the manifest, one line per fetched tree:
+`github.com/user/foo 1.2.0 h1:<sha256>` — a directory hash (every
+file's sha256 and relative path, sorted, hashed again). Recorded
+on first fetch, verified on every build, and a mismatch is a hard
+failure that names the line; a moved tag upstream is exactly the
+event this catches. Fetched trees live in `~/.ahc/mod`
+(`$AHC_MOD` overrides) as `<host>/<path>@<ref>/`, `.git` stripped
+— content, not state: deleting an entry only means refetching.
+With a warm cache and a matching `ahc.sum` a build touches the
+network not at all; `ahc fetch` resolves and fetches everything
+without building (the CI prefetch / offline preparation step),
+and it is the only new command.
+
+The recorded limits: no major-version isolation (a v2 minimum
+drags every consumer to v2 — breaking upgrades are managed with
+root pins); `git` must be on PATH only when git dependencies are
+used; a git dependency declared only inside a fetched tree's
+vendored subtree is refused, because the resolver never saw it.
+`scripts/run_pkg.sh` proves the story against local `file://`
+repositories: fetch + build + run, max-of-minimums, the root pin,
+offline warm-cache builds, `ahc fetch`, and the tampered-cache
+hard failure.
+
 **The frontend deliberately stays whole-program.** Types, classes
 and instances are still resolved with every module in view — there
 are no interface files. That is not laziness but a trade: the

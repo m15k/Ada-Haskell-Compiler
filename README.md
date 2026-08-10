@@ -127,8 +127,9 @@ GHC replacement. Read that as a promise and a limit:
   rather than tested weakly.
 - **The limit.** No GHC extensions, no `base` beyond the subset in
   `lib/`, and no Hackage — a program's dependencies are the modules
-  beside it, AHC's own standard library, and any local module trees
-  its `ahc.toml` names as path dependencies (M134). Programs using
+  beside it, AHC's own standard library, and the module trees its
+  `ahc.toml` names: local paths (M134) or git repositories with
+  Go-style minimal version selection and an `ahc.sum` (M135). Programs using
   the Ada extension (refinement types, contracts, deterministic
   concurrency) are AHC-only by construction; ordinary Haskell 2010
   stays portable to GHC, which is exactly how the test suite proves

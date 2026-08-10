@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+**M135 - git dependencies (docs/MANUAL.md "Git dependencies").**
+The other half of the Go-modules shape, still with no solver. A
+`[dependencies.NAME]` section may now say `git = URL` with exactly
+one of `version = "X.Y.Z"` (a minimum) or `pin = "..."` (an exact
+tag or 40-hex commit). Selection is minimal version selection with
+root pins: per normalized URL, the max of the declared minimums
+over the transitive manifest closure; only the ROOT manifest's
+pins select exactly (a transitive tag pin demotes to a minimum, a
+transitive commit pin is refused with instructions to pin at the
+root), and a root path entry overrides a like-named git dependency
+outright - the local-development escape hatch. Deterministic, so
+no version lockfile exists: `ahc.sum` beside the manifest records
+a Go-style directory hash per fetched tree, appended on first
+fetch and hard-failed on mismatch forever after. Trees are cloned
+shallowly into `~/.ahc/mod` (`$AHC_MOD` overrides), `.git`
+stripped; a warm cache with a matching sum builds fully offline.
+One new command: `ahc fetch` (resolve + fetch + verify, build
+nothing). New machinery: `AHC.Semver` (bare triples, `<`),
+`AHC.Fetch` (cache, dirhash, ahc.sum), `AHC.Deps.Resolve` (MVS
+with a callback-injected manifest reader, so the unit tests drive
+synthetic graphs), and `AHC.Shell` (the process plumbing factored
+verbatim out of AHC.Build). New harness `scripts/run_pkg.sh`
+builds real repos over `file://` and proves fetch, MVS, the pin,
+offline warm-cache builds, prefetch, and the tampered-cache
+failure; unit suites grow to 311 assertions.
+
 **M134 - path dependencies (docs/MANUAL.md "Projects and
 dependencies").** The manifest learns the first slice of a
 Go-modules-shaped dependency story - the shape a whole-program

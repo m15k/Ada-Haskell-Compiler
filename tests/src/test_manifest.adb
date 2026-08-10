@@ -14,6 +14,7 @@ with Test_Harness; use Test_Harness;
 package body Test_Manifest is
 
    use Ada.Strings.Unbounded;
+   use type AHC.Manifest.Dep_Kind;
 
    Scratch : constant String := "unit_scratch_manifest";
 
@@ -94,7 +95,7 @@ package body Test_Manifest is
       Check (not Load ("main = ""m.hs""" & ASCII.LF
                        & "[dependencies.a]" & ASCII.LF
                        & "git = ""https://x/y""" & ASCII.LF, P),
-             "git key is rejected until its milestone");
+             "git without version or pin is an error");
       Check (not Load ("main = ""m.hs""" & ASCII.LF
                        & "[package]" & ASCII.LF
                        & "author = ""me""" & ASCII.LF, P),
@@ -105,6 +106,53 @@ package body Test_Manifest is
       Check (not Load ("[package]" & ASCII.LF
                        & "name = ""x""" & ASCII.LF, P),
              "missing main still fails by default");
+
+      --  Git dependencies (M135).
+      Check (Load ("main = ""m.hs""" & ASCII.LF
+                   & "[dependencies.foo]" & ASCII.LF
+                   & "git = ""https://github.com/u/foo""" & ASCII.LF
+                   & "version = ""1.2.0""" & ASCII.LF, P),
+             "git + version parses");
+      Check (P.Deps (1).Kind = AHC.Manifest.Git_Dep,
+             "git dep kind recorded");
+      Check_Equal (To_String (P.Deps (1).URL),
+                   "https://github.com/u/foo", "git URL recorded");
+      Check_Equal (To_String (P.Deps (1).Version), "1.2.0",
+                   "git version recorded");
+      Check (Load ("main = ""m.hs""" & ASCII.LF
+                   & "[dependencies.bar]" & ASCII.LF
+                   & "git = ""https://github.com/u/bar""" & ASCII.LF
+                   & "pin = ""v2.0.1""" & ASCII.LF, P),
+             "git + pin parses");
+      Check_Equal (To_String (P.Deps (1).Pin), "v2.0.1",
+                   "git pin recorded");
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "[dependencies.a]" & ASCII.LF
+                       & "git = ""https://x/y""" & ASCII.LF
+                       & "version = ""1.0.0""" & ASCII.LF
+                       & "pin = ""v1.0.0""" & ASCII.LF, P),
+             "git with both version and pin is an error");
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "[dependencies.a]" & ASCII.LF
+                       & "path = ""x""" & ASCII.LF
+                       & "git = ""https://x/y""" & ASCII.LF
+                       & "version = ""1.0.0""" & ASCII.LF, P),
+             "path and git together is an error");
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "[dependencies.a]" & ASCII.LF
+                       & "path = ""x""" & ASCII.LF
+                       & "version = ""1.0.0""" & ASCII.LF, P),
+             "version on a path dependency is an error");
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "[dependencies.a]" & ASCII.LF
+                       & "git = ""https://x/y""" & ASCII.LF
+                       & "version = ""v1.0.0""" & ASCII.LF, P),
+             "v-prefixed version string is an error");
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "[dependencies.a]" & ASCII.LF
+                       & "git = ""https://x/y""" & ASCII.LF
+                       & "version = "">=1.0.0""" & ASCII.LF, P),
+             "version range syntax is an error");
 
       --  A dependency's own manifest needs no main.
       Check (Load ("[dependencies.a]" & ASCII.LF

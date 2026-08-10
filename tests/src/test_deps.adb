@@ -1,6 +1,7 @@
 --  Collect_Roots over real fixture trees built in a scratch
---  directory: transitive order, diamond dedup, and the error
---  space (cycle, missing directory, one name for two paths).
+--  directory (transitive order, diamond dedup, the error space),
+--  and Resolve over a synthetic dependency graph - the callback
+--  injection exists exactly so MVS is testable without git.
 --  Negative cases print to stderr - expected noise in the log.
 
 with Ada.Directories;
@@ -8,12 +9,79 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with AHC.Deps;
+with AHC.Manifest;
 
 with Test_Harness; use Test_Harness;
 
 package body Test_Deps is
 
    use Ada.Strings.Unbounded;
+
+   --  Synthetic-graph vocabulary: dependency declarations the way
+   --  a manifest would carry them.
+   function Git (Name, URL, Version, Pin : String)
+                 return AHC.Manifest.Dependency is
+     (Name    => To_Unbounded_String (Name),
+      Kind    => AHC.Manifest.Git_Dep,
+      Path    => Null_Unbounded_String,
+      URL     => To_Unbounded_String (URL),
+      Version => To_Unbounded_String (Version),
+      Pin     => To_Unbounded_String (Pin));
+
+   function Path_D (Name : String)
+                    return AHC.Manifest.Dependency is
+     (Name    => To_Unbounded_String (Name),
+      Kind    => AHC.Manifest.Path_Dep,
+      Path    => To_Unbounded_String ("somewhere"),
+      URL     => Null_Unbounded_String,
+      Version => Null_Unbounded_String,
+      Pin     => Null_Unbounded_String);
+
+   --  The graph the callback serves:
+   --    liba@* needs greet >= 1.0.0
+   --    libb@* needs greet >= 1.1.0, and at >= 2.0.0 needs extra
+   --    vend@* pins greet at tag v1.2.0
+   --    cpin@* pins greet at a commit
+   --  everything else has no dependencies.
+   function Fake_Deps
+     (Clone_URL, Ref : String;
+      Is_Version     : Boolean;
+      Deps           : out AHC.Manifest.Dependency_Vectors.Vector)
+      return Boolean
+   is
+      pragma Unreferenced (Is_Version);
+      G : constant String := "https://x/greet";
+   begin
+      Deps.Clear;
+      if Clone_URL = "https://x/liba" then
+         Deps.Append (Git ("greet", G, "1.0.0", ""));
+      elsif Clone_URL = "https://x/libb" then
+         Deps.Append (Git ("greet", G, "1.1.0", ""));
+         if Ref = "2.0.0" then
+            Deps.Append
+              (Git ("extra", "https://x/extra", "1.0.0", ""));
+         end if;
+      elsif Clone_URL = "https://x/vend" then
+         Deps.Append (Git ("greet", G, "", "v1.2.0"));
+      elsif Clone_URL = "https://x/cpin" then
+         Deps.Append
+           (Git ("greet", G, "",
+                 "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+      end if;
+      return True;
+   end Fake_Deps;
+
+   function Ref_Of
+     (Sel : AHC.Deps.Selection_Vectors.Vector; URL : String)
+      return String is
+   begin
+      for S of Sel loop
+         if To_String (S.URL) = URL then
+            return To_String (S.Ref);
+         end if;
+      end loop;
+      return "(absent)";
+   end Ref_Of;
 
    Scratch : constant String := "unit_scratch_deps";
 
@@ -141,6 +209,100 @@ package body Test_Deps is
              "two manifests agreeing on a name is benign");
 
       Ada.Directories.Delete_Tree (Scratch);
+
+      --  Minimal version selection over the synthetic graph.
+      declare
+         Root, Locals : AHC.Manifest.Dependency_Vectors.Vector;
+         Sel          : AHC.Deps.Selection_Vectors.Vector;
+      begin
+         --  Max of minimums: liba asks greet>=1.0.0, libb asks
+         --  greet>=1.1.0, the root asks both mids at 1.0.0.
+         Root.Append (Git ("liba", "https://x/liba", "1.0.0", ""));
+         Root.Append (Git ("libb", "https://x/libb", "1.0.0", ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "synthetic graph resolves");
+         Check_Equal (Ref_Of (Sel, "https://x/greet"), "1.1.0",
+                      "MVS takes the max of the minimums");
+         Check_Equal (Integer (Sel.Length), 3,
+                      "selection covers the whole closure");
+         Check (To_String (Sel (1).URL) < To_String (Sel (2).URL)
+                and then To_String (Sel (2).URL)
+                       < To_String (Sel (3).URL),
+                "selection is sorted by URL");
+
+         --  A raised minimum re-expands: at 2.0.0 libb grows a
+         --  dependency that 1.0.0 does not have.
+         Root.Clear;
+         Root.Append (Git ("liba", "https://x/liba", "1.0.0", ""));
+         Root.Append (Git ("libb", "https://x/libb", "2.0.0", ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "re-expansion graph resolves");
+         Check_Equal (Ref_Of (Sel, "https://x/extra"), "1.0.0",
+                      "a raised minimum re-expands its manifest");
+
+         --  A root pin beats every transitive minimum.
+         Root.Append (Git ("greet", "https://x/greet", "",
+                           "v1.0.0"));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "pinned graph resolves");
+         Check_Equal (Ref_Of (Sel, "https://x/greet"), "v1.0.0",
+                      "root pin overrides transitive minimums");
+
+         --  A transitive tag pin only demotes to a minimum.
+         Root.Clear;
+         Root.Append (Git ("vend", "https://x/vend", "1.0.0", ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "tag-pin graph resolves");
+         Check_Equal (Ref_Of (Sel, "https://x/greet"), "1.2.0",
+                      "transitive tag pin demotes to a minimum");
+
+         --  A transitive commit pin without a root pin refuses.
+         Root.Clear;
+         Root.Append (Git ("cpin", "https://x/cpin", "1.0.0", ""));
+         Check (not AHC.Deps.Resolve (Root, Locals,
+                                      Fake_Deps'Access, Sel),
+                "transitive commit pin without root pin refuses");
+         Root.Append
+           (Git ("greet", "https://x/greet", "",
+                 "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "root commit pin legitimizes the transitive one");
+
+         --  A root path entry overrides a like-named git dep.
+         Root.Clear;
+         Root.Append (Path_D ("greet"));
+         Root.Append (Git ("liba", "https://x/liba", "1.0.0", ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "path-override graph resolves");
+         Check_Equal (Ref_Of (Sel, "https://x/greet"), "(absent)",
+                      "root path dep overrides the git dep");
+
+         --  One nickname for two URLs is an error.
+         Root.Clear;
+         Root.Append (Git ("dup", "https://x/liba", "1.0.0", ""));
+         Root.Append (Git ("dup", "https://x/libb", "1.0.0", ""));
+         Check (not AHC.Deps.Resolve (Root, Locals,
+                                      Fake_Deps'Access, Sel),
+                "one name for two URLs is an error");
+
+         --  URL identity: .git and trailing / collapse together.
+         Root.Clear;
+         Root.Append (Git ("liba", "https://x/liba.git", "1.0.0",
+                           ""));
+         Root.Append (Git ("liba2", "https://x/liba/", "1.0.0",
+                           ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "normalized-identical URLs resolve");
+         Check_Equal (Integer (Sel.Length), 1,
+                      "spellings of one URL merge into one entry");
+      end;
    end Run;
 
 end Test_Deps;

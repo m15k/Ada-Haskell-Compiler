@@ -14,19 +14,21 @@ package AHC.Manifest is
 
    use Ada.Strings.Unbounded;
 
-   --  A [dependencies.NAME] section. Milestone A supports only
-   --  path dependencies; the git/version/pin keys parse today so
-   --  the grammar is stable, but are rejected until git
-   --  dependencies land.
+   --  A [dependencies.NAME] section: exactly one of path (a local
+   --  module tree, relative to the manifest's directory) or git (a
+   --  repository URL). A git dependency carries exactly one of
+   --  version (a minimum - selection takes the max of minimums) or
+   --  pin (an exact tag or commit - and a pin in the ROOT manifest
+   --  wins outright for that repository).
    type Dep_Kind is (Path_Dep, Git_Dep);
 
    type Dependency is record
       Name    : Unbounded_String;   --  [dependencies.NAME]
       Kind    : Dep_Kind := Path_Dep;
       Path    : Unbounded_String;   --  relative to the manifest's dir
-      URL     : Unbounded_String;   --  git = "..." (future)
-      Version : Unbounded_String;   --  minimum version (future)
-      Pin     : Unbounded_String;   --  exact tag or commit (future)
+      URL     : Unbounded_String;   --  git = "..."
+      Version : Unbounded_String;   --  minimum version, "X.Y.Z"
+      Pin     : Unbounded_String;   --  exact tag or commit
    end record;
 
    package Dependency_Vectors is new Ada.Containers.Vectors

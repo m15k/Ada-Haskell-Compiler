@@ -65,6 +65,8 @@ procedure AHC_Main is
                         & "   (writes OUT.c)");
       Put_Line (Target, "       ahc bindgen cpp|rust|go|ghc"
                 & " FILE.hs OUT");
+      Put_Line (Target, "       ahc fetch"
+                & "   (resolve + fetch git dependencies)");
       Put_Line (Target, "       ahc repl");
    end Print_Usage;
 
@@ -319,7 +321,7 @@ procedure AHC_Main is
       --  file unless the caller knows better (a bare `ahc build`
       --  whose main = "src/app.hs" puts the root below it).
       Dep_Roots : AHC.Deps.Root_Vectors.Vector;
-      Deps_Ok   : constant Boolean := AHC.Deps.Collect_Roots
+      Deps_Ok   : constant Boolean := AHC.Deps.Collect_All
         ((if Manifest_Dir /= "" then Manifest_Dir else Root_Dir),
          Dep_Roots);
 
@@ -1215,6 +1217,25 @@ begin
             Run_Middle (Argument (2), 't');
          else
             Usage_Error ("expected: ahc check FILE.hs");
+         end if;
+      elsif Command = "fetch" then
+         --  Resolve and fetch every git dependency, build nothing:
+         --  the CI prefetch / offline preparation step.
+         if Argument_Count /= 1 then
+            Usage_Error ("expected: ahc fetch");
+         elsif not Ada.Directories.Exists ("ahc.toml") then
+            Usage_Error ("ahc fetch wants an ahc.toml in the"
+                         & " current directory");
+         else
+            declare
+               Roots : AHC.Deps.Root_Vectors.Vector;
+            begin
+               if not AHC.Deps.Collect_All
+                 (".", Roots, Fetch_Only => True)
+               then
+                  Set_Exit_Status (1);
+               end if;
+            end;
          end if;
       elsif Command = "bindgen" then
          if Argument_Count = 4

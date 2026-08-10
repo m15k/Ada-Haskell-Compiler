@@ -1,6 +1,8 @@
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
+with AHC.Semver;
+
 package body AHC.Manifest is
 
    function Load (Path : String; P : out Project;
@@ -213,11 +215,13 @@ package body AHC.Manifest is
             begin
                if Key = "path" then
                   D.Path := To_Unbounded_String (Str);
-               elsif Key in "git" | "version" | "pin" then
-                  Fail ("key '" & Key
-                        & "': git dependencies arrive in a later "
-                        & "milestone");
-                  Ok := False;
+               elsif Key = "git" then
+                  D.URL  := To_Unbounded_String (Str);
+                  D.Kind := Git_Dep;
+               elsif Key = "version" then
+                  D.Version := To_Unbounded_String (Str);
+               elsif Key = "pin" then
+                  D.Pin := To_Unbounded_String (Str);
                else
                   Fail ("unknown key '" & Key & "' in [dependencies."
                         & To_String (D.Name) & "]");
@@ -252,11 +256,41 @@ package body AHC.Manifest is
       Close (F);
       Line_No := 0;
       for D of P.Deps loop
-         if Ok and then D.Path = "" then
-            Fail ("dependency '" & To_String (D.Name)
-                  & "' needs path = ""...""");
-            Ok := False;
-         end if;
+         exit when not Ok;
+         declare
+            N : constant String := To_String (D.Name);
+            V : AHC.Semver.Version;
+         begin
+            if D.Path /= "" and then D.URL /= "" then
+               Fail ("dependency '" & N
+                     & "' wants path or git, not both");
+               Ok := False;
+            elsif D.Path = "" and then D.URL = "" then
+               Fail ("dependency '" & N
+                     & "' needs path = ""..."" or git = ""...""");
+               Ok := False;
+            elsif D.Kind = Path_Dep
+              and then (D.Version /= "" or else D.Pin /= "")
+            then
+               Fail ("dependency '" & N
+                     & "': version and pin apply to git"
+                     & " dependencies");
+               Ok := False;
+            elsif D.Kind = Git_Dep
+              and then (D.Version /= "") = (D.Pin /= "")
+            then
+               Fail ("git dependency '" & N
+                     & "' needs exactly one of version or pin");
+               Ok := False;
+            elsif D.Version /= ""
+              and then not AHC.Semver.Parse (To_String (D.Version), V)
+            then
+               Fail ("dependency '" & N & "': version '"
+                     & To_String (D.Version)
+                     & "' wants X.Y.Z (no v prefix, no ranges)");
+               Ok := False;
+            end if;
+         end;
       end loop;
       if Ok and then Require_Main and then P.Main = "" then
          Fail ("missing required key 'main'");

@@ -17,6 +17,8 @@ with Test_Desugar;
 with Test_Typechecker;
 with Test_Manifest;
 with Test_Deps;
+with Test_Semver;
+with Test_Fetch;
 
 procedure AHC_Tests_Main is
 begin
@@ -36,6 +38,8 @@ begin
    Test_Typechecker.Run;
    Test_Manifest.Run;
    Test_Deps.Run;
+   Test_Semver.Run;
+   Test_Fetch.Run;
 
    Test_Harness.Summarize_And_Exit;
 end AHC_Tests_Main;
