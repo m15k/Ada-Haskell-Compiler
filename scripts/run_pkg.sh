@@ -108,5 +108,35 @@ if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q "does not match"
 then step "tampered cache entry fails against ahc.sum"
 else flunk "ahc.sum mismatch (rc=$rc)"; fi
 
+# 7. adversarial review: a pin with '..' is refused before any
+#    filesystem operation can escape the module cache
+manifest v1.0.0
+sed -i.bak 's#pin = "v1.0.0"#pin = "../../../../../../tmp/ahc_escape"#' "$tmp/app/ahc.toml"
+rm -f "$tmp/app/ahc.toml.bak"
+err=$(rebuild 2>&1)
+if [ $? -ne 0 ] && printf '%s' "$err" | grep -q "escape the module cache" \
+   && [ ! -e /tmp/ahc_escape ] && [ ! -e /tmp/ahc_escape.fetch ]
+then step "a '..' pin is refused, nothing created outside the cache"
+else flunk "path-traversal refusal"; fi
+
+# 8. adversarial review: a repo carrying a symlink loop and an
+#    escape-to-/etc symlink hashes and builds without hang or crash
+mkdir -p "$tmp/repos/greet/Sub"
+( cd "$tmp/repos/greet"
+  ln -s . Sub/loop 2>/dev/null
+  ln -s /etc/passwd Sub/escape 2>/dev/null
+  $G add -A; $G commit -qm links; git tag v1.2.0 )
+rm -rf "$AHC_MOD"
+manifest
+sed -i.bak 's/version = "1.0.0"/version = "1.2.0"/g' "$tmp/repos/mida/ahc.toml" 2>/dev/null
+# depend on greet 1.2.0 directly so the symlinked tree is fetched
+{ printf 'main = "Main.hs"\noutput = "app"\n'
+  printf '[dependencies.greet]\ngit = "file://%s/repos/greet"\nversion = "1.2.0"\n' "$tmp"
+} > "$tmp/app/ahc.toml"
+printf 'module Main where\nmain :: IO ()\nmain = putStrLn "ok"\n' > "$tmp/app/Main.hs"
+if rebuild >/dev/null 2>&1 && [ "$("$tmp/app/app")" = ok ]
+then step "a repo with symlink loop + escape hashes and builds safely"
+else flunk "symlink-bearing repo"; fi
+
 [ $fail -eq 0 ] && echo "git deps harness: all green"
 exit $fail

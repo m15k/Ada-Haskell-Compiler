@@ -89,7 +89,11 @@ package body AHC.Deps is
                  GNAT.OS_Lib.Normalize_Pathname
                    (Dir & "/" & To_String (D.Path));
             begin
-               if not Ada.Directories.Exists (Full) then
+               if not Ada.Directories.Exists (Full)
+                 or else not Ada.Directories."="
+                           (Ada.Directories.Kind (Full),
+                            Ada.Directories.Directory)
+               then
                   Err ("dependency '" & Name
                        & "': no such directory " & Full
                        & " (from " & Manifest_Path & ")");
@@ -146,6 +150,7 @@ package body AHC.Deps is
       Overrides   : String_Sets.Set;   --  root path dep names
       Min         : Version_Maps.Map;  --  url -> min version
       Pin         : String_Maps.Map;   --  url -> root pin, verbatim
+      Root_Ver    : String_Sets.Set;   --  url given a root version
       Clone_Of    : String_Maps.Map;   --  url -> first clone URL
       Nick_Of     : String_Maps.Map;   --  url -> first nickname
       URL_Of_Name : String_Maps.Map;   --  name -> url
@@ -208,6 +213,11 @@ package body AHC.Deps is
                              & Pin (Ident) & "' and '" & P
                              & "' for " & Ident);
                         Ok := False;
+                     elsif Root_Ver.Contains (Ident) then
+                        Err ("root manifest gives both a version and"
+                             & " a pin for " & Ident
+                             & "; keep one");
+                        Ok := False;
                      else
                         Pin.Include (Ident, P);
                         Queue.Append (Ident);
@@ -216,14 +226,26 @@ package body AHC.Deps is
                      Raise_Min (Ident, V);   --  tag pin demotes
                   elsif not Pin.Contains (Ident) then
                      Err ("dependency '" & Name
-                          & "' is pinned to commit '" & P
-                          & "' in a transitive manifest; pin it in"
-                          & " the root ahc.toml to select it");
+                          & "' is pinned to '" & P
+                          & "' (a commit or non-version tag) in a"
+                          & " transitive manifest; pin it in the"
+                          & " root ahc.toml to select it");
                      Ok := False;
                   end if;
                end;
             else
-               if AHC.Semver.Parse (To_String (D.Version), V) then
+               if From_Root then
+                  if Pin.Contains (Ident) then
+                     Err ("root manifest gives both a version and"
+                          & " a pin for " & Ident & "; keep one");
+                     Ok := False;
+                  else
+                     Root_Ver.Include (Ident);
+                  end if;
+               end if;
+               if Ok and then AHC.Semver.Parse
+                 (To_String (D.Version), V)
+               then
                   Raise_Min (Ident, V);
                end if;   --  unparseable was refused at Load
             end if;

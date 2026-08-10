@@ -118,6 +118,8 @@ package body Test_Deps is
 
    procedure Run is
       Roots : AHC.Deps.Root_Vectors.Vector;
+      pragma Warnings
+        (Off, Roots, Reason => "out param probed for the result");
    begin
       Start_Suite ("Deps");
       if Ada.Directories.Exists (Scratch) then
@@ -208,12 +210,23 @@ package body Test_Deps is
       Check (AHC.Deps.Collect_Roots (Scratch & "/agree", Roots),
              "two manifests agreeing on a name is benign");
 
+      --  Adversarial review: a path that exists but is a FILE, not
+      --  a directory, must be rejected, not silently added.
+      Make_Pkg ("filedep",
+                "[dependencies.f]" & ASCII.LF
+                & "path = ""../liba/ahc.toml""" & ASCII.LF);
+      Check (not AHC.Deps.Collect_Roots
+               (Scratch & "/filedep", Roots),
+             "a path dependency pointing at a file is an error");
+
       Ada.Directories.Delete_Tree (Scratch);
 
       --  Minimal version selection over the synthetic graph.
       declare
          Root, Locals : AHC.Manifest.Dependency_Vectors.Vector;
          Sel          : AHC.Deps.Selection_Vectors.Vector;
+         pragma Warnings
+           (Off, Sel, Reason => "out param probed for the result");
       begin
          --  Max of minimums: liba asks greet>=1.0.0, libb asks
          --  greet>=1.1.0, the root asks both mids at 1.0.0.
@@ -250,6 +263,22 @@ package body Test_Deps is
                 "pinned graph resolves");
          Check_Equal (Ref_Of (Sel, "https://x/greet"), "v1.0.0",
                       "root pin overrides transitive minimums");
+
+         --  Adversarial review: the root giving both a version and
+         --  a pin for one URL is a contradiction, not a silent
+         --  pin-wins.
+         Root.Clear;
+         Root.Append (Git ("a", "https://x/greet", "1.0.0", ""));
+         Root.Append (Git ("b", "https://x/greet", "", "v2.0.0"));
+         Check (not AHC.Deps.Resolve (Root, Locals,
+                                      Fake_Deps'Access, Sel),
+                "root version + root pin for one URL is an error");
+         Root.Clear;   --  and in the other declaration order
+         Root.Append (Git ("b", "https://x/greet", "", "v2.0.0"));
+         Root.Append (Git ("a", "https://x/greet", "1.0.0", ""));
+         Check (not AHC.Deps.Resolve (Root, Locals,
+                                      Fake_Deps'Access, Sel),
+                "order-independent: pin then version is also an error");
 
          --  A transitive tag pin only demotes to a minimum.
          Root.Clear;

@@ -15,18 +15,49 @@ root), and a root path entry overrides a like-named git dependency
 outright - the local-development escape hatch. Deterministic, so
 no version lockfile exists: `ahc.sum` beside the manifest records
 a Go-style directory hash per fetched tree, appended on first
-fetch and hard-failed on mismatch forever after. Trees are cloned
-shallowly into `~/.ahc/mod` (`$AHC_MOD` overrides), `.git`
-stripped; a warm cache with a matching sum builds fully offline.
-One new command: `ahc fetch` (resolve + fetch + verify, build
-nothing). New machinery: `AHC.Semver` (bare triples, `<`),
-`AHC.Fetch` (cache, dirhash, ahc.sum), `AHC.Deps.Resolve` (MVS
-with a callback-injected manifest reader, so the unit tests drive
-synthetic graphs), and `AHC.Shell` (the process plumbing factored
-verbatim out of AHC.Build). New harness `scripts/run_pkg.sh`
-builds real repos over `file://` and proves fetch, MVS, the pin,
-offline warm-cache builds, prefetch, and the tampered-cache
-failure; unit suites grow to 311 assertions.
+fetch and hard-failed on mismatch forever after. Trees clone into
+`~/.ahc/mod` (`$AHC_MOD` overrides) - shallow for tags/versions, a
+full clone for a commit pin - `.git` stripped; a warm cache with a
+matching sum builds fully offline. One new command: `ahc fetch`
+(resolve + fetch + verify, build nothing). New machinery:
+`AHC.Semver` (bare triples, `<`), `AHC.Fetch` (cache, dirhash,
+ahc.sum), `AHC.Deps.Resolve` (MVS with a callback-injected
+manifest reader, so the unit tests drive synthetic graphs), and
+`AHC.Shell` (the process plumbing factored verbatim out of
+AHC.Build). New harness `scripts/run_pkg.sh` builds real repos
+over `file://` and proves fetch, MVS, the pin, offline warm-cache
+builds, prefetch, and the tampered-cache failure; unit suites grow
+to 325 assertions.
+
+**M135 hardening - ten defects an adversarial review of the
+milestone found.** All post-green, on paths the suites did not
+walk. (1) A long digit run in `jobs`, a `version`, or a tag/commit
+`pin` overflowed `Natural'Value` into an uncaught `Constraint_Error`
+- an ordinary manifest typo, or a hostile fetched dependency,
+crashed the compiler with a traceback instead of a clean
+diagnostic. (2) A git URL or pin containing `..` (or a space, `@`,
+or a leading `/`) was used verbatim to build the cache path, so a
+crafted dependency could create or delete directories outside
+`~/.ahc/mod`; such refs are now refused before any fetch. (3) The
+same unescaped fields could collide two different dependencies onto
+one `ahc.sum` line or one cache directory. (4) The tree hasher
+followed symlinks - a repo with a self-referential link looped
+forever, a link to `/` walked the whole filesystem, a link to a
+file hashed content outside the tree; symlinks are now skipped.
+(5) The directory-hash records were forgeable (an unescaped
+trailing path could fabricate a record boundary); each file now
+folds in as two fixed-width digests. (6) An unreadable or vanished
+dependency file raised out of the hasher and out of `Check_Sum`
+(which also leaked its file handle) rather than failing cleanly.
+(7) A `path` dependency pointing at a file, not a directory, was
+silently added to the search path. (8) A root manifest giving both
+a `version` and a `pin` for one URL silently let the pin win; it is
+now a conflict, like two pins. (9) Tab-indented and CRLF-saved
+manifests mis-parsed (the trimmer stripped only spaces). (10) The
+test crate did not build under `alr build --validation` (the new
+suites tripped `-gnatwe` on `-gnatwm`), so the documented gate
+produced no binary. Also: ssh fetches now run with `BatchMode=yes`
+so a bad host cannot hang the build.
 
 **M134 - path dependencies (docs/MANUAL.md "Projects and
 dependencies").** The manifest learns the first slice of a

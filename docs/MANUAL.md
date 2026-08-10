@@ -1017,17 +1017,32 @@ manifests, there is no version lockfile.
 
 **`ahc.sum` is the whole lock story — integrity, not versions.**
 Beside the manifest, one line per fetched tree:
-`github.com/user/foo 1.2.0 h1:<sha256>` — a directory hash (every
-file's sha256 and relative path, sorted, hashed again). Recorded
-on first fetch, verified on every build, and a mismatch is a hard
-failure that names the line; a moved tag upstream is exactly the
-event this catches. Fetched trees live in `~/.ahc/mod`
+`github.com/user/foo 1.2.0 h1:<sha256>` — a directory hash (each
+file's content and relative path folded in as fixed-width
+digests, files sorted, hashed again; symlinks are skipped, never
+followed). Recorded on first fetch, verified on every build, and
+a mismatch is a hard failure that names the line. Because the sum
+travels in the project's repository, this is a *cross-machine*
+guarantee: a tag an attacker moves upstream is caught the moment
+another developer or CI fetches it cold against the committed
+`ahc.sum` (a warm cache never re-fetches an unchanged
+`<identity>@<ref>`, so it instead re-verifies its files and
+catches local tampering). Fetched trees live in `~/.ahc/mod`
 (`$AHC_MOD` overrides) as `<host>/<path>@<ref>/`, `.git` stripped
 — content, not state: deleting an entry only means refetching.
-With a warm cache and a matching `ahc.sum` a build touches the
-network not at all; `ahc fetch` resolves and fetches everything
-without building (the CI prefetch / offline preparation step),
-and it is the only new command.
+Tag and version fetches are shallow (`--depth 1`); a commit pin is
+a full clone (a server need not serve an arbitrary commit
+shallowly). With a warm cache and a matching `ahc.sum` a build
+touches the network not at all; `ahc fetch` resolves and fetches
+everything without building (the CI prefetch / offline preparation
+step), and it is the only new command.
+
+A `<host>@<ref>` cache path and an `ahc.sum` line are both built
+from the identity and the ref, so a URL or pin containing `..`, a
+space, `@`, or a leading `/` — anything that could escape the
+cache root or make a delimiter ambiguous — is refused before any
+fetch. A dependency URL over ssh runs git with `BatchMode=yes`, so
+a bad host cannot hang the build on a prompt.
 
 The recorded limits: no major-version isolation (a v2 minimum
 drags every consumer to v2 — breaking upgrades are managed with

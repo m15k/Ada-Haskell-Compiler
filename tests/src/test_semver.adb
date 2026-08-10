@@ -6,6 +6,10 @@ package body Test_Semver is
 
    procedure Run is
       V, W : Version;
+      pragma Warnings
+        (Off, V, Reason => "out param probed for Parse's result");
+      pragma Warnings
+        (Off, W, Reason => "out param probed for Parse's result");
    begin
       Start_Suite ("Semver");
 
@@ -23,6 +27,16 @@ package body Test_Semver is
       Check (not Parse ("1..3", V), "empty component rejected");
       Check (not Parse ("", V), "empty string rejected");
       Check (not Parse ("1.2.3-rc1", V), "prerelease rejected");
+      --  Adversarial review: a long digit run must be rejected,
+      --  not overflow Natural'Value into a Constraint_Error.
+      Check (not Parse ("99999999999.0.0", V),
+             "overflowing component rejected, does not crash");
+      Check (not Parse ("1.2.99999999999", V),
+             "overflowing patch rejected, does not crash");
+      Check (Parse ("999999999.0.0", V),
+             "nine-digit component still parses (no false reject)");
+      Check (not Parse ("01.2.3", V), "leading zero rejected");
+      Check (Parse ("0.0.0", V), "a bare zero component is fine");
 
       Check (Parse ("1.2.3", V) and Parse ("1.2.4", W),
              "comparison fixtures parse");

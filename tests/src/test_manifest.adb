@@ -38,6 +38,8 @@ package body Test_Manifest is
 
    procedure Run is
       P : AHC.Manifest.Project;
+      pragma Warnings
+        (Off, P, Reason => "out param probed for Load's result");
    begin
       Start_Suite ("Manifest");
       Ada.Directories.Create_Path (Scratch);
@@ -153,6 +155,23 @@ package body Test_Manifest is
                        & "git = ""https://x/y""" & ASCII.LF
                        & "version = "">=1.0.0""" & ASCII.LF, P),
              "version range syntax is an error");
+
+      --  Adversarial review regressions.
+      Check (not Load ("main = ""m.hs""" & ASCII.LF
+                       & "jobs = 99999999999" & ASCII.LF, P),
+             "an overflowing jobs value is rejected, not a crash");
+      Check (Load ("main = ""m.hs""" & ASCII.LF
+                   & "jobs = 999999999" & ASCII.LF, P),
+             "a nine-digit jobs value still parses");
+      Check (Load ("main = ""app.hs""" & ASCII.CR & ASCII.LF
+                   & "output = ""app""" & ASCII.CR & ASCII.LF, P),
+             "a CRLF-saved manifest parses");
+      Check_Equal (To_String (P.Output), "app",
+                   "CRLF value has no trailing carriage return");
+      Check (Load (ASCII.HT & "main = ""m.hs""" & ASCII.LF
+                   & ASCII.HT & ASCII.HT & "jobs = 2" & ASCII.LF, P),
+             "tab-indented lines parse");
+      Check_Equal (Integer (P.Jobs), 2, "tab-indented value read");
 
       --  A dependency's own manifest needs no main.
       Check (Load ("[dependencies.a]" & ASCII.LF

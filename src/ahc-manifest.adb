@@ -1,4 +1,5 @@
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Text_IO;
 
 with AHC.Semver;
@@ -26,8 +27,14 @@ package body AHC.Manifest is
       --  dependency. Keys before any header keep their original
       --  flat meaning.
 
+      --  Strip surrounding space, tab, and CR, so tab-indented
+      --  lines parse and a CRLF-saved manifest does not fail every
+      --  line on a trailing carriage return.
+      Blanks : constant Ada.Strings.Maps.Character_Set :=
+        Ada.Strings.Maps.To_Set (" " & ASCII.HT & ASCII.CR);
+
       function Trim (S : String) return String is
-        (Ada.Strings.Fixed.Trim (S, Ada.Strings.Both));
+        (Ada.Strings.Fixed.Trim (S, Blanks, Blanks));
 
       function Is_Word (S : String) return Boolean is
         (S'Length > 0
@@ -143,7 +150,9 @@ package body AHC.Manifest is
 
             function Nat return Natural is
             begin
-               if Val'Length > 0
+               --  Length-bounded so a long run of digits cannot
+               --  overflow Natural'Value into a Constraint_Error.
+               if Val'Length > 0 and then Val'Length <= 9
                  and then (for all C of Val => C in '0' .. '9')
                then
                   return Natural'Value (Val);

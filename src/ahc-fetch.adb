@@ -71,17 +71,30 @@ package body AHC.Fetch is
          Get_Next_Entry (It, E);
          declare
             Simple : constant String := Simple_Name (E);
+            Full   : constant String := Dir & "/" & Simple;
          begin
-            if Simple /= "." and then Simple /= ".." then
-               case Kind (E) is
-                  when Ordinary_File =>
-                     Files.Append (Prefix & Simple);
-                  when Directory =>
-                     List_Files (Dir & "/" & Simple,
-                                 Prefix & Simple & "/", Files);
-                  when Special_File =>
-                     null;
-               end case;
+            --  Skip a symlink rather than follow it: a link to a
+            --  directory would recurse (a self-link loops, a link
+            --  to "/" walks the whole filesystem) and a link to a
+            --  file would hash content outside the tree. Kind
+            --  follows the link, so test before dispatching, and
+            --  guard Kind itself against a dangling entry.
+            if Simple /= "." and then Simple /= ".."
+              and then not GNAT.OS_Lib.Is_Symbolic_Link (Full)
+            then
+               begin
+                  case Kind (E) is
+                     when Ordinary_File =>
+                        Files.Append (Prefix & Simple);
+                     when Directory =>
+                        List_Files (Full, Prefix & Simple & "/",
+                                    Files);
+                     when Special_File =>
+                        null;
+                  end case;
+               exception
+                  when others => null;   --  unstat-able: skip
+               end;
             end if;
          end;
       end loop;
@@ -95,9 +108,20 @@ package body AHC.Fetch is
       List_Files (Dir, "", Files);
       Sorting.Sort (Files);
       for F of Files loop
-         GNAT.SHA256.Update
-           (C, GNAT.SHA256.Digest (Slurp (Dir & "/" & F))
-               & "  " & F & ASCII.LF);
+         --  Fold each file in as two fixed-width digests -
+         --  content then relative path - so the record structure
+         --  is unambiguous. A raw "digest  path" line with the
+         --  path last is forgeable: a filename containing a
+         --  newline could fabricate a second record boundary.
+         declare
+            Content : constant GNAT.SHA256.Message_Digest :=
+              GNAT.SHA256.Digest (Slurp (Dir & "/" & F));
+            Name    : constant GNAT.SHA256.Message_Digest :=
+              GNAT.SHA256.Digest (F);
+         begin
+            GNAT.SHA256.Update (C, String (Content));
+            GNAT.SHA256.Update (C, String (Name));
+         end;
       end loop;
       return GNAT.SHA256.Digest (C);
    end Dirhash;
@@ -149,6 +173,9 @@ package body AHC.Fetch is
       return True;
    exception
       when others =>
+         if Is_Open (F) then
+            Close (F);   --  never leak the handle on an I/O error
+         end if;
          Err ("cannot update " & Sum_Path);
          return False;
    end Check_Sum;
@@ -157,6 +184,39 @@ package body AHC.Fetch is
      (Ref'Length = 40
       and then (for all C of Ref =>
                   C in '0' .. '9' | 'a' .. 'f'));
+
+   --  A cache path is built from <identity>@<ref>, and an ahc.sum
+   --  line is "<identity> <ref> h1:...". Both fields are
+   --  attacker-controlled (a project's own ahc.toml is untrusted
+   --  input, as are fetched manifests). Refuse anything that could
+   --  escape the cache root or make either delimiter ambiguous: a
+   --  control char, a space, an '@', an absolute leading '/', or a
+   --  '..' path component.
+   function Safe_Segment (S : String) return Boolean is
+   begin
+      if S'Length = 0 or else S (S'First) = '/' then
+         return False;
+      end if;
+      for C of S loop
+         if C <= ' ' or else C = '@' then
+            return False;
+         end if;
+      end loop;
+      --  No '..' as a whole '/'-delimited component.
+      declare
+         From : Positive := S'First;
+      begin
+         for I in S'Range loop
+            if S (I) = '/' then
+               if S (From .. I - 1) = ".." then
+                  return False;
+               end if;
+               From := I + 1;
+            end if;
+         end loop;
+         return S (From .. S'Last) /= "..";
+      end;
+   end Safe_Segment;
 
    function Ensure
      (Clone_URL  : String;
@@ -221,12 +281,33 @@ package body AHC.Fetch is
    begin
       Dir := To_Unbounded_String (Where);
 
+      if not Safe_Segment (Ident) or else not Safe_Segment (Ref) then
+         Err ("refusing dependency " & Ident & "@" & Ref
+              & ": a URL or ref with '..', a space, '@', or a"
+              & " leading '/' could escape the module cache");
+         return False;
+      end if;
+
       --  Warm cache: re-verify, never re-fetch.
       if Ada.Directories.Exists (Where) then
-         return Check_Sum (Sum_Path, Ident, Ref, Dirhash (Where));
+         begin
+            return Check_Sum (Sum_Path, Ident, Ref, Dirhash (Where));
+         exception
+            when others =>
+               Err ("cannot hash the cached tree for " & Ident
+                    & "@" & Ref);
+               return False;
+         end;
       end if;
 
       Ada.Environment_Variables.Set ("GIT_TERMINAL_PROMPT", "0");
+      --  Never let ssh block the build on a host-key or passphrase
+      --  prompt (stdin is inherited); a bad ssh URL fails fast.
+      if not Ada.Environment_Variables.Exists ("GIT_SSH_COMMAND") then
+         Ada.Environment_Variables.Set
+           ("GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes");
+      end if;
       if not Quiet then
          Err ("fetching " & Ident & " " & Ref);
       end if;
@@ -253,11 +334,32 @@ package body AHC.Fetch is
          return False;
       end if;
 
-      Ada.Directories.Delete_Tree (Tmp & "/.git");
-      if not Check_Sum (Sum_Path, Ident, Ref, Dirhash (Tmp)) then
-         Ada.Directories.Delete_Tree (Tmp);
-         return False;
-      end if;
+      --  Strip .git (it is not part of the package and its
+      --  contents are volatile), hash, and verify - all under a
+      --  guard, so an unreadable file or an odd .git layout is a
+      --  clean error, not a traceback.
+      declare
+         Matched : Boolean;
+      begin
+         if Ada.Directories.Exists (Tmp & "/.git") then
+            Ada.Directories.Delete_Tree (Tmp & "/.git");
+         end if;
+         Matched := Check_Sum (Sum_Path, Ident, Ref, Dirhash (Tmp));
+         if not Matched then
+            Ada.Directories.Delete_Tree (Tmp);
+            return False;
+         end if;
+      exception
+         when others =>
+            Err ("cannot hash the fetched tree for " & Ident
+                 & "@" & Ref);
+            begin
+               Ada.Directories.Delete_Tree (Tmp);
+            exception
+               when others => null;
+            end;
+            return False;
+      end;
 
       declare
          Ok : Boolean;
