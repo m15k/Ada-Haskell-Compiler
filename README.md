@@ -25,9 +25,22 @@ toolchain (`alr toolchain --select gnat_native gprbuild`) to build the
 compiler, and `clang` to build the C it emits. The
 Boehm-Demers-Weiser GC is optional — install it (`brew install
 bdw-gc`) and AHC links it automatically; without it, programs run on
-plain malloc and never collect. There are no prebuilt binaries yet,
-and the compiler has only been exercised on macOS (see
-[Status and scope](#status-and-scope)).
+plain malloc and never collect. The compiler has only been exercised
+on macOS (see [Status and scope](#status-and-scope)).
+
+**Or take the binary.** Each release carries a relocatable tarball
+for macOS x86-64 — unpack it and it works in place, no build
+toolchain needed:
+
+```sh
+curl -LO https://github.com/m15k/Ada-Haskell-Compiler/releases/download/v1.9/ahc-1.9-darwin-x86_64.tar.gz
+tar xzf ahc-1.9-darwin-x86_64.tar.gz
+ahc-1.9-darwin-x86_64/bin/ahc --version
+```
+
+You still need `clang` to build the C it emits. To put it somewhere
+permanent, `ahc-1.9-darwin-x86_64/install.sh --prefix ~/.local`.
+Building from source is below.
 
 **Build the compiler.**
 
