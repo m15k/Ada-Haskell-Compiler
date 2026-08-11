@@ -44,16 +44,36 @@ package body AHC.Fetch is
       return URL (URL'First .. Last);
    end Normalize_URL;
 
+   --  A package's identity, used identically by the resolver (to
+   --  merge or distinguish dependencies), by the cache path, and by
+   --  the ahc.sum key - so those three can never disagree. The
+   --  scheme is KEPT as a leading path segment ("https://h/x" ->
+   --  "https/h/x"), so http and https to one host stay distinct
+   --  packages: collapsing them would let a weaker-scheme
+   --  transitive dependency shadow a stronger one's cache entry.
+   --  The "://" becomes "/" only so the identity is a clean
+   --  relative path; a scheme-less URL keeps its shape.
    function Identity_Path (URL : String) return String is
       N : constant String := Normalize_URL (URL);
       S : constant Natural := Ada.Strings.Fixed.Index (N, "://");
-      From : Natural :=
-        (if S > 0 then S + 3 else N'First);
+
+      --  Drop any leading slashes of the post-scheme remainder
+      --  (file:///tmp/x -> .../tmp/x).
+      function Trim_Slashes (T : String) return String is
+         From : Natural := T'First;
+      begin
+         while From <= T'Last and then T (From) = '/' loop
+            From := From + 1;
+         end loop;
+         return T (From .. T'Last);
+      end Trim_Slashes;
    begin
-      while From <= N'Last and then N (From) = '/' loop
-         From := From + 1;   --  file:///tmp/x -> tmp/x
-      end loop;
-      return N (From .. N'Last);
+      if S > 0 then
+         return N (N'First .. S - 1) & "/"
+                & Trim_Slashes (N (S + 3 .. N'Last));
+      else
+         return Trim_Slashes (N);
+      end if;
    end Identity_Path;
 
    --  Every regular file under Dir, as sorted Dir-relative paths.

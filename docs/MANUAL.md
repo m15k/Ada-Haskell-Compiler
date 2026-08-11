@@ -1028,21 +1028,31 @@ another developer or CI fetches it cold against the committed
 `ahc.sum` (a warm cache never re-fetches an unchanged
 `<identity>@<ref>`, so it instead re-verifies its files and
 catches local tampering). Fetched trees live in `~/.ahc/mod`
-(`$AHC_MOD` overrides) as `<host>/<path>@<ref>/`, `.git` stripped
-— content, not state: deleting an entry only means refetching.
-Tag and version fetches are shallow (`--depth 1`); a commit pin is
-a full clone (a server need not serve an arbitrary commit
-shallowly). With a warm cache and a matching `ahc.sum` a build
-touches the network not at all; `ahc fetch` resolves and fetches
-everything without building (the CI prefetch / offline preparation
-step), and it is the only new command.
+(`$AHC_MOD` overrides) as `<scheme>/<host>/<path>@<ref>/`, `.git`
+stripped — content, not state: deleting an entry only means
+refetching. The scheme is part of a package's identity — the
+resolver, the cache path, and the `ahc.sum` key all derive it the
+same way — so `http://h/x` and `https://h/x` are distinct packages
+and a weaker-scheme dependency can never shadow a stronger one's
+cached tree. Tag and version fetches are shallow (`--depth 1`); a
+commit pin is a full clone (a server need not serve an arbitrary
+commit shallowly). With a warm cache and a matching `ahc.sum` a
+build touches the network not at all; `ahc fetch` resolves and
+fetches everything without building (the CI prefetch / offline
+preparation step), and it is the only new command.
 
-A `<host>@<ref>` cache path and an `ahc.sum` line are both built
-from the identity and the ref, so a URL or pin containing `..`, a
-space, `@`, or a leading `/` — anything that could escape the
-cache root or make a delimiter ambiguous — is refused before any
-fetch. A dependency URL over ssh runs git with `BatchMode=yes`, so
-a bad host cannot hang the build on a prompt.
+A cache path and an `ahc.sum` line are both built from the
+identity and the ref, so a URL or pin containing `..`, whitespace,
+`@`, `:` (in a ref), or a leading `/` — anything that could escape
+the cache root, make a delimiter ambiguous, or redirect the fetch
+— is refused before any git runs. A clone URL may not begin with
+`-` (it would be read as a git option), the URL is passed after a
+`--` end-of-options guard, and `GIT_ALLOW_PROTOCOL` confines
+transports to https/http/ssh/git/file, so a crafted dependency
+cannot smuggle a `git` option or reach the `ext::`
+arbitrary-command transport. A dependency URL over ssh runs git
+with `BatchMode=yes`, so a bad host cannot hang the build on a
+prompt.
 
 The recorded limits: no major-version isolation (a v2 minimum
 drags every consumer to v2 — breaking upgrades are managed with

@@ -9,6 +9,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with AHC.Deps;
+with AHC.Fetch;
 with AHC.Manifest;
 
 with Test_Harness; use Test_Harness;
@@ -71,12 +72,16 @@ package body Test_Deps is
       return True;
    end Fake_Deps;
 
+   --  Look up by raw URL; Selected carries the scheme-qualified
+   --  identity (the same one the cache and ahc.sum use), so match
+   --  through Identity_Path rather than hardcoding its shape here.
    function Ref_Of
      (Sel : AHC.Deps.Selection_Vectors.Vector; URL : String)
       return String is
+      Want : constant String := AHC.Fetch.Identity_Path (URL);
    begin
       for S of Sel loop
-         if To_String (S.URL) = URL then
+         if To_String (S.URL) = Want then
             return To_String (S.Ref);
          end if;
       end loop;
@@ -331,6 +336,18 @@ package body Test_Deps is
                 "normalized-identical URLs resolve");
          Check_Equal (Integer (Sel.Length), 1,
                       "spellings of one URL merge into one entry");
+
+         --  Security review: http and https to one host are
+         --  DISTINCT packages, so the resolver keeps them apart
+         --  exactly as the cache and ahc.sum do (no shadowing).
+         Root.Clear;
+         Root.Append (Git ("s", "https://h/x", "1.0.0", ""));
+         Root.Append (Git ("p", "http://h/x", "1.0.0", ""));
+         Check (AHC.Deps.Resolve (Root, Locals, Fake_Deps'Access,
+                                  Sel),
+                "http + https to one host resolve");
+         Check_Equal (Integer (Sel.Length), 2,
+                      "http and https stay distinct, not merged");
       end;
    end Run;
 

@@ -180,8 +180,12 @@ package body AHC.Deps is
             return;
          end if;
          declare
+            --  The same identity the cache and ahc.sum use, so the
+            --  resolver never treats as one what they store as two
+            --  (or the reverse). Scheme-qualified: http and https
+            --  are distinct packages.
             Ident : constant String :=
-              AHC.Fetch.Normalize_URL (To_String (D.URL));
+              AHC.Fetch.Identity_Path (To_String (D.URL));
             V     : AHC.Semver.Version;
          begin
             if URL_Of_Name.Contains (Name)
@@ -449,7 +453,7 @@ package body AHC.Deps is
                   for G of New_Git loop
                      if not (for some T of Sel =>
                                To_String (T.URL) =
-                               AHC.Fetch.Normalize_URL
+                               AHC.Fetch.Identity_Path
                                  (To_String (G.URL)))
                      then
                         Err ("dependency '" & To_String (G.Name)

@@ -36,10 +36,20 @@ package body Test_Fetch is
          "https://github.com/u/foo", "clean URL unchanged");
       Check_Equal
         (AHC.Fetch.Identity_Path ("https://github.com/u/foo.git"),
-         "github.com/u/foo", "identity drops the scheme");
+         "https/github.com/u/foo",
+         "identity keeps the scheme as a clean path segment");
       Check_Equal
         (AHC.Fetch.Identity_Path ("file:///tmp/repos/foo"),
-         "tmp/repos/foo", "file identity drops the leading slash");
+         "file/tmp/repos/foo",
+         "file identity drops the extra leading slashes");
+      --  Adversarial/security review: http and https to one host
+      --  are DISTINCT identities, so a weaker scheme cannot shadow
+      --  a stronger one's cache entry or ahc.sum line.
+      Check (AHC.Fetch.Identity_Path ("http://h/x")
+             /= AHC.Fetch.Identity_Path ("https://h/x"),
+             "http and https identities differ");
+      Check_Equal (AHC.Fetch.Identity_Path ("http://h/x"),
+                   "http/h/x", "http scheme kept");
 
       --  Dirhash: stable, content-sensitive, layout-sensitive.
       if Ada.Directories.Exists (Scratch) then
