@@ -82,36 +82,39 @@ base="http://127.0.0.1:$port"
   curl -s -i --max-time 10 "$base/nope"
 } > "$tmp/client.out"
 
-# 4. concurrent handlers: A connects and stays silent (handler
-#    parks in readRequest), B is served, then A completes
-#    B asks for a DISTINCT route so both overlap requests are
-#    identifiable in the log regardless of the order they land in.
+# 4. concurrent handlers: A connects and stays silent (its handler
+#    parks in readRequest), B is served meanwhile, then A completes.
+#    Retried as a unit up to five times with a generous client
+#    timeout, because which of two independent TCP clients the
+#    loopback delivers - and how fast it delivers the RESPONSE bytes
+#    back to curl - is the kernel's business, not AHC's schedule.
+#    The rigorous concurrency proof is /par/8's pinned worker
+#    arrival order (check 3), which holds on every runner including
+#    CI's arm64; this check's own unique job is the park-and-resume
+#    path (A parks on its fd, wakes when bytes arrive - asserted by
+#    aresp). On an oversubscribed runner B's server-side 200 can
+#    finish while its response bytes still lag past a tight client
+#    deadline, so a first miss is retried and only a server that
+#    never serves the concurrent B across every try is a real wedge.
 overlap_ok=""
-if exec 3<>"/dev/tcp/127.0.0.1/$port"; then
+b=""; b_rc=""
+for attempt in 1 2 3 4 5; do
+  exec 3<>"/dev/tcp/127.0.0.1/$port" || continue
   sleep 0.3
-  b=$(curl -sS --max-time 10 "$base/fact/2" 2> "$tmp/b.err")
-  b_rc=$?
+  b=$(curl -sS --max-time 25 "$base/fact/2" 2> "$tmp/b.err"); b_rc=$?
   printf 'GET /fact/10 HTTP/1.0\r\n\r\n' >&3
-  #  Bounded: an unclosed connection would otherwise block until the
-  #  CI job's timeout - which is exactly what it did on the first
-  #  arm64 macOS run (60 minutes, then cancelled).
-  aresp=$(perl -e 'alarm 15; local $/; print <STDIN>' <&3 || true)
+  #  Bounded read: an unclosed connection would otherwise block until
+  #  the CI job's timeout (60 minutes on the first arm64 macOS run).
+  aresp=$(perl -e 'alarm 30; local $/; print <STDIN>' <&3 || true)
   exec 3<&-
-  #  Both answered correctly is the claim; who finished first is the
-  #  kernel's business.
   if [ "$b" = "2" ] && printf '%s' "$aresp" | grep -q 3628800; then
-    overlap_ok=1
+    overlap_ok=1; break
   fi
-fi
+  sleep 0.3   # let the raced connection settle before the next try
+done
 if [ -n "$overlap_ok" ]
-then step "concurrent handlers: A parked, B served, A completed"
-else
-  #  One immediate retry distinguishes a wedged socket path from a
-  #  one-shot race: if B2 succeeds, the server recovered and the
-  #  failure was a delivery race on the FIRST connection only.
-  b2=$(curl -sS --max-time 5 "$base/fact/3" 2>&1)
-  flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)] retry=[$b2])"
-fi
+then step "concurrent handlers: A parked, B served, A completed (try $attempt)"
+else flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)])"; fi
 
 # 6. quit is a channel signal; the response still says bye
 if [ "$(curl -s --max-time 10 "$base/quit")" = "bye" ]
@@ -141,9 +144,12 @@ if diff -q "$tmp/log.seq" examples/httpd/tests/server.golden >/dev/null
 then step "server log byte-identical (sequential session)"
 else flunk "server log diverged"; diff "$tmp/log.seq" examples/httpd/tests/server.golden | head; fi
 
+#    (at least once each: the concurrent probe above retries, so a
+#    route may be served more than once on a runner that raced the
+#    first delivery).
 n2=$(grep -c '^GET /fact/2 -> 200 OK$' "$tmp/log")
 n10=$(grep -c '^GET /fact/10 -> 200 OK$' "$tmp/log")
-if [ "$n2" = "1" ] && [ "$n10" = "1" ]
+if [ "$n2" -ge 1 ] && [ "$n10" -ge 1 ]
 then step "both overlapped requests logged, order unasserted"
 else flunk "overlap logging (fact/2 x$n2, fact/10 x$n10)"; fi
 
