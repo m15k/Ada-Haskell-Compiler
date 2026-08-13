@@ -1,0 +1,74 @@
+name: Release tarball (Linux)
+
+# Builds the relocatable Linux release tarball and attaches it to
+# the GitHub release for a tag. The macOS tarball is built and
+# uploaded from a developer machine (the own collector is
+# Darwin-only, so releases originate there); this workflow adds the
+# Linux artifact the maintainer cannot produce locally.
+#
+# Fires automatically when a v* tag is pushed, and can be run by
+# hand (workflow_dispatch) for a tag that was pushed before this
+# workflow existed - e.g. v1.10.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and attach the Linux tarball to (e.g. v1.10)'
+        required: true
+
+# gh needs write access to upload a release asset.
+permissions:
+  contents: write
+
+jobs:
+  linux-tarball:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: System packages (Boehm, so the tarball links the collector)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgc-dev pkg-config
+          pkg-config --modversion bdw-gc
+
+      - uses: alire-project/setup-alire@v4
+
+      - name: Select GNAT toolchain
+        run: alr -n toolchain --select gnat_native gprbuild
+
+      - name: Build (release)
+        run: alr -n build --release
+
+      - name: Smoke test the release binary
+        # "It compiles" is not evidence it runs: build and execute a
+        # program with the just-built compiler before we ship it.
+        run: |
+          ./bin/ahc --version
+          ./bin/ahc build tests/exec/hello.hs /tmp/hello
+          /tmp/hello
+
+      - name: Build the relocatable tarball
+        run: scripts/mkdist.sh
+
+      - name: Attach it to the release
+        # Create the release if a tag was pushed before one existed;
+        # otherwise just add (or replace) the Linux asset on the
+        # existing release, leaving the macOS asset and notes intact.
+        run: |
+          asset=$(ls dist/ahc-*-linux-*.tar.gz)
+          echo "built $asset"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$asset" --clobber
+          else
+            gh release create "$TAG" "$asset" \
+              --title "$TAG" --generate-notes
+          fi
