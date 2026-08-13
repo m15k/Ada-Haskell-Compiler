@@ -33,13 +33,13 @@ for macOS x86-64 — unpack it and it works in place, no build
 toolchain needed:
 
 ```sh
-curl -LO https://github.com/m15k/Ada-Haskell-Compiler/releases/download/v1.9/ahc-1.9-darwin-x86_64.tar.gz
-tar xzf ahc-1.9-darwin-x86_64.tar.gz
-ahc-1.9-darwin-x86_64/bin/ahc --version
+curl -LO https://github.com/m15k/Ada-Haskell-Compiler/releases/download/v1.10/ahc-1.10-darwin-x86_64.tar.gz
+tar xzf ahc-1.10-darwin-x86_64.tar.gz
+ahc-1.10-darwin-x86_64/bin/ahc --version
 ```
 
 You still need `clang` to build the C it emits. To put it somewhere
-permanent, `ahc-1.9-darwin-x86_64/install.sh --prefix ~/.local`.
+permanent, `ahc-1.10-darwin-x86_64/install.sh --prefix ~/.local`.
 Building from source is below.
 
 **Build the compiler.**
@@ -567,6 +567,15 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.10** — the packages release (M134–M135): dependency
+  management in the shape a whole-program compiler wants —
+  dependencies are source, a package is a module tree, no solver.
+  `ahc.toml` grows a `[dependencies.*]` closure: local path
+  dependencies, then git dependencies with minimal version
+  selection, root pins, and an integrity `ahc.sum`; `ahc build`
+  resolves, fetches into `~/.ahc/mod`, and compiles them as
+  ordinary units. An adversarial review and a security pass fixed
+  eleven post-feature defects, including a supply-chain RCE.
 - **v1.9** — the strings release (M130–M133 + the string
   milestone): two string representations and no more — a
   code-point-correct `String` and one packed UTF-8 `Text` serving

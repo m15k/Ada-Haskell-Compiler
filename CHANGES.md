@@ -1,6 +1,20 @@
 # AHC Changelog
 
-## Unreleased
+## v1.10 (2026-08-13)
+
+The packages release (M134-M135): AHC grows dependency management
+in the shape a whole-program compiler wants - dependencies are
+source, so a package is just a module tree somewhere else, and
+there is no solver. `ahc.toml` learns a `[dependencies.*]` closure:
+local path dependencies first (M134), then git dependencies with
+minimal version selection, root pins, and an integrity `ahc.sum`
+(M135). A project that named only its root module can now name the
+module trees it builds on - beside it, or fetched from a
+repository - and `ahc build` resolves, fetches, and compiles them
+as ordinary units. An adversarial review and a security pass
+followed the feature: together they found and fixed eleven
+defects, including a supply-chain RCE where a dependency URL could
+smuggle a `git` option and run code on the fetching machine.
 
 **M135 - git dependencies (docs/MANUAL.md "Git dependencies").**
 The other half of the Go-modules shape, still with no solver. A
