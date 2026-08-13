@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache GHC (the oracle)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.ghcup
           key: ghcup-9.4.8-${{ runner.os }}
@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y libgc-dev pkg-config
           pkg-config --modversion bdw-gc
 
-      - uses: alire-project/setup-alire@v4
+      - uses: alire-project/setup-alire@v6
 
       - name: Select GNAT toolchain
         run: alr -n toolchain --select gnat_native gprbuild
@@ -129,9 +129,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: alire-project/setup-alire@v4
+      - uses: alire-project/setup-alire@v6
 
       - name: Select GNAT toolchain
         run: alr -n toolchain --select gnat_native gprbuild
