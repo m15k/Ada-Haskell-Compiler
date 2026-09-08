@@ -2542,25 +2542,50 @@ static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
   sc->n = 0;
   sc->cap = 0;
   si = reg_add((void ***)&scope_reg, &scope_n, &scope_cap, sc);
-  r = ahc_eval(ahc_apply(ahc_apply(env[0], ahc_mk_int(si)), w));
-  for (i = 0; i < sc->n; i++) {  /* sc->n can grow while we join */
-    AhcTask *k = sc->kids[i];
-    while (k->state < 2) {
-      waitlist_append(&k->join_waiters, cur_task);
-      park();
+  /* The body runs under a catch frame: an exception leaving it must
+     still join every child before it propagates (Ada's master rule
+     does not stop for an exception), and the scope's ids must be
+     retired before any handler runs. The FIRST exception wins - the
+     body's, else the earliest raising child nobody awaited; later
+     ones are lost, as in Ada. A child that DIED (fatal) still kills
+     the process at once, exactly as before. */
+  {
+    AhcCatch c;
+    AhcNode *pending = NULL;
+    c.prev = cur_task->catch_top;
+    c.eval_top = cur_task->eval_top;
+    c.err_depth = cur_task->err_depth;
+    cur_task->catch_top = &c;
+    if (setjmp(c.jb) == 0) {
+      r = ahc_eval(ahc_apply(ahc_apply(env[0], ahc_mk_int(si)), w));
+      cur_task->catch_top = c.prev;
+    } else {
+      pending = cur_task->exc;
+      cur_task->exc = NULL;
+      r = NULL;
     }
-    if (k->state == 3 && !k->awaited)
-      ahc_die(k->err_msg);
-  }
-  for (i = 0; i < sc->n; i++) {
-    AhcTask *k = sc->kids[i];
-    if (k->stack) {
-      munmap(k->stack, AHC_TASK_STACK + stack_guard_pg);
-      k->stack = NULL;
+    for (i = 0; i < sc->n; i++) {  /* sc->n can grow while we join */
+      AhcTask *k = sc->kids[i];
+      while (k->state < 2) {
+        waitlist_append(&k->join_waiters, cur_task);
+        park();
+      }
+      if (k->state == 3 && !k->awaited) {
+        if (!k->exc) ahc_die(k->err_msg);
+        if (!pending) pending = k->exc;
+      }
     }
-    task_reg[k->id] = NULL;
+    for (i = 0; i < sc->n; i++) {
+      AhcTask *k = sc->kids[i];
+      if (k->stack) {
+        munmap(k->stack, AHC_TASK_STACK + stack_guard_pg);
+        k->stack = NULL;
+      }
+      task_reg[k->id] = NULL;
+    }
+    scope_reg[si] = NULL;
+    if (pending) ahc_throw(pending);
   }
-  scope_reg[si] = NULL;
   return r;
 }
 
@@ -2654,7 +2679,10 @@ static AhcNode *io_await(AhcNode **env, AhcNode *w) {
     waitlist_append(&t->join_waiters, cur_task);
     park();
   }
-  if (t->state == 3) ahc_die(t->err_msg);
+  if (t->state == 3) {
+    if (t->exc) ahc_throw(t->exc);   /* the child's exception, as a value */
+    ahc_die(t->err_msg);             /* a fatal death: the awaiter dies too */
+  }
   return t->result;
 }
 
@@ -3584,6 +3612,11 @@ static void run_spark(AhcNode *x) {
     if (setjmp(*ahc_err_frame()) == 0) {
       v = ahc_eval(code(env));
       ahc_err_disarm();
+    } else if (cur_task->exc) {
+      /* An exception: the root re-raises the same VALUE when the
+         program demands it (mk_sparked_die generalised, M137). */
+      v = mk_rethrow(cur_task->exc);
+      cur_task->exc = NULL;
     } else {
       v = mk_sparked_die(cur_task->err_msg);
     }

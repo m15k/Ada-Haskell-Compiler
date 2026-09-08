@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fail=0
 for hs in tests/exec/par_fib.hs tests/exec/par_shared.hs \
-          tests/exec/par_error.hs; do
+          tests/exec/par_error.hs tests/exec/exc_par.hs; do
   base=$(basename "$hs" .hs)
   ./bin/ahc emit "$hs" "$tmp/$base" >/dev/null || { echo "EMIT-FAIL $hs"; fail=1; continue; }
   clang -O1 -g -fsanitize=thread -DAHC_GC_OWN \

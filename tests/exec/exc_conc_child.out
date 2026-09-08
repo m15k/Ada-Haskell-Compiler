@@ -1,0 +1,8 @@
+child A speaks
+await caught: A exploded
+child B speaks
+body done
+child C finishes
+scope caught: B exploded
+("openFile",Just "/nonexistent/q")
+done
