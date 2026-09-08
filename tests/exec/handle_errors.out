@@ -1,2 +1,2 @@
 start
-ahc: hGetLine: handle is closed
+ahc: /tmp/ahc_handle_err_test.txt: hGetLine: illegal operation (handle is closed)

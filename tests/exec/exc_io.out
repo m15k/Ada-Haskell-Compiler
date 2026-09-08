@@ -1,0 +1,10 @@
+(1,"openFile","No such file or directory",Just "/nonexistent/zz.txt")
+one
+(4,"hGetLine","",Just "/tmp/ahc_exc_io_test.txt")
+(5,"hPutStr","handle is not open for writing",Just "/tmp/ahc_exc_io_test.txt")
+(5,"hGetLine","handle is closed",Just "/tmp/ahc_exc_io_test.txt")
+(1,"openFile","No such file or directory",Just "/nonexistent/dir/f")
+(8,"openFile","is a directory",Just "/tmp")
+(5,"hGetLine","handle is not open for reading",Just "/tmp/ahc_exc_io_test.txt")
+(4,"hGetLine","",Just "<stdin>")
+done

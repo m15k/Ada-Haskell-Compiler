@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <math.h>
 #include <limits.h>
 #include <string.h>
@@ -467,6 +468,13 @@ static AhcNode *mk_ioerror(int type, const char *loc, const char *desc,
 static AhcNode *exc_io(AhcNode *ioe);
 static void exc_throw_io(int type, const char *loc, const char *desc,
                          const char *file) __attribute__((noreturn));
+static void exc_throw_ioe(AhcNode *ioe) __attribute__((noreturn));
+#define ARITH_DIVIDE_BY_ZERO 3       /* Control.Exception's index */
+static void throw_div_zero(void) __attribute__((noreturn));
+static void throw_div_zero(void) {
+  fflush(stdout);
+  ahc_throw(exc_arith(ARITH_DIVIDE_BY_ZERO));
+}
 
 #ifdef AHC_GC_OWN
 /* ----- the own allocator, stage C1 (leak mode) -------------------
@@ -1438,7 +1446,7 @@ static void big_quotrem(AhcNode *a, AhcNode *b,
   BigView A = big_view(a, t1), B = big_view(b, t2);
   limb *q, *r;
   int nq, nr;
-  if (B.sign == 0) ahc_die("divide by zero");
+  if (B.sign == 0) throw_div_zero();
   if (A.sign == 0) { *q_node = ahc_mk_int(0); *r_node = ahc_mk_int(0); return; }
   mag_divmod(A.d, A.n, B.d, B.n, &q, &nq, &r, &nr);
   *q_node = mk_big(A.sign * B.sign, q, nq);
@@ -1826,7 +1834,7 @@ static AhcNode *p_div(AhcNode *a, AhcNode *b) {
   AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
   if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
     long x = ea->u.i, y = eb->u.i;
-    if (y == 0) ahc_die("divide by zero");
+    if (y == 0) throw_div_zero();
     if (!(x == LONG_MIN && y == -1))
       return ahc_mk_int((x % y != 0 && ((x < 0) != (y < 0)))
                           ? x / y - 1 : x / y);
@@ -1842,7 +1850,7 @@ static AhcNode *p_mod(AhcNode *a, AhcNode *b) {
   AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
   if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
     long x = ea->u.i, y = eb->u.i;
-    if (y == 0) ahc_die("divide by zero");
+    if (y == 0) throw_div_zero();
     if (!(x == LONG_MIN && y == -1)) {
       /* Floor-adjust ONLY when the signs differ. The textbook
          ((x%y)+y)%y overflows when x%y and y are both large and
@@ -1866,7 +1874,7 @@ static AhcNode *p_quot(AhcNode *a, AhcNode *b) {
   AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
   if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
     long x = ea->u.i, y = eb->u.i;
-    if (y == 0) ahc_die("divide by zero");
+    if (y == 0) throw_div_zero();
     if (!(x == LONG_MIN && y == -1)) return ahc_mk_int(x / y);
   }
   {
@@ -1880,7 +1888,7 @@ static AhcNode *p_rem(AhcNode *a, AhcNode *b) {
   AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
   if (ea->tag == AHC_INT && eb->tag == AHC_INT) {
     long x = ea->u.i, y = eb->u.i;
-    if (y == 0) ahc_die("divide by zero");
+    if (y == 0) throw_div_zero();
     if (!(x == LONG_MIN && y == -1)) return ahc_mk_int(x % y);
   }
   {
@@ -1935,7 +1943,13 @@ static AhcNode *p_from_integer(AhcNode *a) { return a; }
 static AhcNode *p_ord(AhcNode *a) { return ahc_mk_int(ahc_eval(a)->u.c); }
 static AhcNode *p_chr(AhcNode *a) {
   long v = ahc_eval(a)->u.i;
-  if (v < 0 || v > 0x10FFFF) ahc_die("Prelude.chr: bad argument");
+  if (v < 0 || v > 0x10FFFF) {
+    char eb[64];
+    snprintf(eb, sizeof eb, v < 0 ? "Prelude.chr: bad argument: (%ld)"
+                                  : "Prelude.chr: bad argument: %ld", v);
+    fflush(stdout);
+    ahc_throw(exc_error_call(ahc_mk_string(eb)));
+  }
   return ahc_mk_char(v);
 }
 
@@ -2776,8 +2790,6 @@ static AhcNode *mk_just(AhcNode *v) {
 #define EXC_IO         3   /* [ioe :: IOException]                    */
 #define EXC_EXIT       4   /* [code :: Int] - 0 = ExitSuccess          */
 
-#define ARITH_DIVIDE_BY_ZERO 3       /* Control.Exception's order */
-
 /* IOException: AHC_CON tag 1, [type :: Int, location :: String,
    description :: String, filename :: Maybe String]. The type index
    is System.IO.Error's IOErrorType declaration order. */
@@ -2867,6 +2879,11 @@ static void exc_throw_io(int type, const char *loc, const char *desc,
                          const char *file) {
   fflush(stdout);   /* produced output precedes the raise, as for die */
   ahc_throw(exc_io(mk_ioerror(type, loc, desc, file)));
+}
+
+static void exc_throw_ioe(AhcNode *ioe) {
+  fflush(stdout);
+  ahc_throw(exc_io(ioe));
 }
 
 /* Bounded rendering helpers: a C string, then a Haskell String
@@ -4777,10 +4794,38 @@ static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
   return ahc_mk_fun(io_peek_cstring_len, e);
 }
 
+/* fopen that raises GHC's IOError on failure: the type from errno,
+   libc's text as the description, the path as the filename, and the
+   location the caller names (GHC says "openFile" for reads and
+   "withFile" for writeFile/appendFile - the probe in the design
+   note). Opening a DIRECTORY for reading succeeds at the libc level
+   on macOS, so it is checked explicitly, with GHC's lowercase "is a
+   directory". */
+static FILE *open_or_throw(const char *path, const char *mode,
+                           const char *loc) {
+  FILE *f = fopen(path, mode);
+  struct stat st;
+  int e;
+  if (f && mode[0] == 'r' && fstat(fileno(f), &st) == 0
+      && S_ISDIR(st.st_mode)) {
+    AhcNode *ioe;
+    fclose(f);
+    ioe = mk_ioerror(IOE_INAPPROPRIATE_TYPE, loc, "is a directory", path);
+    exc_throw_ioe(ioe);
+  }
+  if (f) return f;
+  e = errno;
+  {
+    AhcNode *ioe = mk_ioerror(ioe_type_of_errno(e), loc, strerror(e), path);
+    exc_throw_ioe(ioe);
+  }
+}
+
 /* ----- Data.Text IO + C-string bridges --------------------------- */
 
 static const uint8_t *text_bytes(AhcNode *w);  /* fwd: pure prims */
 static FILE *ahc_handle(long i, const char *what);  /* fwd: registry */
+static FILE *ahc_handle_rw(long i, const char *what, int want_write);
 
 /* Bytes from outside the runtime enter through one normalizer:
    decode + re-encode, so the valid-UTF-8 payload invariant holds
@@ -4814,7 +4859,7 @@ static AhcNode *p_text_put(AhcNode *t) {
 }
 
 static AhcNode *io_text_hput(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hPutText");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hPutText", 1);
   AhcNode *t = ahc_eval(env[1]);
   (void)w;
   if (t->u.bytes.len > 0)
@@ -4828,7 +4873,7 @@ static AhcNode *p_text_hput(AhcNode *h, AhcNode *t) {
 }
 
 static AhcNode *io_text_hgetcontents(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetContentsText");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hGetContentsText", 0);
   StrBuf cb = {0, 0, 0};
   int ch;
   AhcNode *r;
@@ -4853,13 +4898,7 @@ static AhcNode *io_text_readfile(AhcNode **env, AhcNode *w) {
   (void)w;
   sb_hs(&pb, env[0]);
   sb_ch(&pb, 0);
-  f = fopen(pb.p, "r");
-  if (!f) {
-    char eb[512];
-    fflush(stdout);
-    snprintf(eb, sizeof eb, "%s: openFile: does not exist", pb.p);
-    ahc_die(eb);
-  }
+  f = open_or_throw(pb.p, "r", "openFile");
   free(pb.p);
   while ((ch = fgetc(f)) != EOF) sb_ch(&cb, (char)ch);
   fclose(f);
@@ -4880,13 +4919,7 @@ static AhcNode *io_text_writefile(AhcNode **env, AhcNode *w) {
   (void)w;
   sb_hs(&pb, env[0]);
   sb_ch(&pb, 0);
-  f = fopen(pb.p, "w");
-  if (!f) {
-    char eb[512];
-    fflush(stdout);
-    snprintf(eb, sizeof eb, "%s: openFile: cannot open", pb.p);
-    ahc_die(eb);
-  }
+  f = open_or_throw(pb.p, "w", "withFile");
   free(pb.p);
   t = ahc_eval(env[1]);
   if (t->u.bytes.len > 0)
@@ -5045,7 +5078,7 @@ static AhcNode *io_getline(AhcNode **env, AhcNode *w) {
     buf[len++] = (char)ch;
   }
   if (ch == EOF && len == 0)
-    ahc_die("Prelude.getLine: end of file");
+    exc_throw_io(IOE_EOF, "hGetLine", "", "<stdin>");
   if (buf) buf[len] = 0;
   r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
@@ -5092,13 +5125,7 @@ static AhcNode *io_readfile(AhcNode **env, AhcNode *w) {
   (void)w;
   sb_hs(&pb, env[0]);
   sb_ch(&pb, 0);
-  f = fopen(pb.p, "r");
-  if (!f) {
-    char eb[512];
-    fflush(stdout);
-    snprintf(eb, sizeof eb, "%s: openFile: does not exist", pb.p);
-    ahc_die(eb);
-  }
+  f = open_or_throw(pb.p, "r", "openFile");
   free(pb.p);
   while ((ch = fgetc(f)) != EOF) {
     if (len + 2 > cap) {
@@ -5141,15 +5168,38 @@ static AhcNode *p_peek_cstring(AhcNode *p) {
    freed memory. Slots 0..2 are the std streams. ---------------- */
 #define AHC_MAX_HANDLES 256
 static FILE *ahc_handles[AHC_MAX_HANDLES];
+/* The path each slot was opened on (GHC prints it in every IOError
+   about the handle - "<stdin>" and friends for 0..2), kept after
+   close so "handle is closed" can still name the file; freed when
+   the slot is reused. Mode as the IOMode index: 0 r, 1 w, 2 a, 3 rw. */
+static char *ahc_handle_names[AHC_MAX_HANDLES];
+static signed char ahc_handle_modes[AHC_MAX_HANDLES];
+
+static const char *handle_name(long i) {
+  if (i == 0) return "<stdin>";
+  if (i == 1) return "<stdout>";
+  if (i == 2) return "<stderr>";
+  return (i > 2 && i < AHC_MAX_HANDLES) ? ahc_handle_names[i] : NULL;
+}
 
 static FILE *ahc_handle(long i, const char *what) {
   FILE *f = (i >= 0 && i < AHC_MAX_HANDLES) ? ahc_handles[i] : NULL;
-  if (!f) {
-    char eb[512];
-    fflush(stdout);
-    snprintf(eb, sizeof eb, "%s: handle is closed", what);
-    ahc_die(eb);
-  }
+  if (!f)
+    exc_throw_io(IOE_ILLEGAL_OPERATION, what, "handle is closed",
+                 handle_name(i));
+  return f;
+}
+
+/* The same, checking the direction: GHC's "handle is not open for
+   reading/writing". */
+static FILE *ahc_handle_rw(long i, const char *what, int want_write) {
+  FILE *f = ahc_handle(i, what);
+  int m = i == 0 ? 0 : (i == 1 || i == 2) ? 1 : ahc_handle_modes[i];
+  if (want_write ? m == 0 : (m == 1 || m == 2))
+    exc_throw_io(IOE_ILLEGAL_OPERATION, what,
+                 want_write ? "handle is not open for writing"
+                            : "handle is not open for reading",
+                 handle_name(i));
   return f;
 }
 
@@ -5163,18 +5213,19 @@ static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
   sb_hs(&pb, env[0]);
   sb_ch(&pb, 0);
   if (m < 0 || m > 3) ahc_die("openFile: bad IOMode");
-  f = fopen(pb.p, modes[m]);
-  if (!f) {
-    char eb[512];
-    fflush(stdout);
-    snprintf(eb, sizeof eb, "%s: openFile: %s", pb.p,
-             m == 0 ? "does not exist" : "cannot open");
-    ahc_die(eb);
-  }
-  free(pb.p);
+  f = open_or_throw(pb.p, modes[m], "openFile");
   for (i = 3; i < AHC_MAX_HANDLES && ahc_handles[i]; i++)
     ;
-  if (i >= AHC_MAX_HANDLES) ahc_die("openFile: too many open handles");
+  if (i >= AHC_MAX_HANDLES) {
+    AhcNode *ioe = mk_ioerror(IOE_RESOURCE_EXHAUSTED, "openFile",
+                              "too many open handles", pb.p);
+    fclose(f);
+    free(pb.p);
+    exc_throw_ioe(ioe);
+  }
+  free(ahc_handle_names[i]);
+  ahc_handle_names[i] = pb.p;      /* the registry owns the path now */
+  ahc_handle_modes[i] = (signed char)m;
   ahc_handles[i] = f;
   return ahc_mk_int(i);
 }
@@ -5186,8 +5237,12 @@ static AhcNode *p_h_open(AhcNode *path, AhcNode *mode) {
 
 static AhcNode *io_h_close(AhcNode **env, AhcNode *w) {
   long i = ahc_eval(env[0])->u.i;
-  FILE *f = ahc_handle(i, "hClose");
+  FILE *f;
   (void)w;
+  /* Closing a closed handle is a no-op, as in GHC. */
+  if (i > 2 && i < AHC_MAX_HANDLES && !ahc_handles[i])
+    return ahc_mk_con(UNIT_TAG, 0);
+  f = ahc_handle(i, "hClose");
   if (i > 2) {
     fclose(f);
     ahc_handles[i] = NULL;
@@ -5203,7 +5258,7 @@ static AhcNode *p_h_close(AhcNode *h) {
 }
 
 static AhcNode *io_h_put_str(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hPutStr");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hPutStr", 1);
   (void)w;
   put_list(env[1], f);
   return ahc_mk_con(UNIT_TAG, 0);
@@ -5215,7 +5270,7 @@ static AhcNode *p_h_put_str(AhcNode *h, AhcNode *s) {
 }
 
 static AhcNode *io_h_get_line(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetLine");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hGetLine", 0);
   char *buf = NULL;
   size_t cap = 0, len = 0;
   int ch;
@@ -5230,7 +5285,7 @@ static AhcNode *io_h_get_line(AhcNode **env, AhcNode *w) {
     buf[len++] = (char)ch;
   }
   if (ch == EOF && len == 0)
-    ahc_die("hGetLine: end of file");
+    exc_throw_io(IOE_EOF, "hGetLine", "", handle_name(ahc_eval(env[0])->u.i));
   if (buf) buf[len] = 0;
   r = ahc_mk_string_len(buf ? buf : "", len);
   free(buf);
@@ -5243,12 +5298,13 @@ static AhcNode *p_h_get_line(AhcNode *h) {
 }
 
 static AhcNode *io_h_get_char(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetChar");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hGetChar", 0);
   unsigned char seq[4];
   size_t have = 1, want, i = 0;
   int ch = fgetc(f);
   (void)w;
-  if (ch == EOF) ahc_die("hGetChar: end of file");
+  if (ch == EOF)
+    exc_throw_io(IOE_EOF, "hGetChar", "", handle_name(ahc_eval(env[0])->u.i));
   seq[0] = (unsigned char)ch;
   want = seq[0] < 0xC2 ? 1        /* ASCII, or invalid lead alone */
        : seq[0] < 0xE0 ? 2
@@ -5269,7 +5325,7 @@ static AhcNode *p_h_get_char(AhcNode *h) {
 }
 
 static AhcNode *io_h_get_contents(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hGetContents");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hGetContents", 0);
   char *buf = NULL;
   size_t cap = 0, len = 0;
   int ch;
@@ -5295,7 +5351,7 @@ static AhcNode *p_h_get_contents(AhcNode *h) {
 }
 
 static AhcNode *io_h_is_eof(AhcNode **env, AhcNode *w) {
-  FILE *f = ahc_handle(ahc_eval(env[0])->u.i, "hIsEOF");
+  FILE *f = ahc_handle_rw(ahc_eval(env[0])->u.i, "hIsEOF", 0);
   int ch = fgetc(f);
   (void)w;
   if (ch == EOF)
@@ -5342,10 +5398,12 @@ static AhcNode *io_getprogname(AhcNode **env, AhcNode *w) {
   return ahc_mk_string(base);
 }
 
+/* exitWith raises ExitCode (GHC: it is an exception); uncaught, the
+   top level exits with the code and prints nothing. */
 static AhcNode *io_exit_with(AhcNode **env, AhcNode *w) {
   (void)w;
   fflush(stdout);
-  exit((int)ahc_eval(env[0])->u.i);
+  ahc_throw(exc_exit(ahc_eval(env[0])->u.i));
 }
 
 static AhcNode *p_exit_with(AhcNode *code) {
