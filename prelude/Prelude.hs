@@ -605,3 +605,47 @@ instance Semigroup () where
 
 instance Monoid () where
   mempty = ()
+
+-- Exceptions (Report 9; docs/exceptions-design-note.md) ------------
+-- IOError is ABSTRACT: the value lives in the runtime (a wired
+-- opaque type, like Text), System.IO.Error is the API, and this
+-- Show text is exactly what the runtime prints for an uncaught one.
+
+type IOError = IOException
+
+ioError :: IOError -> IO a
+ioError e = primThrowIO (primExcFromIO e)
+
+userError :: String -> IOError
+userError s = primMkIOError 7 "" s Nothing
+
+instance Show IOException where
+  showsPrec _ e =
+      showFile . showLoc . showString (typeName (primIoeType e)) . showDesc
+    where
+      loc = primIoeLocation e
+      desc = primIoeDescription e
+      showFile = case primIoeFilename e of
+        Just f -> showString f . showString ": "
+        Nothing -> id
+      showLoc = if null loc then id else showString loc . showString ": "
+      showDesc = if null desc then id
+                 else showString " (" . showString desc . showString ")"
+      -- the runtime's IOErrorType table, in declaration order
+      typeName t = case t of
+        0 -> "already exists"
+        1 -> "does not exist"
+        2 -> "resource busy"
+        3 -> "resource exhausted"
+        4 -> "end of file"
+        5 -> "illegal operation"
+        6 -> "permission denied"
+        7 -> "user error"
+        8 -> "inappropriate type"
+        _ -> "failed"
+
+instance Eq IOException where
+  a == b = primIoeType a == primIoeType b
+        && primIoeLocation a == primIoeLocation b
+        && primIoeDescription a == primIoeDescription b
+        && primIoeFilename a == primIoeFilename b

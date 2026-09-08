@@ -1,0 +1,59 @@
+/nonexistent/ahc/zz.txt: openFile: does not exist (No such file or directory)
+does not exist
+does not exist
+("openFile",Just "/nonexistent/ahc/zz.txt")
+[False,True,False,False,False,False,False,False]
+/nonexistent/ahc/dir/out.txt: withFile: does not exist (No such file or directory)
+does not exist
+does not exist
+("withFile",Just "/nonexistent/ahc/dir/out.txt")
+[False,True,False,False,False,False,False,False]
+/tmp: openFile: inappropriate type (is a directory)
+inappropriate type
+inappropriate type
+("openFile",Just "/tmp")
+[False,False,False,False,False,False,False,False]
+only line
+/tmp/ahc_conf_ioerror.txt: hGetLine: end of file
+end of file
+end of file
+("hGetLine",Just "/tmp/ahc_conf_ioerror.txt")
+[False,False,False,False,True,False,False,False]
+/tmp/ahc_conf_ioerror.txt: hPutStr: illegal operation (handle is not open for writing)
+illegal operation
+illegal operation
+("hPutStr",Just "/tmp/ahc_conf_ioerror.txt")
+[False,False,False,False,False,True,False,False]
+/tmp/ahc_conf_ioerror.txt: hGetLine: illegal operation (handle is closed)
+illegal operation
+illegal operation
+("hGetLine",Just "/tmp/ahc_conf_ioerror.txt")
+[False,False,False,False,False,True,False,False]
+/tmp/ahc_conf_ioerror.txt: hGetLine: illegal operation (handle is not open for reading)
+illegal operation
+illegal operation
+("hGetLine",Just "/tmp/ahc_conf_ioerror.txt")
+[False,False,False,False,False,True,False,False]
+user error (plain user error)
+user error
+plain user error
+("",Nothing)
+[False,False,False,False,False,False,False,True]
+user error
+user error
+
+("",Nothing)
+[False,False,False,False,False,False,False,True]
+f.txt: myLocation: does not exist
+f.txt: myLocation: does not exist (custom string)
+f.txt: elsewhere: does not exist
+g.txt: myLocation: does not exist
+f.txt: myLocation: end of file
+fn: loc2: user error (base)
+ignored: loc3: does not exist
+u: user error
+[already exists,does not exist,resource busy,resource exhausted,end of file,illegal operation,permission denied,user error]
+[True,True,True,True,True,True,True,True,False]
+(True,False)
+modified: user error (m)
+user error (rethrown)

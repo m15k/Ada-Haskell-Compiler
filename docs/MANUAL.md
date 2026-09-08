@@ -1424,6 +1424,98 @@ disables) and the program dies with a diagnostic naming the task
 that stopped making progress. That is M102's rule, a deadlock is
 an OUTCOME and not a hang, finally reaching the parallel path.
 
+### Exceptions: frames, throws, and rethrow thunks
+
+*The design brief is `docs/exceptions-design-note.md`; the library
+surface (`ioError`, `System.IO.Error`, `Control.Exception`) is in
+chapter 18. This section is the machinery.*
+
+Until v1.11 the runtime could not recover from anything: every
+failure path ended in `ahc_die`, which prints and exits. Three
+pieces of unwinding machinery existed already — the per-task
+boundary frame every green task starts under (`task_trampoline`),
+the same frame armed around every exported entry in library mode,
+and the spark path's re-raising root thunk — and the exception
+system is mostly a matter of unifying them.
+
+**Two frame kinds, one chain per task.** A *boundary* frame is what
+`ahc_err_frame` always returned: a slot in the task's fixed
+`err_stack`, armed by task start, spark evaluation, and FFI
+entries. A *catch* frame (`AhcCatch`) is new: a `setjmp` target
+stack-allocated inside `primCatch`'s action and chained from
+`cur_task->catch_top`, so nesting is unbounded. Each catch frame
+records the boundary depth at its push; `ahc_throw` hands the
+exception to the innermost catch frame if one was pushed *after*
+the newest boundary, otherwise to the boundary. A fatal death
+(`ahc_die`) is different on purpose: it unwinds only to a boundary,
+skipping every catch frame — `catch` can never observe a refinement
+or contract violation, a deadlock report, an out-of-memory — and the
+boundary restores the catch and eval tops it recorded when it was
+armed, so the state after landing is consistent.
+
+**The exception value** is an ordinary constructor node whose tag is
+its *kind* — ErrorCall, ArithException, IOException, ExitCode — and
+whose fields the library reads through the `primExc*`/`primIoe*`
+primitives. `SomeException` and `IOException` are wired opaque types
+like `Text`: no Haskell constructor ever spells the shape, so the
+Prelude (which has no export list) stays free of names like `EOF`,
+and the runtime can build an `IOException` at a `fopen` failure
+without knowing any library. One C renderer (`exc_render`) produces
+the text an uncaught exception prints after `ahc: `, what
+`ahc_last_error` carries in library mode, and what the Prelude's
+`Show IOException` instance reproduces; `ErrorCall` renders as the
+historical `error: MSG`, so every golden on that path is unchanged.
+
+**The eval stack and the rethrow rule.** A `longjmp` over `ahc_eval`
+frames abandons thunks that were claimed and blackholed on the way
+down. GHC's rule is that such a thunk re-raises the same exception
+when next forced; without it, `let x = error "e" in catch (evaluate
+x) h >> evaluate x` would report `<<loop>>` on the second force, and
+a green task parked on the blackhole would never wake. So
+`ahc_eval` keeps a per-task intrusive stack of the thunks it is
+evaluating — an `AhcEvalFrame` on the C stack per claimed thunk,
+two stores to push and one to pop — and `ahc_throw` walks it down
+to the target frame's saved top, updating each node to an
+indirection to a *rethrow thunk* (`mk_rethrow`: code that calls
+`ahc_throw` on the same value) and waking its waiters with the same
+publish protocol the normal update uses. Boundary frames get the
+same fix-up, which closed a latent gap: a spark that died used to
+leave its *inner* blackholes owned by a worker forever.
+
+**What raises.** `error`, `undefined`, pattern-match failure, and
+`Prelude.chr`'s bad argument raise `ErrorCall`; division by zero at
+Int (all four operators) and Integer raises `ArithException`;
+`exitWith` raises `ExitCode` (an uncaught one still exits with its
+code, silently, as GHC's top-level handler does); every file and
+handle failure raises an `IOException` shaped like GHC's — the type
+from `errno`, libc's text as the description, the path as the
+filename, the operation as the location. The handle registry
+remembers each handle's path and mode for that, so a closed handle
+still names its file and a write on a read handle is `illegal
+operation (handle is not open for writing)`. Opening a directory for
+reading, which libc allows on macOS, is caught with `fstat`.
+Refinement and contract violations, `<<loop>>`, deadlock, the spin
+watchdog, and the runtime's own invariants stay fatal.
+
+**Across tasks.** A task that raises goes to state 3 carrying the
+value (`AhcTask.exc`), not only the rendered text; `await` and the
+scope's join re-*throw* that value in the parent, so a `catch`
+around a `scope` sees a child's `IOError`. A scope body that raises
+runs under a catch frame of its own: the exception waits for every
+child to be joined (Ada's master rule does not stop for an
+exception), the scope's ids are retired, and only then does it
+propagate — the first exception wins, a child raising during that
+join is lost, as in Ada. A raise inside a spark updates the spark
+root to a rethrow of the value, which surfaces on whichever task
+demands it. A task that *dies* keeps the old text path: the parent
+dies too. Nothing is asynchronous: no `throwTo`, no `timeout`, no
+`mask`.
+
+**One correction that came with it.** `>>` used to force the result
+of its first action; `catch` must not (GHC's does not), and once
+that was written down the `thenIO` forcing was plainly wrong too —
+`return undefined >> act` runs `act` in GHC. Neither forces now.
+
 ### The own collector
 
 So AHC grew its own — `AHC_GC=own` selects it, `boehm` remains the
@@ -2221,7 +2313,22 @@ an abstract source type over an index into a runtime registry of
 `FILE` pointers — never a raw pointer, so a closed handle fails
 cleanly — with `openFile`/`hClose` and the `h*` family as eight
 integer-only prims, and `withFile`, `writeFile`, `appendFile`,
-`hPrint` as ordinary Haskell on top); `Data.Map` is a weight-balanced search tree
+`hPrint` as ordinary Haskell on top — and, since v1.11, `withFile` is
+`bracket`-based, closing the handle when the body raises and
+relabelling an escaping `IOError` at `withFile`, as GHC does);
+`System.IO.Error` and `Control.Exception` (v1.11, M138) are the
+library face of chapter 11's exception machinery: an `IOError` is
+the runtime's opaque value read through `primIoe*` accessors and
+rebuilt whole by the `ioeSet*` functions, `IOErrorType` is a
+newtype over the runtime's table index (so the constructor
+namespace, which is program-global in AHC, never sees `EOF` or
+`UserError`), and `Control.Exception`'s `Exception` class
+dispatches on the runtime's exception KIND — `catch` is
+`primCatch` plus `fromException`, and `bracket`/`finally` are
+`onException` plus a rethrow, all ordinary Haskell; the Prelude's
+`Show IOException` instance reproduces the runtime's uncaught text
+exactly, so `show` matches GHC byte for byte (lib_system_io_error,
+lib_control_exception); `Data.Map` is a weight-balanced search tree
 (Adams' algorithm, the same family as GHC's containers) whose
 observable behavior - toList order, Show format, union bias - is
 oracled against the real containers library, written because the

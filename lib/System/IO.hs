@@ -10,6 +10,8 @@ module System.IO
   , hPutText, hGetContentsText
   ) where
 
+import Control.Exception (bracket)
+
 -- Handle is ABSTRACT: the constructor stays private, so the only
 -- handles in circulation come from openFile and the std streams.
 -- Underneath it is an index into the runtime's handle registry -
@@ -40,12 +42,24 @@ openFile path mode =
 hClose :: Handle -> IO ()
 hClose (MkHandle i) = primHClose i
 
+-- GHC's withFile: the handle is closed when the body raises, and
+-- any IOError escaping - from the open or from the body - is
+-- reported at "withFile" with the file's name (readFile's own stays
+-- at "openFile": the probe in docs/exceptions-design-note.md). The
+-- relabel goes through the primitives directly: System.IO.Error
+-- imports THIS module for Handle, so it cannot be imported here.
 withFile :: String -> IOMode -> (Handle -> IO a) -> IO a
 withFile path mode act =
-  openFile path mode >>= \h ->
-  act h >>= \r ->
-  hClose h >>
-  return r
+  primCatch (bracket (openFile path mode) hClose act) (\se ->
+    if primExcKind se == 3
+      then let e = primExcIO se
+               file = case primIoeFilename e of
+                        Just f -> Just f
+                        Nothing -> Just path
+           in primThrowIO (primExcFromIO
+                (primMkIOError (primIoeType e) "withFile"
+                               (primIoeDescription e) file))
+      else primThrowIO se)
 
 hPutStr :: Handle -> String -> IO ()
 hPutStr (MkHandle i) s = primHPutStr i s

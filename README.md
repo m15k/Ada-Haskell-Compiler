@@ -119,7 +119,7 @@ blocks a repo.
 AHC is a complete, verified implementation of **Haskell 2010** — not a
 GHC replacement. Read that as a promise and a limit:
 
-- **The promise.** 74 conformance programs are byte-identical to GHC
+- **The promise.** 88 conformance programs are byte-identical to GHC
   9.4.8's output, and a differential fuzzer keeps checking randomly
   generated programs against it. Everything the Report requires and
   AHC does not implement is written down in
@@ -134,9 +134,9 @@ GHC replacement. Read that as a promise and a limit:
   concurrency) are AHC-only by construction; ordinary Haskell 2010
   stays portable to GHC, which is exactly how the test suite proves
   itself.
-- **Platforms.** Developed and tested on macOS (x86-64). The Linux
-  code paths exist but have not been exercised; Windows is not
-  supported.
+- **Platforms.** Developed on macOS (x86-64 and Apple silicon);
+  Linux x86-64 runs the full suite in CI and ships a release
+  tarball. Windows is not supported.
 
 ## Working on AHC itself
 
@@ -388,7 +388,11 @@ Control.Monad and Data.Functor (Monad-polymorphic over IO, [] and
 Maybe — the Maybe Monad and all three Functor dictionaries are real),
 System.IO (file handles: openFile/hClose/hPutStr/hGetLine and
 friends) / System.Environment / System.Exit (getLine, getContents,
-readFile, interact, getArgs, exit codes), Numeric (showHex and
+readFile, interact, getArgs, exit codes), System.IO.Error and
+Control.Exception (catchable `IOError`s shaped exactly like GHC's,
+`ErrorCall`/`ArithException`/`ExitCode`, `catch`/`try`/`evaluate`/
+`bracket`/`finally` over a closed `SomeException` — see
+docs/exceptions-design-note.md), Numeric (showHex and
 friends), Data.Bits at Int, Data.Ix as an ordinary source class,
 Data.Map and Data.Set (a weight-balanced search tree matching the
 containers library's observable behavior exactly — toList order, Show
@@ -567,6 +571,14 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.11** — the exceptions release (M136–M138): the runtime can
+  recover from an error for the first time — per-task catch frames
+  beside the boundary frames, `ahc_throw` turning every abandoned
+  thunk into a rethrow, and exceptions crossing task, scope, and
+  spark boundaries as values; `ioError`/`userError` in the Prelude,
+  `System.IO.Error` complete, a closed `Control.Exception`; plus two
+  Report fixes it flushed out (a `case` on a class method's result,
+  and `fail`-free binds for unfailable patterns).
 - **v1.10** — the packages release (M134–M135): dependency
   management in the shape a whole-program compiler wants —
   dependencies are source, a package is a module tree, no solver.

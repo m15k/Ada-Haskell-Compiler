@@ -1,0 +1,37 @@
+ErrorCall: boom
+Prelude.head: empty list
+Left divide by zero
+Left divide by zero
+some: divide by zero
+Left arithmetic overflow
+[arithmetic overflow,arithmetic underflow,loss of precision,divide by zero,denormal,Ratio has zero denominator]
+/nonexistent/ahc/zz.txt: openFile: does not exist (No such file or directory)
+handle: user error (h)
+io: user error (typed)
+inner handler: user error (inner)
+outer handler: user error (inner)
+Left thrown
+(True,True)
+acquire
+use 7
+release
+Left user error (in use)
+released
+xx
+body
+caught user error (fin)
+finally ran
+before
+between
+after
+line
+/tmp/ahc_conf_exception.txt: withFile: end of file
+Left (ExitFailure 3)
+some exit: ExitFailure 4
+Left ExitSuccess
+escaped catch, caught later
+user error (shown)
+divide by zero
+divide by zero
+Just user error (back)
+Nothing
