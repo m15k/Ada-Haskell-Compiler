@@ -1,0 +1,13 @@
+caught kind 1: boom
+inner: inner
+outer: inner
+arith code 3
+escaped, then caught: lazy
+first: shared
+second: shared
+deep 1: deep
+deep 2: deep
+42
+(7,"","custom failure",Nothing)
+partial then handled
+done

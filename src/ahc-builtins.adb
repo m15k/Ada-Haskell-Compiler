@@ -252,6 +252,11 @@ package body AHC.Builtins is
       --  like Int, so the NAME needs no import; the API lives in
       --  lib/Data/Text.hs.
       Env.Text_TC     := TyCon_Id (Def_TyCon ("Text", 0, Star_K));
+      --  Exceptions (docs/exceptions-design-note.md): opaque like Text.
+      --  The runtime owns both representations; prelude/ and lib/
+      --  reach them through the prim* accessors declared below.
+      Env.Exc_TC      := TyCon_Id (Def_TyCon ("SomeException", 0, Star_K));
+      Env.IOExc_TC    := TyCon_Id (Def_TyCon ("IOException", 0, Star_K));
 
       --  Fixed-width C types: distinct tycons whose runtime nodes
       --  are plain AHC_INT - only the FFI boundary knows the width.
@@ -1195,6 +1200,47 @@ package body AHC.Builtins is
                  ("exitWithCode",
                   Poly1 (A2, FN (TC (Env.Int_TC),
                                  IO_T (TV (A2)))));
+               --  Exceptions (M137). primCatch's handler argument is
+               --  a free `e`: the library pins it to SomeException,
+               --  the runtime never looks at the type.
+               declare
+                  E       : constant Real_TyVar_Id := New_Tv ("e");
+                  Exc_T   : constant Real_Type_Id := TC (Env.Exc_TC);
+                  IOExc_T : constant Real_Type_Id := TC (Env.IOExc_TC);
+                  Str     : constant Real_Type_Id := LST (TC (Env.Char_TC));
+                  MStr    : constant Real_Type_Id :=
+                    AP (TC (Env.Maybe_TC), Str);
+                  Int_T   : constant Real_Type_Id := TC (Env.Int_TC);
+               begin
+                  Ignore := Def_Global
+                    ("primCatch",
+                     Poly2 (A2, E, FN (IO_T (TV (A2)),
+                                       FN (TV (E), IO_T (TV (A2))),
+                                       IO_T (TV (A2)))));
+                  Ignore := Def_Global
+                    ("primThrowIO", Poly2 (A2, E, FN (TV (E), IO_T (TV (A2)))));
+                  Ignore := Def_Global
+                    ("primThrow", Poly2 (A2, E, FN (TV (E), TV (A2))));
+                  Ignore := Def_Global
+                    ("primEvaluate", Poly1 (A2, FN (TV (A2), IO_T (TV (A2)))));
+                  Ignore := Def_Global ("primExcKind", Mono (FN (Exc_T, Int_T)));
+                  Ignore := Def_Global ("primExcMessage", Mono (FN (Exc_T, Str)));
+                  Ignore := Def_Global ("primExcCode", Mono (FN (Exc_T, Int_T)));
+                  Ignore := Def_Global ("primExcIO", Mono (FN (Exc_T, IOExc_T)));
+                  Ignore := Def_Global
+                    ("primExcErrorCall", Mono (FN (Str, Exc_T)));
+                  Ignore := Def_Global ("primExcArith", Mono (FN (Int_T, Exc_T)));
+                  Ignore := Def_Global ("primExcFromIO", Mono (FN (IOExc_T, Exc_T)));
+                  Ignore := Def_Global ("primExcExit", Mono (FN (Int_T, Exc_T)));
+                  Ignore := Def_Global
+                    ("primMkIOError",
+                     Mono (FN (Int_T, FN (Str, FN (Str, FN (MStr, IOExc_T))))));
+                  Ignore := Def_Global ("primIoeType", Mono (FN (IOExc_T, Int_T)));
+                  Ignore := Def_Global ("primIoeLocation", Mono (FN (IOExc_T, Str)));
+                  Ignore := Def_Global
+                    ("primIoeDescription", Mono (FN (IOExc_T, Str)));
+                  Ignore := Def_Global ("primIoeFilename", Mono (FN (IOExc_T, MStr)));
+               end;
                Ignore := Def_Global ("primAndI", Mono (III));
                Ignore := Def_Global ("primOrI", Mono (III));
                Ignore := Def_Global ("primXorI", Mono (III));

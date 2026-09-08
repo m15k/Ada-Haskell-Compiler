@@ -99,6 +99,10 @@ jmp_buf *ahc_err_frame(void);
 void ahc_err_disarm(void);
 const char *ahc_last_error(void);
 void ahc_die(const char *msg) __attribute__((noreturn));
+/* Raise a Haskell exception value (docs/exceptions-design-note.md):
+   unwinds to the nearest catch frame, else to the armed entry frame
+   with the rendered text in ahc_last_error(). */
+void ahc_throw(AhcNode *exc) __attribute__((noreturn));
 
 /* Wired primitives (globals initialized by ahc_rts_init). */
 extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
@@ -177,7 +181,14 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_uc_is_upper, *ahc_prim_uc_is_lower,
   *ahc_prim_uc_is_alpha, *ahc_prim_uc_is_alnum,
   *ahc_prim_uc_is_punct, *ahc_prim_uc_is_space,
-  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower;
+  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower,
+  *ahc_prim_catch, *ahc_prim_throw, *ahc_prim_throw_io,
+  *ahc_prim_evaluate,
+  *ahc_prim_exc_kind, *ahc_prim_exc_message, *ahc_prim_exc_code,
+  *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
+  *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
+  *ahc_prim_ioe_type, *ahc_prim_ioe_location,
+  *ahc_prim_ioe_description, *ahc_prim_ioe_filename;
 
 void ahc_rts_init(void);
 

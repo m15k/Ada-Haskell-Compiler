@@ -63,6 +63,25 @@ static void *own_alloc(int kind, size_t n);
 
 #define AHC_ERR_DEPTH 8
 
+/* Exceptions (docs/exceptions-design-note.md, M137). A CATCH frame is
+   a stack-allocated setjmp target chained per task - unbounded
+   nesting, unlike the fixed boundary array below. An EVAL frame
+   records a thunk this task has claimed and is evaluating, so a
+   raise can turn every thunk it abandons into a rethrow before it
+   jumps (GHC's rule: a thunk whose evaluation raised re-raises on
+   the next force). */
+typedef struct AhcEvalFrame {
+  AhcNode *node;
+  struct AhcEvalFrame *prev;
+} AhcEvalFrame;
+
+typedef struct AhcCatch {
+  jmp_buf jb;
+  struct AhcCatch *prev;
+  AhcEvalFrame *eval_top;       /* the task's eval stack at push */
+  int err_depth;                /* boundary depth at push */
+} AhcCatch;
+
 /* ----- green threads (Phase A: one OS thread) --------------------
    docs/concurrency-design-note.md. Tasks are ucontext coroutines.
    ONE task runs at a time; the scheduler is a strict FIFO run
@@ -114,6 +133,12 @@ struct AhcTask {
   jmp_buf err_stack[AHC_ERR_DEPTH];
   int err_depth;
   char err_msg[512];      /* ahc_last_error; the death message at 3 */
+  /* exceptions (M137) */
+  AhcCatch *catch_top;    /* innermost catch frame */
+  AhcEvalFrame *eval_top; /* thunks under evaluation, innermost first */
+  AhcNode *exc;           /* the in-flight exception value, or NULL */
+  AhcEvalFrame *err_eval_top[AHC_ERR_DEPTH];  /* eval_top per boundary */
+  AhcCatch *err_catch_top[AHC_ERR_DEPTH];     /* catch_top per boundary */
 };
 
 struct AhcScope {
@@ -138,10 +163,15 @@ const char *ahc_last_error(void) {
 }
 
 jmp_buf *ahc_err_frame(void) {
+  int d;
   if (cur_task->err_depth == AHC_ERR_DEPTH)
     ahc_die("FFI: entry functions nested too deeply");
   cur_task->err_msg[0] = 0;
-  return &cur_task->err_stack[cur_task->err_depth++];
+  cur_task->exc = NULL;
+  d = cur_task->err_depth++;
+  cur_task->err_eval_top[d] = cur_task->eval_top;
+  cur_task->err_catch_top[d] = cur_task->catch_top;
+  return &cur_task->err_stack[d];
 }
 
 void ahc_err_disarm(void) {
@@ -150,13 +180,21 @@ void ahc_err_disarm(void) {
 
 static void die_unwind_if_armed(const char *msg) {
   if (cur_task->err_depth > 0) {
+    int d = cur_task->err_depth - 1;
     size_t i = 0;
     while (msg[i] && i + 1 < sizeof cur_task->err_msg) {
       cur_task->err_msg[i] = msg[i];
       i++;
     }
     cur_task->err_msg[i] = 0;
-    longjmp(cur_task->err_stack[--cur_task->err_depth], 1);
+    /* A fatal death skips every catch frame - `catch` may not
+       observe one - and abandons its thunks as blackholes, exactly
+       as before: the task or entry it lands in is failing. */
+    cur_task->eval_top = cur_task->err_eval_top[d];
+    cur_task->catch_top = cur_task->err_catch_top[d];
+    cur_task->exc = NULL;
+    cur_task->err_depth = d;
+    longjmp(cur_task->err_stack[d], 1);
   }
 }
 
@@ -418,6 +456,17 @@ static void die_msg_list(const char *prefix, AhcNode *cell) {
   buf[n] = 0;
   ahc_die(buf);
 }
+
+/* Exception constructors (defined with the machinery, after the
+   scheduler); the die sites they replace come first in the file. */
+static AhcNode *exc_error_call(AhcNode *msg);
+static AhcNode *exc_arith(long code);
+static AhcNode *exc_exit(long code);
+static AhcNode *mk_ioerror(int type, const char *loc, const char *desc,
+                           const char *file);
+static AhcNode *exc_io(AhcNode *ioe);
+static void exc_throw_io(int type, const char *loc, const char *desc,
+                         const char *file) __attribute__((noreturn));
 
 #ifdef AHC_GC_OWN
 /* ----- the own allocator, stage C1 (leak mode) -------------------
@@ -919,7 +968,13 @@ AhcNode *ahc_eval(AhcNode *n) {
       n->u.bh.waiters = NULL;
       __atomic_store_n(&n->tag, AHC_BLACKHOLE, __ATOMIC_RELEASE);
       {
-        AhcNode *v = ahc_eval(code(env));
+        AhcEvalFrame ef;
+        AhcNode *v;
+        ef.node = n;
+        ef.prev = cur_task->eval_top;
+        cur_task->eval_top = &ef;
+        v = ahc_eval(code(env));
+        cur_task->eval_top = ef.prev;
         /* wake tasks parked on this thunk (FIFO), then update.
            Waiters exist only on green-owned blackholes, and green
            tasks share one OS thread - reading the list before the
@@ -2164,8 +2219,8 @@ static AhcNode *p_seq(AhcNode *a, AhcNode *b) {
 }
 
 static AhcNode *p_error(AhcNode *a) {
-  fflush(stdout);   /* output already produced must precede the die */
-  die_msg_list("error: ", a);
+  fflush(stdout);   /* output already produced must precede the raise */
+  ahc_throw(exc_error_call(a));
 }
 
 /* ----- IO: an action is a function World -> result ---------------- */
@@ -2232,10 +2287,14 @@ static AhcNode *p_bind_io(AhcNode *m, AhcNode *k) {
   return ahc_mk_fun(io_bind, e);
 }
 
-/* thenIO m k = \w -> m w `seq-ish` k w */
+/* thenIO m k = \w -> m w; k w. Applying m to the world RUNS it
+   (ahc_apply is strict application); its RESULT stays unforced, as
+   in GHC - `return undefined >> act` runs act. (Until M137 the
+   result was forced here, which no bind does and no program
+   should observe.) */
 static AhcNode *io_then(AhcNode **env, AhcNode *w) {
   maybe_yield();               /* the deterministic scheduling point */
-  ahc_eval(ahc_apply(env[0], w));
+  ahc_apply(env[0], w);
   return ahc_apply(env[1], w);
 }
 
@@ -2705,6 +2764,376 @@ static AhcNode *mk_just(AhcNode *v) {
   c->u.con.fields[0] = v;
   return c;
 }
+
+/* ----- exceptions (docs/exceptions-design-note.md, M137) ----------
+   An exception is an AHC_CON node whose tag is its KIND and whose
+   fields are the payload; the library reads it back through the
+   primitives at the end of this block (SomeException and
+   IOException are opaque wired types, so no Haskell constructor
+   ever spells these shapes - one table, here). */
+#define EXC_ERROR_CALL 1   /* [message :: String]                     */
+#define EXC_ARITH      2   /* [code :: Int] - ArithException's index  */
+#define EXC_IO         3   /* [ioe :: IOException]                    */
+#define EXC_EXIT       4   /* [code :: Int] - 0 = ExitSuccess          */
+
+#define ARITH_DIVIDE_BY_ZERO 3       /* Control.Exception's order */
+
+/* IOException: AHC_CON tag 1, [type :: Int, location :: String,
+   description :: String, filename :: Maybe String]. The type index
+   is System.IO.Error's IOErrorType declaration order. */
+#define IOE_ALREADY_EXISTS     0
+#define IOE_NO_SUCH_THING      1
+#define IOE_RESOURCE_BUSY      2
+#define IOE_RESOURCE_EXHAUSTED 3
+#define IOE_EOF                4
+#define IOE_ILLEGAL_OPERATION  5
+#define IOE_PERMISSION_DENIED  6
+#define IOE_USER_ERROR         7
+#define IOE_INAPPROPRIATE_TYPE 8
+#define IOE_OTHER              9
+
+static const char *const ioe_type_names[10] = {
+  "already exists", "does not exist", "resource busy",
+  "resource exhausted", "end of file", "illegal operation",
+  "permission denied", "user error", "inappropriate type", "failed"
+};
+static const char *const arith_names[6] = {
+  "arithmetic overflow", "arithmetic underflow", "loss of precision",
+  "divide by zero", "denormal", "Ratio has zero denominator"
+};
+
+/* GHC's errnoToIOError, restricted to the types AHC's enum has. */
+static int ioe_type_of_errno(int e) {
+  switch (e) {
+  case ENOENT: return IOE_NO_SUCH_THING;
+  case EACCES: case EPERM: case EROFS: return IOE_PERMISSION_DENIED;
+  case EEXIST: return IOE_ALREADY_EXISTS;
+  case EBUSY: case ETXTBSY: return IOE_RESOURCE_BUSY;
+  case ENOSPC: case EMFILE: case ENFILE: case ENOMEM: case EAGAIN:
+    return IOE_RESOURCE_EXHAUSTED;
+  case EISDIR: case ENOTDIR: return IOE_INAPPROPRIATE_TYPE;
+  default: return IOE_OTHER;
+  }
+}
+
+static AhcNode *exc_error_call(AhcNode *msg) {
+  AhcNode *e = ahc_mk_con(EXC_ERROR_CALL, 1);
+  e->u.con.fields[0] = msg;
+  return e;
+}
+
+static AhcNode *exc_arith(long code) {
+  AhcNode *c = ahc_mk_int(code);              /* child first */
+  AhcNode *e = ahc_mk_con(EXC_ARITH, 1);
+  e->u.con.fields[0] = c;
+  return e;
+}
+
+static AhcNode *exc_exit(long code) {
+  AhcNode *c = ahc_mk_int(code);
+  AhcNode *e = ahc_mk_con(EXC_EXIT, 1);
+  e->u.con.fields[0] = c;
+  return e;
+}
+
+static AhcNode *exc_io(AhcNode *ioe) {
+  AhcNode *e = ahc_mk_con(EXC_IO, 1);
+  e->u.con.fields[0] = ioe;
+  return e;
+}
+
+static AhcNode *mk_ioerror_hs(AhcNode *type, AhcNode *loc, AhcNode *desc,
+                              AhcNode *file) {
+  AhcNode *e = ahc_mk_con(1, 4);
+  e->u.con.fields[0] = type;
+  e->u.con.fields[1] = loc;
+  e->u.con.fields[2] = desc;
+  e->u.con.fields[3] = file;
+  return e;
+}
+
+/* file == NULL is Nothing. */
+static AhcNode *mk_ioerror(int type, const char *loc, const char *desc,
+                           const char *file) {
+  AhcNode *t = ahc_mk_int(type);
+  AhcNode *l = ahc_mk_string(loc);
+  AhcNode *d = ahc_mk_string(desc);
+  AhcNode *f = file ? mk_just(ahc_mk_string(file)) : mk_nothing();
+  return mk_ioerror_hs(t, l, d, f);
+}
+
+/* The one-liner every IO die site becomes. */
+static void exc_throw_io(int type, const char *loc, const char *desc,
+                         const char *file) {
+  fflush(stdout);   /* produced output precedes the raise, as for die */
+  ahc_throw(exc_io(mk_ioerror(type, loc, desc, file)));
+}
+
+/* Bounded rendering helpers: a C string, then a Haskell String
+   (forced, UTF-8 encoded). Both keep buf NUL-terminated. */
+static size_t exc_put_c(char *buf, size_t n, size_t cap, const char *s) {
+  while (*s && n + 1 < cap) buf[n++] = *s++;
+  buf[n] = 0;
+  return n;
+}
+
+static size_t exc_put_list(char *buf, size_t n, size_t cap, AhcNode *cell) {
+  cell = ahc_eval(cell);
+  while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+    unsigned char enc[4];
+    int el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
+    if (n + (size_t)el + 1 >= cap) break;
+    memcpy(buf + n, enc, (size_t)el);
+    n += (size_t)el;
+    cell = ahc_eval(cell->u.con.fields[1]);
+  }
+  buf[n] = 0;
+  return n;
+}
+
+/* ONE text per exception: what an uncaught one prints after "ahc: ",
+   what ahc_last_error carries in library mode, and what the Show
+   instances in prelude/ and lib/ reproduce (the exec tests pin the
+   agreement). ErrorCall keeps the historical "error: MSG" so every
+   golden on that path stays byte-identical. */
+static void exc_render(AhcNode *exc, char *buf, size_t cap) {
+  size_t n = 0;
+  buf[0] = 0;
+  exc = ahc_eval(exc);
+  switch (exc->u.con.contag) {
+  case EXC_ERROR_CALL:
+    n = exc_put_c(buf, n, cap, "error: ");
+    exc_put_list(buf, n, cap, exc->u.con.fields[0]);
+    break;
+  case EXC_ARITH: {
+    long c = ahc_eval(exc->u.con.fields[0])->u.i;
+    exc_put_c(buf, n, cap,
+              c >= 0 && c < 6 ? arith_names[c] : "arithmetic exception");
+    break;
+  }
+  case EXC_IO: {
+    AhcNode *ioe = ahc_eval(exc->u.con.fields[0]);
+    long t = ahc_eval(ioe->u.con.fields[0])->u.i;
+    AhcNode *loc = ahc_eval(ioe->u.con.fields[1]);
+    AhcNode *desc = ahc_eval(ioe->u.con.fields[2]);
+    AhcNode *file = ahc_eval(ioe->u.con.fields[3]);
+    if (file->u.con.contag == JUST_TAG) {
+      n = exc_put_list(buf, n, cap, file->u.con.fields[0]);
+      n = exc_put_c(buf, n, cap, ": ");
+    }
+    if (loc->u.con.contag == CONS_TAG) {
+      n = exc_put_list(buf, n, cap, loc);
+      n = exc_put_c(buf, n, cap, ": ");
+    }
+    n = exc_put_c(buf, n, cap,
+                  t >= 0 && t < 10 ? ioe_type_names[t] : "failed");
+    if (desc->u.con.contag == CONS_TAG) {
+      n = exc_put_c(buf, n, cap, " (");
+      n = exc_put_list(buf, n, cap, desc);
+      exc_put_c(buf, n, cap, ")");
+    }
+    break;
+  }
+  case EXC_EXIT: {
+    long c = ahc_eval(exc->u.con.fields[0])->u.i;
+    if (c == 0) exc_put_c(buf, n, cap, "ExitSuccess");
+    else snprintf(buf, cap, "ExitFailure %ld", c);
+    break;
+  }
+  default:
+    exc_put_c(buf, n, cap, "unknown exception");
+  }
+}
+
+/* No frame at all: main, outside every catch. ExitCode exits with
+   its code and prints nothing (GHC's top-level handler); anything
+   else prints and exits 1, the shape ahc_die always had. */
+static void exc_uncaught(AhcNode *exc) __attribute__((noreturn));
+static void exc_uncaught(AhcNode *exc) {
+  char buf[2048];
+  AhcNode *e = ahc_eval(exc);
+  fflush(stdout);
+  if (e->u.con.contag == EXC_EXIT)
+    exit((int)ahc_eval(e->u.con.fields[0])->u.i);
+  exc_render(e, buf, sizeof buf);
+  fputs("ahc: ", stderr);
+  fputs(buf, stderr);
+  fputc('\n', stderr);
+  exit(1);
+}
+
+/* A thunk that raises exc when demanded: what every thunk abandoned
+   by a raise becomes (mk_sparked_die generalised). */
+static AhcNode *rethrow_code(AhcNode **env) {
+  ahc_throw(env[0]);
+}
+
+static AhcNode *mk_rethrow(AhcNode *exc) {
+  AhcNode **e = ahc_env(1);
+  e[0] = exc;
+  return ahc_mk_thunk(rethrow_code, e);
+}
+
+/* Update every thunk this task claimed above `stop` to a rethrow,
+   waking any green task parked on it so the waiter observes the
+   raise instead of a dead blackhole. Same publish protocol as the
+   normal update in ahc_eval: read the waiters BEFORE the payload
+   store overwrites their word. Workers never own waited-on
+   blackholes (their contention spins), so on a worker the list is
+   always empty. */
+static void exc_abandon(AhcEvalFrame *stop, AhcNode *exc) {
+  while (cur_task->eval_top != stop) {
+    AhcEvalFrame *f = cur_task->eval_top;
+    AhcNode *n = f->node;
+    AhcNode *r = mk_rethrow(exc);
+    AhcTask *w = (AhcTask *)n->u.bh.waiters;
+    __atomic_store_n(&n->u.ind, r, __ATOMIC_RELEASE);
+    __atomic_store_n(&n->tag, AHC_IND, __ATOMIC_RELEASE);
+#ifdef AHC_GC_OWN
+    own_write_barrier(n);
+#endif
+    while (w) {
+      AhcTask *nx = w->qnext;
+      wake(w);
+      w = nx;
+    }
+    cur_task->eval_top = f->prev;
+  }
+}
+
+/* Raise: unwind to the nearest frame of either kind. A catch frame
+   pushed after the newest boundary receives the value; otherwise the
+   boundary (task, spark, FFI entry) gets the rendered text in
+   err_msg AND the value in exc, and decides what to do with it. */
+void ahc_throw(AhcNode *exc) {
+  AhcCatch *c = cur_task->catch_top;
+  cur_task->exc = exc;
+  if (c && c->err_depth == cur_task->err_depth) {
+    exc_abandon(c->eval_top, exc);
+    cur_task->catch_top = c->prev;
+    longjmp(c->jb, 1);
+  }
+  if (cur_task->err_depth > 0) {
+    int d = cur_task->err_depth - 1;
+    exc_render(exc, cur_task->err_msg, sizeof cur_task->err_msg);
+    exc_abandon(cur_task->err_eval_top[d], exc);
+    cur_task->catch_top = cur_task->err_catch_top[d];
+    cur_task->err_depth = d;
+    longjmp(cur_task->err_stack[d], 1);
+  }
+  exc_uncaught(exc);
+}
+
+/* primCatch act handler: run act under a catch frame. Nothing in the
+   frame is written after setjmp, and the task's own fields are
+   re-read after the jump, so no volatile is needed. A green-thread
+   switch inside act returns to this same stack, where the frame
+   lives. */
+static AhcNode *io_catch(AhcNode **env, AhcNode *w) {
+  AhcCatch c;
+  c.prev = cur_task->catch_top;
+  c.eval_top = cur_task->eval_top;
+  c.err_depth = cur_task->err_depth;
+  cur_task->catch_top = &c;
+  if (setjmp(c.jb) == 0) {
+    /* Run the action; its result stays UNFORCED (GHC's catch does
+       not evaluate it either - a raise hiding in a lazy result
+       escapes, which is the documented lazy-IO gotcha). */
+    AhcNode *r = ahc_apply(env[0], w);
+    cur_task->catch_top = c.prev;
+    return r;
+  } else {
+    AhcNode *exc = cur_task->exc;
+    cur_task->exc = NULL;
+    return ahc_eval(ahc_apply(ahc_apply(env[1], exc), w));
+  }
+}
+
+static AhcNode *p_catch(AhcNode *act, AhcNode *h) {
+  AhcNode **e = ahc_env(2);
+  e[0] = act; e[1] = h;
+  return ahc_mk_fun(io_catch, e);
+}
+
+static AhcNode *io_throw_io(AhcNode **env, AhcNode *w) {
+  (void)w;
+  fflush(stdout);
+  ahc_throw(ahc_eval(env[0]));
+}
+
+static AhcNode *p_throw_io(AhcNode *exc) {
+  AhcNode **e = ahc_env(1);
+  e[0] = exc;
+  return ahc_mk_fun(io_throw_io, e);
+}
+
+/* primThrow: raise from pure code, when the value is demanded. */
+static AhcNode *p_throw(AhcNode *exc) {
+  fflush(stdout);
+  ahc_throw(ahc_eval(exc));
+}
+
+static AhcNode *io_evaluate(AhcNode **env, AhcNode *w) {
+  (void)w;
+  return ahc_eval(env[0]);
+}
+
+static AhcNode *p_evaluate(AhcNode *x) {
+  AhcNode **e = ahc_env(1);
+  e[0] = x;
+  return ahc_mk_fun(io_evaluate, e);
+}
+
+/* Accessors. The library only asks for a kind's own field; asking
+   for another kind's is a library bug, so it dies. */
+static AhcNode *exc_field(AhcNode *e, int kind, const char *what) {
+  e = ahc_eval(e);
+  if (e->tag != AHC_CON || e->u.con.contag != kind) {
+    char eb[96];
+    snprintf(eb, sizeof eb, "%s: not that kind of exception", what);
+    ahc_die(eb);
+  }
+  return e->u.con.fields[0];
+}
+
+static AhcNode *p_exc_kind(AhcNode *e) {
+  return ahc_mk_int(ahc_eval(e)->u.con.contag);
+}
+static AhcNode *p_exc_message(AhcNode *e) {
+  return exc_field(e, EXC_ERROR_CALL, "primExcMessage");
+}
+static AhcNode *p_exc_code(AhcNode *e) {
+  AhcNode *v = ahc_eval(e);
+  if (v->tag == AHC_CON
+      && (v->u.con.contag == EXC_ARITH || v->u.con.contag == EXC_EXIT))
+    return v->u.con.fields[0];
+  ahc_die("primExcCode: not that kind of exception");
+}
+static AhcNode *p_exc_io(AhcNode *e) {
+  return exc_field(e, EXC_IO, "primExcIO");
+}
+static AhcNode *p_exc_error_call(AhcNode *msg) {
+  return exc_error_call(msg);
+}
+static AhcNode *p_exc_arith(AhcNode *c) {
+  return exc_arith(ahc_eval(c)->u.i);
+}
+static AhcNode *p_exc_from_io(AhcNode *ioe) {
+  return exc_io(ioe);
+}
+static AhcNode *p_exc_exit(AhcNode *c) {
+  return exc_exit(ahc_eval(c)->u.i);
+}
+static AhcNode *p_mk_ioerror(AhcNode **a) {
+  return mk_ioerror_hs(a[0], a[1], a[2], a[3]);
+}
+static AhcNode *ioe_field(AhcNode *ioe, int i) {
+  return ahc_eval(ioe)->u.con.fields[i];
+}
+static AhcNode *p_ioe_type(AhcNode *e) { return ioe_field(e, 0); }
+static AhcNode *p_ioe_location(AhcNode *e) { return ioe_field(e, 1); }
+static AhcNode *p_ioe_description(AhcNode *e) { return ioe_field(e, 2); }
+static AhcNode *p_ioe_filename(AhcNode *e) { return ioe_field(e, 3); }
 
 /* waitRead / waitWrite: park until the fd is ready. Readiness is
    checked when the run queue drains - the cooperative contract. */
@@ -5543,7 +5972,14 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_uc_is_upper, *ahc_prim_uc_is_lower,
   *ahc_prim_uc_is_alpha, *ahc_prim_uc_is_alnum,
   *ahc_prim_uc_is_punct, *ahc_prim_uc_is_space,
-  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower;
+  *ahc_prim_uc_to_upper, *ahc_prim_uc_to_lower,
+  *ahc_prim_catch, *ahc_prim_throw, *ahc_prim_throw_io,
+  *ahc_prim_evaluate,
+  *ahc_prim_exc_kind, *ahc_prim_exc_message, *ahc_prim_exc_code,
+  *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
+  *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
+  *ahc_prim_ioe_type, *ahc_prim_ioe_location,
+  *ahc_prim_ioe_description, *ahc_prim_ioe_filename;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -5768,4 +6204,21 @@ void ahc_rts_init(void) {
   ahc_prim_uc_is_space = mk_prim1(p_uc_is_space);
   ahc_prim_uc_to_upper = mk_prim1(p_uc_to_upper);
   ahc_prim_uc_to_lower = mk_prim1(p_uc_to_lower);
+  ahc_prim_catch = mk_prim2(p_catch);
+  ahc_prim_throw = mk_prim1(p_throw);
+  ahc_prim_throw_io = mk_prim1(p_throw_io);
+  ahc_prim_evaluate = mk_prim1(p_evaluate);
+  ahc_prim_exc_kind = mk_prim1(p_exc_kind);
+  ahc_prim_exc_message = mk_prim1(p_exc_message);
+  ahc_prim_exc_code = mk_prim1(p_exc_code);
+  ahc_prim_exc_io = mk_prim1(p_exc_io);
+  ahc_prim_exc_error_call = mk_prim1(p_exc_error_call);
+  ahc_prim_exc_arith = mk_prim1(p_exc_arith);
+  ahc_prim_exc_from_io = mk_prim1(p_exc_from_io);
+  ahc_prim_exc_exit = mk_prim1(p_exc_exit);
+  ahc_prim_mk_ioerror = ahc_mk_primn(4, p_mk_ioerror);
+  ahc_prim_ioe_type = mk_prim1(p_ioe_type);
+  ahc_prim_ioe_location = mk_prim1(p_ioe_location);
+  ahc_prim_ioe_description = mk_prim1(p_ioe_description);
+  ahc_prim_ioe_filename = mk_prim1(p_ioe_filename);
 }
