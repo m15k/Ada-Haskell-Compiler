@@ -952,6 +952,10 @@ static void ahc_spin_report(AhcNode *n, void *owner, AhcTask *self);
 AhcNode *ahc_eval(AhcNode *n) {
   unsigned long spins = 0;
   double spin_t0 = 0.0;        /* watchdog stamp, set on first spin */
+  /* cur_task is thread-local, and a TLS read is not free (on Darwin
+     it is a call). This frame belongs to ONE task for its whole life
+     - a green task resumes on its own stack - so read it once. */
+  AhcTask *const self = cur_task;
   for (;;) {
     switch (__atomic_load_n(&n->tag, __ATOMIC_ACQUIRE)) {
     case AHC_IND:
@@ -972,17 +976,17 @@ AhcNode *ahc_eval(AhcNode *n) {
         break;                 /* lost the race - redispatch */
       code = n->u.thunk.code;
       env = n->u.thunk.env;
-      __atomic_store_n(&n->u.bh.owner, cur_task, __ATOMIC_RELAXED);
+      __atomic_store_n(&n->u.bh.owner, self, __ATOMIC_RELAXED);
       n->u.bh.waiters = NULL;
       __atomic_store_n(&n->tag, AHC_BLACKHOLE, __ATOMIC_RELEASE);
       {
         AhcEvalFrame ef;
         AhcNode *v;
         ef.node = n;
-        ef.prev = cur_task->eval_top;
-        cur_task->eval_top = &ef;
+        ef.prev = self->eval_top;
+        self->eval_top = &ef;
         v = ahc_eval(code(env));
-        cur_task->eval_top = ef.prev;
+        self->eval_top = ef.prev;
         /* wake tasks parked on this thunk (FIFO), then update.
            Waiters exist only on green-owned blackholes, and green
            tasks share one OS thread - reading the list before the
@@ -1013,8 +1017,8 @@ AhcNode *ahc_eval(AhcNode *n) {
          payload pointer can equal no task's address. */
       AhcTask *owner =
         (AhcTask *)__atomic_load_n(&n->u.bh.owner, __ATOMIC_ACQUIRE);
-      if (owner == cur_task) ahc_die("<<loop>>");
-      if (cur_task->is_worker
+      if (owner == self) ahc_die("<<loop>>");
+      if (self->is_worker
           || __atomic_load_n(&n_workers, __ATOMIC_RELAXED) > 0) {
         /* Any contention involving workers spins: the owner is
            making progress on some OS thread (or is a green task
