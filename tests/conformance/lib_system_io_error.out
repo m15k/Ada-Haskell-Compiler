@@ -39,6 +39,11 @@ user error
 plain user error
 ("",Nothing)
 [False,False,False,False,False,False,False,True]
+exitWith: invalid argument (ExitFailure 0)
+invalid argument
+invalid argument
+("exitWith",Nothing)
+[False,False,False,False,False,False,False,False]
 user error
 user error
 

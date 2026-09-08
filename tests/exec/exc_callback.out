@@ -1,0 +1,2 @@
+before
+ahc: error: from inside qsort (an exception escaped a Haskell callback into C)

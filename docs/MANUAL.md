@@ -1249,7 +1249,12 @@ exactly as before, so every golden stays byte-identical. The
 generated bindings turn the protocol into each language's own
 idiom: C++ throws `std::runtime_error`, Rust returns
 `Result<T, String>`, Go returns `(T, error)`, and the GHC binding
-raises `IOError`. One honest caveat: a thunk that was mid-
+raises `IOError`. Since v1.11 an exception raised inside a
+*callback* — a Haskell closure C is calling through a `"wrapper"`
+pointer — is fatal at that callback's own boundary (`ahc: FFI: an
+exception escaped a Haskell callback into C`): it cannot unwind
+through the foreign caller's frames, and before the frame was armed
+it silently did exactly that. One honest caveat: a thunk that was mid-
 evaluation when the error struck stays blackholed, so re-forcing
 *that value* reports `<<loop>>` — the runtime itself continues
 fine, as the examples demonstrate by erroring and then computing.
@@ -1508,8 +1513,12 @@ propagate — the first exception wins, a child raising during that
 join is lost, as in Ada. A raise inside a spark updates the spark
 root to a rethrow of the value, which surfaces on whichever task
 demands it. A task that *dies* keeps the old text path: the parent
-dies too. Nothing is asynchronous: no `throwTo`, no `timeout`, no
-`mask`.
+dies too. At a boundary the exception is never rendered — rendering
+forces the message, and with every catch frame already out of reach
+that turned a catchable value into whatever its lazy description
+raised (or into a fatal `<<loop>>`); `ahc_last_error` renders on
+demand, under a frame of its own. Nothing is asynchronous: no
+`throwTo`, no `timeout`, no `mask`.
 
 **One correction that came with it.** `>>` used to force the result
 of its first action; `catch` must not (GHC's does not), and once

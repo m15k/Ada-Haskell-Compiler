@@ -642,6 +642,7 @@ instance Show IOException where
         6 -> "permission denied"
         7 -> "user error"
         8 -> "inappropriate type"
+        10 -> "invalid argument"
         _ -> "failed"
 
 instance Eq IOException where

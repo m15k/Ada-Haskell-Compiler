@@ -4,6 +4,7 @@
 -- built and edited by hand.
 import System.IO
 import System.IO.Error
+import System.Exit
 
 describe :: IOError -> IO ()
 describe e = do
@@ -35,6 +36,7 @@ main = do
   attempt (hGetLine w >>= putStrLn)
   hClose w
   attempt (ioError (userError "plain user error"))
+  attempt (exitWith (ExitFailure 0))          -- GHC: a catchable invalid-argument IOError
   attempt (ioError (userError ""))
   -- built and edited by hand
   let e0 = mkIOError doesNotExistErrorType "myLocation" Nothing (Just "f.txt")

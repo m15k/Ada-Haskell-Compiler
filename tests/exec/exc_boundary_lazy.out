@@ -1,0 +1,3 @@
+parent caught an IOError; user error? True
+parent caught something: kind 1
+shown: user error (plain)

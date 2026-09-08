@@ -1171,7 +1171,25 @@ package body AHC.CodeGen is
             Append (Decl, "AhcNode *ffi_" & Base & ";" & LF);
             Append (Fns, "static AhcNode *cbclos_" & Base & "["
                     & Img (Pool) & "];" & LF);
-            Append (Fns, "static " & RT & " cbrun_" & Base
+            --  The body runs under a BOUNDARY frame (M137 review): an
+            --  exception raised in the callback must not longjmp across
+            --  the foreign caller's C frames, so it is fatal here - the
+            --  design note's rule - rather than caught by whatever
+            --  Haskell catch surrounds the C call.
+            Append (Fns, "static " & RT & " cbbody_" & Base
+                    & "(int i" & Args_Decl & ");" & LF
+                    & "static " & RT & " cbrun_" & Base
+                    & "(int i" & Args_Decl & ") {" & LF
+                    & "  if (setjmp(*ahc_err_frame())) "
+                    & "ahc_callback_landing();" & LF
+                    & (if F.CB_Res = M_Unit
+                       then "  cbbody_" & Base & "(i" & Args_Pass & ");"
+                            & LF & "  ahc_err_disarm();" & LF
+                       else "  { " & RT & " v_ = cbbody_" & Base
+                            & "(i" & Args_Pass & "); ahc_err_disarm();"
+                            & " return v_; }" & LF)
+                    & "}" & LF);
+            Append (Fns, "static " & RT & " cbbody_" & Base
                     & "(int i" & Args_Decl & ") {" & LF
                     & "  AhcNode *r = cbclos_" & Base & "[i];" & LF
                     & "  if (!r) ahc_die(""FFI: callback used after "

@@ -20,6 +20,10 @@ import System.IO (Handle)
 -- Library Report chapter 42. An IOError is a runtime value
 -- (docs/exceptions-design-note.md): four fields - type, location,
 -- description, filename - reached through the prim* accessors, and
+-- (the type index table: 0 AlreadyExists 1 NoSuchThing 2 ResourceBusy
+-- 3 ResourceExhausted 4 EOF 5 IllegalOperation 6 PermissionDenied
+-- 7 UserError 8 InappropriateType 9 OtherError 10 InvalidArgument -
+-- the last two have no Report constant, only a Show text)
 -- rebuilt whole by the ioeSet* functions. The handle field the
 -- Report also names is not stored (GHC's own IOErrors from openFile
 -- carry none either): ioeGetHandle/ioeSetHandle are absent, and the
@@ -41,6 +45,7 @@ instance Show IOErrorType where
     6 -> "permission denied"
     7 -> "user error"
     8 -> "inappropriate type"
+    10 -> "invalid argument"
     _ -> "failed")
 
 alreadyExistsErrorType, doesNotExistErrorType, alreadyInUseErrorType,

@@ -133,11 +133,13 @@ struct AhcTask {
   long sel_index;         /* which select alternative fired */
   jmp_buf err_stack[AHC_ERR_DEPTH];
   int err_depth;
-  char err_msg[512];      /* ahc_last_error; the death message at 3 */
+  char err_msg[2048];     /* ahc_last_error; the death message at 3 */
   /* exceptions (M137) */
   AhcCatch *catch_top;    /* innermost catch frame */
   AhcEvalFrame *eval_top; /* thunks under evaluation, innermost first */
   AhcNode *exc;           /* the in-flight exception value, or NULL */
+  AhcNode *last_exc;      /* what reached the last boundary frame;
+                             rendered on demand by ahc_last_error */
   AhcEvalFrame *err_eval_top[AHC_ERR_DEPTH];  /* eval_top per boundary */
   AhcCatch *err_catch_top[AHC_ERR_DEPTH];     /* catch_top per boundary */
 };
@@ -159,8 +161,30 @@ static int n_workers;    /* live B1 spark workers (grows once) */
 
 static size_t stack_guard_pg;        /* one page, PROT_NONE */
 
+static void exc_render(AhcNode *exc, char *buf, size_t cap);
+static size_t exc_put_c(char *buf, size_t n, size_t cap, const char *s);
+
+/* The text of what reached the last boundary frame. An EXCEPTION is
+   rendered here, on demand, never at the throw: rendering forces the
+   message, and forcing at the boundary (with every catch frame
+   already out of reach) turned a catchable value into whatever its
+   message raised - or into a fatal <<loop>> when the message
+   mentioned the thunk being evaluated. Rendering runs under its own
+   boundary frame for the same reason. */
 const char *ahc_last_error(void) {
-  return cur_task->err_msg;
+  AhcTask *t = cur_task;
+  if (t->err_msg[0] == 0 && t->last_exc) {
+    AhcNode *e = t->last_exc;
+    t->last_exc = NULL;
+    if (setjmp(*ahc_err_frame()) == 0) {
+      exc_render(e, t->err_msg, sizeof t->err_msg);
+      ahc_err_disarm();
+    }
+    if (t->err_msg[0] == 0)
+      exc_put_c(t->err_msg, 0, sizeof t->err_msg,
+                "exception (its message raised while being rendered)");
+  }
+  return t->err_msg;
 }
 
 jmp_buf *ahc_err_frame(void) {
@@ -169,6 +193,7 @@ jmp_buf *ahc_err_frame(void) {
     ahc_die("FFI: entry functions nested too deeply");
   cur_task->err_msg[0] = 0;
   cur_task->exc = NULL;
+  cur_task->last_exc = NULL;
   d = cur_task->err_depth++;
   cur_task->err_eval_top[d] = cur_task->eval_top;
   cur_task->err_catch_top[d] = cur_task->catch_top;
@@ -194,6 +219,7 @@ static void die_unwind_if_armed(const char *msg) {
     cur_task->eval_top = cur_task->err_eval_top[d];
     cur_task->catch_top = cur_task->err_catch_top[d];
     cur_task->exc = NULL;
+    cur_task->last_exc = NULL;
     cur_task->err_depth = d;
     longjmp(cur_task->err_stack[d], 1);
   }
@@ -416,6 +442,32 @@ static long utf8_decode_gen(const unsigned char *s, size_t len,
 
 static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
   return utf8_decode_gen(s, len, i, 0);
+}
+
+/* Print and exit with NO unwinding: for a failure that must not
+   longjmp across foreign C frames (an exception escaping a Haskell
+   callback that C called). */
+void ahc_fatal(const char *msg) {
+  fputs("ahc: ", stderr);   /* exactly ahc_die's line; exit flushes stdout */
+  fputs(msg, stderr);
+  fputc('\n', stderr);
+  exit(1);
+}
+
+/* Where a callback's boundary frame lands (generated cbrun_*). A die
+   keeps its own text, verbatim; an exception names itself and says
+   where it was stopped. */
+void ahc_callback_landing(void) {
+  AhcTask *t = cur_task;
+  if (t->last_exc) {
+    char buf[2304];
+    snprintf(buf, sizeof buf,
+             "%s (an exception escaped a Haskell callback into C)",
+             ahc_last_error());
+    ahc_fatal(buf);
+  }
+  ahc_fatal(t->err_msg[0] ? t->err_msg
+                          : "a failure escaped a Haskell callback into C");
 }
 
 void ahc_die(const char *msg) {
@@ -2835,11 +2887,13 @@ static AhcNode *mk_just(AhcNode *v) {
 #define IOE_USER_ERROR         7
 #define IOE_INAPPROPRIATE_TYPE 8
 #define IOE_OTHER              9
+#define IOE_INVALID_ARGUMENT   10
 
-static const char *const ioe_type_names[10] = {
+static const char *const ioe_type_names[11] = {
   "already exists", "does not exist", "resource busy",
   "resource exhausted", "end of file", "illegal operation",
-  "permission denied", "user error", "inappropriate type", "failed"
+  "permission denied", "user error", "inappropriate type", "failed",
+  "invalid argument"
 };
 static const char *const arith_names[6] = {
   "arithmetic overflow", "arithmetic underflow", "loss of precision",
@@ -2856,6 +2910,7 @@ static int ioe_type_of_errno(int e) {
   case ENOSPC: case EMFILE: case ENFILE: case ENOMEM: case EAGAIN:
     return IOE_RESOURCE_EXHAUSTED;
   case EISDIR: case ENOTDIR: return IOE_INAPPROPRIATE_TYPE;
+  case EINVAL: case ENAMETOOLONG: case ELOOP: return IOE_INVALID_ARGUMENT;
   default: return IOE_OTHER;
   }
 }
@@ -2975,7 +3030,7 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
       n = exc_put_c(buf, n, cap, ": ");
     }
     n = exc_put_c(buf, n, cap,
-                  t >= 0 && t < 10 ? ioe_type_names[t] : "failed");
+                  t >= 0 && t < 11 ? ioe_type_names[t] : "failed");
     if (desc->u.con.contag == CONS_TAG) {
       n = exc_put_c(buf, n, cap, " (");
       n = exc_put_list(buf, n, cap, desc);
@@ -2999,12 +3054,26 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
    else prints and exits 1, the shape ahc_die always had. */
 static void exc_uncaught(AhcNode *exc) __attribute__((noreturn));
 static void exc_uncaught(AhcNode *exc) {
-  char buf[2048];
+  size_t cap = 2048;
+  char *buf;
   AhcNode *e = ahc_eval(exc);
   fflush(stdout);
-  if (e->u.con.contag == EXC_EXIT)
-    exit((int)ahc_eval(e->u.con.fields[0])->u.i);
-  exc_render(e, buf, sizeof buf);
+  if (e->u.con.contag == EXC_EXIT) {
+    /* GHC clamps a code above 255 to 255; a negative one it turns
+       into a signal death, which AHC does not imitate: 255 too. */
+    long c = ahc_eval(e->u.con.fields[0])->u.i;
+    exit(c > 255 || c < 0 ? 255 : (int)c);
+  }
+  /* Whole message, however long (GHC prints all of it): grow until
+     the render no longer fills the buffer. */
+  for (;;) {
+    buf = (char *)malloc(cap);
+    if (!buf) ahc_die("out of memory");
+    exc_render(e, buf, cap);
+    if (strlen(buf) + 8 < cap || cap >= (64u << 20)) break;
+    free(buf);
+    cap *= 4;
+  }
   fputs("ahc: ", stderr);
   fputs(buf, stderr);
   fputc('\n', stderr);
@@ -3064,7 +3133,10 @@ void ahc_throw(AhcNode *exc) {
   }
   if (cur_task->err_depth > 0) {
     int d = cur_task->err_depth - 1;
-    exc_render(exc, cur_task->err_msg, sizeof cur_task->err_msg);
+    /* The VALUE travels (task, spark, await); the text is rendered
+       only if someone asks ahc_last_error - see it for why. */
+    cur_task->last_exc = exc;
+    cur_task->err_msg[0] = 0;
     exc_abandon(cur_task->err_eval_top[d], exc);
     cur_task->catch_top = cur_task->err_catch_top[d];
     cur_task->err_depth = d;
@@ -4832,13 +4904,16 @@ static AhcNode *p_peek_cstring_len(AhcNode *p, AhcNode *n) {
 }
 
 /* fopen that raises GHC's IOError on failure: the type from errno,
+   PATH is the caller's malloc'd sb buffer: freed here on the failing
+   paths (the IOError copies it), by the caller on success - a retry
+   loop on a missing file used to leak one buffer per attempt.
    libc's text as the description, the path as the filename, and the
    location the caller names (GHC says "openFile" for reads and
    "withFile" for writeFile/appendFile - the probe in the design
    note). Opening a DIRECTORY for reading succeeds at the libc level
    on macOS, so it is checked explicitly, with GHC's lowercase "is a
    directory". */
-static FILE *open_or_throw(const char *path, const char *mode,
+static FILE *open_or_throw(char *path, const char *mode,
                            const char *loc) {
   FILE *f = fopen(path, mode);
   struct stat st;
@@ -4848,12 +4923,14 @@ static FILE *open_or_throw(const char *path, const char *mode,
     AhcNode *ioe;
     fclose(f);
     ioe = mk_ioerror(IOE_INAPPROPRIATE_TYPE, loc, "is a directory", path);
+    free(path);               /* the IOError holds its own copy */
     exc_throw_ioe(ioe);
   }
   if (f) return f;
   e = errno;
   {
     AhcNode *ioe = mk_ioerror(ioe_type_of_errno(e), loc, strerror(e), path);
+    free(path);
     exc_throw_ioe(ioe);
   }
 }

@@ -99,6 +99,8 @@ jmp_buf *ahc_err_frame(void);
 void ahc_err_disarm(void);
 const char *ahc_last_error(void);
 void ahc_die(const char *msg) __attribute__((noreturn));
+void ahc_fatal(const char *msg) __attribute__((noreturn));
+void ahc_callback_landing(void) __attribute__((noreturn));
 /* Raise a Haskell exception value (docs/exceptions-design-note.md):
    unwinds to the nearest catch frame, else to the armed entry frame
    with the rendered text in ahc_last_error(). */
