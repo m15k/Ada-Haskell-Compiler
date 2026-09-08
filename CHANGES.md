@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## Unreleased
+## v1.11 (2026-09-08)
 
 The exceptions release (M136-M138): AHC programs can recover from
 an error for the first time. Until now every failure path in the
@@ -50,7 +50,13 @@ keeps "error: MSG", so every golden on that path is unchanged; the
 two IOError goldens changed to GHC's shape deliberately), fills
 `ahc_last_error` in library mode, and is what the Prelude's `Show
 IOException` reproduces. Bench delta (eval-frame push/pop on the hot
-path): BENCH_DELTA.
+path), interleaved A/B best-of-5 against the v1.10 baseline on an idle
+machine: b_fib 554 -> 598 ms (+8%), b_strings 839 -> 883 ms (+5%),
+b_sort 2310 -> 2373 ms (+3%), b_text 97 -> 101 ms (+4%), b_sumfold
+within noise (1741 vs 1761 ms); the pre-desugar-fix snapshot measures
+the same as HEAD, so the cost is the frame, not the frontend changes.
+Sequential whole-suite runs varied by more than this between
+themselves (thermal drift), which is why the pairs are interleaved.
 
 **M138 - the library.** The Prelude gains `IOError`, `ioError`,
 `userError`, and `Show`/`Eq IOException` (Report 9);
