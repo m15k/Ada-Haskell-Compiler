@@ -73,11 +73,20 @@ package body AHC.Desugar is
       --  Core building helpers
       ------------------------------------------------------------------
 
+      --  A desugarer temporary is MONOMORPHIC (From_Pattern_Binding
+      --  puts its let group under the typechecker's no-generalization
+      --  rule). It is used at exactly one type by construction, and
+      --  generalizing it is wrong: a case scrutinee bound here and
+      --  instantiated once per alternative gave every binder-free
+      --  alternative a fresh copy of the scrutinee's class constraint
+      --  - `case fromException se of Just e -> h e; Nothing -> ...`
+      --  reported "ambiguous type variable in constraint" (M138).
       function Fresh
         (Prefix : String; Span : Diagnostics.Source_Span)
          return Core.Real_Var_Id
       is (M.Mint_Var ((Name => Table.Intern (Prefix), Span => Span,
-                       Is_Global => False, others => <>)));
+                       Is_Global => False, From_Pattern_Binding => True,
+                       others => <>)));
 
       function VarE
         (V : Core.Real_Var_Id; Span : Diagnostics.Source_Span)
@@ -231,6 +240,66 @@ package body AHC.Desugar is
 
       --  Variables bound anywhere inside a pattern (for lazy patterns
       --  and pattern bindings).
+      --  Report 3.14 (and GHC's "failable" test): a bind whose pattern
+      --  cannot fail needs no `fail` continuation. Variables,
+      --  wildcards, lazy patterns, signatures, as-patterns over
+      --  unfailable patterns, tuples of unfailable patterns, and a
+      --  constructor of a SINGLE-constructor type applied to unfailable
+      --  patterns are unfailable; everything else may fail. The
+      --  continuation is `fail "..."` - a Monad-constrained value - and
+      --  a desugarer temporary is monomorphic, so an unused one would
+      --  leave its constraint ambiguous (M138): `_ <- act` in a do
+      --  block reported "ambiguous type variable in constraint 'Monad'".
+      function Unfailable (Pat : Pat_Id) return Boolean is
+         N : constant Pat_Node := Arena.Node (Real_Pat_Id (Pat));
+      begin
+         case N.Kind is
+            when Var_P | Wild_P | Lazy_P =>
+               return True;
+            when Sig_P =>
+               return Unfailable (Pat_Id (N.Sig_Pat));
+            when As_P =>
+               return Unfailable (Pat_Id (N.As_Pat));
+            when Tuple_P =>
+               for P of N.Items loop
+                  if not Unfailable (P) then
+                     return False;
+                  end if;
+               end loop;
+               return True;
+            when Con_P | Rec_P =>
+               declare
+                  R : constant Resolution := Res.Pat_Res (Positive (Pat));
+               begin
+                  if R.Kind /= Data_Res then
+                     return False;
+                  end if;
+                  if Natural (M.Info (Core.Real_TyCon_Id
+                                        (M.Info (R.Con).TyCon)).Cons.Length)
+                    /= 1
+                  then
+                     return False;
+                  end if;
+                  if N.Kind = Con_P then
+                     for P of N.Con_Args loop
+                        if not Unfailable (P) then
+                           return False;
+                        end if;
+                     end loop;
+                  else
+                     for F of N.Rec_Fields loop
+                        if not Unfailable (Pat_Id (F.Value)) then
+                           return False;
+                        end if;
+                     end loop;
+                  end if;
+                  return True;
+               end;
+            when others =>
+               return False;
+         end case;
+      end Unfailable;
+
       procedure Bound_Vars
         (Pat : Real_Pat_Id; Into : in out Core.Var_Id_Vectors.Vector)
       is
@@ -852,10 +921,16 @@ package body AHC.Desugar is
                           Fresh ("$b", Span);
                         FV : constant Core.Real_Var_Id :=
                           Fresh ("$fail", Span);
+                        --  An unfailable pattern gets an unreachable,
+                        --  UNCONSTRAINED continuation (see Unfailable).
                         Fail_E : constant Core.Real_Expr_Id :=
-                          App1 (Global (Env.Fail_V, Span),
-                                Str_Lit ("pattern match failure in"
-                                         & " do block", Span), Span);
+                          (if Unfailable (Pat_Id (N.Bind_Pat))
+                           then Error_Call
+                             ("unreachable: irrefutable do bind", Span)
+                           else App1 (Global (Env.Fail_V, Span),
+                                      Str_Lit ("pattern match failure in"
+                                               & " do block", Span),
+                                      Span));
                      begin
                         --  Match_One's contract: Fail must be a
                         --  VARIABLE reference to a join point, so
