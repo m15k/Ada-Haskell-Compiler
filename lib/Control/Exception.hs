@@ -74,13 +74,16 @@ instance Exception IOException where
     | primExcKind se == 3 = Just (primExcIO se)
     | otherwise = Nothing
 
+-- The runtime's encoding (ahc_rts.c EXC_EXIT): 0 is ExitSuccess and
+-- ExitFailure n is 2n+1, so ExitFailure 0 - legal for throwIO, GHC
+-- agrees; only exitWith rejects it - stays a distinct value.
 exitFromCode :: Int -> ExitCode
 exitFromCode 0 = ExitSuccess
-exitFromCode n = ExitFailure n
+exitFromCode c = ExitFailure (c `div` 2)
 
 exitToCode :: ExitCode -> Int
 exitToCode ExitSuccess = 0
-exitToCode (ExitFailure n) = n
+exitToCode (ExitFailure n) = 2 * n + 1
 
 instance Exception ExitCode where
   toException = primExcExit . exitToCode

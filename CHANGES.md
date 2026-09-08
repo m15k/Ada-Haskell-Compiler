@@ -1,5 +1,159 @@
 # AHC Changelog
 
+## Unreleased
+
+The exceptions release (M136-M138): AHC programs can recover from
+an error for the first time. Until now every failure path in the
+runtime ended in `ahc_die` - there was no `ioError`, `userError`,
+`catch`, `System.IO.Error`, or `Control.Exception`, and the
+conformance exclusions did not even list the gap. Three milestones:
+the design note (M136, docs/exceptions-design-note.md), the runtime
+(M137), and the library (M138), GHC-oracled where a portable program
+can observe it.
+
+**M137 - the runtime.** A CATCH frame is a stack-allocated setjmp
+target chained per task (unbounded nesting) beside the fixed
+boundary frames tasks, sparks, and FFI entries already armed;
+`ahc_throw(node)` unwinds to the nearest frame of either kind. On
+the way it walks a new per-task eval stack - `ahc_eval` records
+every thunk it has claimed - and updates each abandoned thunk to a
+rethrow thunk, waking any task parked on it: GHC's rule that a thunk
+whose evaluation raised re-raises on the next force, where a second
+force used to report `<<loop>>` (and a raising spark's inner blackholes
+stayed dead forever - a latent gap, now closed). A fatal `ahc_die`
+still skips every catch frame: refinement and contract violations,
+`<<loop>>`, deadlock, the spin watchdog, and the runtime's invariants
+are uncatchable by design. An exception is a constructor node whose
+tag is its kind - ErrorCall, ArithException, IOException, ExitCode -
+read back through 17 primitives; `SomeException` and `IOException`
+are wired opaque types like `Text`. `error`, `undefined`,
+pattern-match failure, and `chr`'s bad argument raise ErrorCall;
+division by zero at Int and Integer raises ArithException; `exitWith`
+raises ExitCode (uncaught, it still exits with the code, silently);
+every file and handle failure raises an IOException shaped like GHC's
+- the type from errno, libc's text, the path, the operation - for
+which the handle registry now remembers each handle's path and mode
+("handle is closed" names the file, a write on a read handle is
+"illegal operation (handle is not open for writing)", closing a
+closed handle is a no-op, a directory opened for reading is
+"inappropriate type (is a directory)"). Exceptions cross task, scope,
+and spark boundaries as VALUES: `await` and a scope's join rethrow a
+child's exception in the parent (a fatal death still kills the process
+when the join reaches that child, as before),
+a scope body that raises joins every child first (Ada's master rule)
+and retires the scope before any handler runs, and a raise inside a
+spark becomes a rethrow of the value on whichever task demands it.
+One correction rode along: `>>` used to force the result of its
+first action - `return undefined >> act` now runs act, as in GHC.
+ONE renderer produces the uncaught text after "ahc: " (ErrorCall
+keeps "error: MSG", so every golden on that path is unchanged; the
+two IOError goldens changed to GHC's shape deliberately), fills
+`ahc_last_error` in library mode, and is what the Prelude's `Show
+IOException` reproduces. Bench delta (eval-frame push/pop on the hot
+path): BENCH_DELTA.
+
+**M138 - the library.** The Prelude gains `IOError`, `ioError`,
+`userError`, and `Show`/`Eq IOException` (Report 9);
+`System.IO.Error` is Library Report 42 complete except the never-
+stored handle field (`ioeGetHandle`/`ioeSetHandle` absent, the
+`Maybe Handle` arguments accepted and ignored), with `IOErrorType` a
+newtype over the runtime's table so the program-global constructor
+namespace never sees `EOF`; `Control.Exception` is a closed
+base-compat subset - `SomeException`, the `Exception` class,
+`ErrorCall`, `ArithException`, `IOException`, `ExitCode`, `throw`,
+`throwIO`, `catch`, `handle`, `try`, `evaluate`, `bracket`,
+`bracket_`, `finally`, `onException` - where `catch` is `primCatch`
+plus `fromException` and no program can declare its own exception
+type (needs Typeable; written into EXCLUSIONS); `withFile` is
+`bracket`-based and relabels an escaping IOError at "withFile" as
+GHC does. Five GHC-oracled conformance programs (ch07_ioerror,
+lib_system_io_error, lib_control_exception, and the two below) and
+fourteen exec tests pin it.
+
+**M137 review - seven defects an adversarial review found**, all
+post-green, on paths no test walked: (1) an exception raised inside
+a Haskell CALLBACK that C was calling (a qsort comparator) longjmp'd
+across libc's frames to the Haskell caller's catch - the wrapper
+armed no frame; it is now fatal at the callback boundary, as the
+design note said it was. (2) At a task/spark boundary the exception
+was RENDERED eagerly, forcing its message with every catch frame
+already out of reach: a child's `ioError (userError (error "x"))`
+reached the parent as an ErrorCall, and a message mentioning the
+thunk under evaluation died `<<loop>>` where GHC's parent catches the
+value; the value travels now and `ahc_last_error` renders on demand.
+(3) Every failing `openFile`/`readFile`/`writeFile` leaked its
+malloc'd path buffer. (The reviewer's 100 MB-per-100k-attempts growth
+was mostly something else and pre-existing: with an explicitly
+recursive `loop i = act >> loop (i + 1)`, each iteration's action
+environment stays alive through the C frames of its `>>` chain until
+the loop ends - measured: a no-exception control of that shape grows
+~0.6 KB per iteration, the failing-readFile variant ~3 KB because it
+forces the path - while a `mapM_`-shaped loop does not grow. Not an
+exception defect; noted here so nobody chases it again.) (4) `exitWith (ExitFailure 256)` exited 0; codes
+above 255 (and negative ones) exit 255 as GHC's do. (5) `ahc_last_error`
+truncated at 512 bytes, dropping the error kind behind a long path;
+the buffer is 2048. (6) Uncaught messages were cut at 2047 bytes;
+they are printed whole. (7) `exitWith (ExitFailure 0)` exited 1
+silently; it is GHC's catchable `exitWith: invalid argument
+(ExitFailure 0)`, with `IOErrorType` gaining the "invalid argument"
+row (errno EINVAL/ENAMETOOLONG/ELOOP map to it).
+
+**M138 review - a second round, eight more defects across the
+untested-path, runtime/GC, claims-audit, and frontend dimensions.**
+(1) CRITICAL, a regression of the monomorphic-temporaries fix below:
+`case e of x -> ...` desugars to `let $s = e in let x = $s in ...`, and
+with `$s` no longer generalized its type variables kept their inner
+level, so the sibling `x` generalized over them and orphaned the
+scrutinee's constraint - `case fromIntegral n of d -> d / 2` printed
+2.0e-323. A restricted group's metas are now demoted to the enclosing
+level (ch03_13_case_var_scrutinee). (2) HIGH: a raise inside a
+`Protected` entry's body or barrier, evaluated by another task's
+epilogue, landed in the updater's handler and stranded the waiter
+(deadlock); it is delivered to the entering task, which rethrows when
+it resumes, and the updater's committed transition stands
+(exc_prot_entry). (3) Forcing a shared raising thunk chained one more
+indirection per force - quadratic time, an uncollectable chain; a
+rethrow thunk now restores itself before raising, and one rethrow per
+raise is shared (exc_rethrow_shared). (4) `fail` in IO was `error`;
+it is `ioError (userError s)`, catchable (Report 7.1). (5) `ExitFailure
+0` collapsed to `ExitSuccess` as a value (the runtime encodes
+ExitFailure n as 2n+1). (6) `System.IO.Error` could not export
+`IOError`: the renamer rejected re-exporting a synonym in scope
+through the Prelude. (7) A Handle kept past its `hClose` aliased the
+file a later `openFile` put in the same slot; handles carry a
+generation tag, a stale one is "handle is closed" and still names its
+file (a bounded ring). (8) `withFile` now replaces the filename with
+its own, as GHC's `addFilePathToIOError` does. Smaller: `ioeSet*` force
+the record like GHC's; negative exit codes render `ExitFailure (-1)`;
+an infinite uncaught `error` message streams to a 64 MB cap instead
+of re-rendering for minutes; a deadlock during a scope's join names
+the exception that was propagating; `ahc_last_error` clears the value
+it rendered; the design note, plan, MANUAL, and EXCLUSIONS were
+corrected where they overstated (spark *raise* not death; a fatal
+child kills when the join reaches it; `exitWith` in a spawned task
+propagates where GHC's thread merely reports). Not fixed, recorded:
+the pre-existing own-verifier report on deep recursion (memory note),
+and the Prelude still lacking `writeFile`/`appendFile`/`getChar`/`cycle`.
+
+**Two Report fixes the library flushed out.** (1) `case` on a class
+method's result whose class variable is fixed only through a binder
+in one alternative - the shape of `catch` - reported "ambiguous type
+variable in constraint": the desugarer binds a scrutinee in a `let`,
+the typechecker GENERALIZED that let with its constraint, and every
+binder-free alternative instantiated a fresh, ambiguous copy. A
+desugarer temporary is now monomorphic (the monomorphism
+restriction's rule for a simple pattern binding), which is also what
+makes an explicit `let s = fromE n in case s of ...` agree with GHC
+(ch04_05_mr_case_scrutinee). (2) With temporaries monomorphic, the
+`fail` continuation the do-desugarer emitted for EVERY bind left an
+unused, Monad-constrained value behind `_ <- act`; per Report 3.14
+only a failable pattern gets one now - wildcards, variables, lazy
+patterns, tuples, and single-constructor products bind without
+`fail`, so they typecheck in any monad, polymorphic ones included
+(ch03_14_unfailable_bind). Noted, not fixed: a restricted group is
+not generalized at all where the Report withholds generalization
+only from constrained variables (EXCLUSIONS 4.5.5).
+
 ## v1.10 (2026-08-13)
 
 The packages release (M134-M135): AHC grows dependency management

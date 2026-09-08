@@ -140,6 +140,9 @@ struct AhcTask {
   AhcNode *exc;           /* the in-flight exception value, or NULL */
   AhcNode *last_exc;      /* what reached the last boundary frame;
                              rendered on demand by ahc_last_error */
+  AhcNode *prot_exc;      /* an exception raised by THIS task's entry
+                             body/barrier while another task's epilogue
+                             evaluated it; rethrown after the park */
   AhcEvalFrame *err_eval_top[AHC_ERR_DEPTH];  /* eval_top per boundary */
   AhcCatch *err_catch_top[AHC_ERR_DEPTH];     /* catch_top per boundary */
 };
@@ -180,6 +183,7 @@ const char *ahc_last_error(void) {
       exc_render(e, t->err_msg, sizeof t->err_msg);
       ahc_err_disarm();
     }
+    t->last_exc = NULL;           /* a render that raised set it again */
     if (t->err_msg[0] == 0)
       exc_put_c(t->err_msg, 0, sizeof t->err_msg,
                 "exception (its message raised while being rendered)");
@@ -318,14 +322,33 @@ static int io_poll_block(void) {
 /* Switch to the next runnable task. Requeue_self distinguishes a
    voluntary yield (still runnable) from a park (blocked) or death
    (never runnable again). */
+/* Set while a scope joins its children with an exception pending
+   (io_scope): a deadlock during that join must not hide it. */
+static AhcNode *scope_pending_exc;
+static void exc_render(AhcNode *exc, char *buf, size_t cap);
+
 static void sched_switch(int requeue_self) {
   AhcTask *self = cur_task;
   AhcTask *nxt;
   if (requeue_self) runq_push(self);
   nxt = runq_pop();
   while (!nxt) {
-    if (!io_poll_block())
+    if (!io_poll_block()) {
+      if (scope_pending_exc) {
+        static char buf[2304];
+        char inner[2048];
+        inner[0] = 0;
+        if (setjmp(*ahc_err_frame()) == 0) {
+          exc_render(scope_pending_exc, inner, sizeof inner);
+          ahc_err_disarm();
+        }
+        snprintf(buf, sizeof buf, "deadlock: all green threads blocked"
+                 " (while an exception was propagating: %s)",
+                 inner[0] ? inner : "unrenderable");
+        ahc_die(buf);
+      }
       ahc_die("deadlock: all green threads blocked");
+    }
     nxt = runq_pop();
   }
   if (nxt == self) return;
@@ -2624,7 +2647,9 @@ static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
       AhcTask *k = sc->kids[i];
       while (k->state < 2) {
         waitlist_append(&k->join_waiters, cur_task);
+        scope_pending_exc = pending;   /* a deadlock here names it */
         park();
+        scope_pending_exc = NULL;
       }
       if (k->state == 3 && !k->awaited) {
         if (!k->exc) ahc_die(k->err_msg);
@@ -2872,7 +2897,12 @@ static AhcNode *mk_just(AhcNode *v) {
 #define EXC_ERROR_CALL 1   /* [message :: String]                     */
 #define EXC_ARITH      2   /* [code :: Int] - ArithException's index  */
 #define EXC_IO         3   /* [ioe :: IOException]                    */
-#define EXC_EXIT       4   /* [code :: Int] - 0 = ExitSuccess          */
+#define EXC_EXIT       4   /* [c :: Int]: 0 = ExitSuccess, else
+                              ExitFailure n encoded as 2n+1, so that
+                              ExitFailure 0 (legal for throwIO; only
+                              exitWith rejects it) stays distinct */
+#define EXIT_ENCODE(n) ((n) == 0 ? 1 : 2 * (n) + 1)  /* ExitFailure n */
+#define EXIT_DECODE(c) ((c) >> 1)                    /* floor, like div */
 
 /* IOException: AHC_CON tag 1, [type :: Int, location :: String,
    description :: String, filename :: Maybe String]. The type index
@@ -3041,7 +3071,10 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
   case EXC_EXIT: {
     long c = ahc_eval(exc->u.con.fields[0])->u.i;
     if (c == 0) exc_put_c(buf, n, cap, "ExitSuccess");
-    else snprintf(buf, cap, "ExitFailure %ld", c);
+    else {
+      long v = EXIT_DECODE(c);
+      snprintf(buf, cap, v < 0 ? "ExitFailure (%ld)" : "ExitFailure %ld", v);
+    }
     break;
   }
   default:
@@ -3062,27 +3095,66 @@ static void exc_uncaught(AhcNode *exc) {
     /* GHC clamps a code above 255 to 255; a negative one it turns
        into a signal death, which AHC does not imitate: 255 too. */
     long c = ahc_eval(e->u.con.fields[0])->u.i;
-    exit(c > 255 || c < 0 ? 255 : (int)c);
+    long v = c == 0 ? 0 : EXIT_DECODE(c);
+    exit(v > 255 || v < 0 ? 255 : (int)v);
   }
-  /* Whole message, however long (GHC prints all of it): grow until
-     the render no longer fills the buffer. */
-  for (;;) {
-    buf = (char *)malloc(cap);
-    if (!buf) ahc_die("out of memory");
-    exc_render(e, buf, cap);
-    if (strlen(buf) + 8 < cap || cap >= (64u << 20)) break;
-    free(buf);
-    cap *= 4;
-  }
+  /* Whole message, however long: rendered once into a buffer when it
+     fits, else STREAMED to stderr as it is forced (GHC prints all of
+     it; an infinite `error (repeat 'a')` streamed until a 64 MB cap
+     here, where re-rendering into ever larger buffers took minutes). */
+  buf = (char *)malloc(cap);
+  if (!buf) ahc_die("out of memory");
+  exc_render(e, buf, cap);
   fputs("ahc: ", stderr);
-  fputs(buf, stderr);
+  if (strlen(buf) + 8 < cap) {
+    fputs(buf, stderr);
+  } else if (e->u.con.contag == EXC_ERROR_CALL) {
+    AhcNode *cell = ahc_eval(e->u.con.fields[0]);
+    size_t written = 0;
+    fputs("error: ", stderr);
+    while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+      unsigned char enc[4];
+      int el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
+      fwrite(enc, 1, (size_t)el, stderr);
+      written += (size_t)el;
+      if (written >= (64u << 20)) {
+        fputs(" [message truncated at 64 MB]", stderr);
+        break;
+      }
+      cell = ahc_eval(cell->u.con.fields[1]);
+    }
+  } else {
+    fputs(buf, stderr);    /* an IOError's fields, cut at the buffer */
+  }
   fputc('\n', stderr);
   exit(1);
 }
 
 /* A thunk that raises exc when demanded: what every thunk abandoned
-   by a raise becomes (mk_sparked_die generalised). */
+   by a raise becomes (mk_sparked_die generalised). Forcing one is
+   itself an evaluation: ahc_eval has claimed this node, pushed its
+   frame, and called us. If we simply raised, exc_abandon would find
+   that frame and chain ANOTHER rethrow onto this one - one more IND
+   hop per force, quadratic time and an uncollectable chain on a
+   shared failing thunk (the M137 review measured 40k forces at 11 s).
+   A raise closure is idempotent, so put the node back exactly as it
+   was, pop our frame, wake anyone parked on it (they re-dispatch and
+   raise on their own), and only then raise. */
 static AhcNode *rethrow_code(AhcNode **env) {
+  AhcEvalFrame *f = cur_task->eval_top;
+  if (f && __atomic_load_n(&f->node->tag, __ATOMIC_ACQUIRE) == AHC_BLACKHOLE) {
+    AhcNode *n = f->node;
+    AhcTask *w = (AhcTask *)n->u.bh.waiters;   /* before the fields go */
+    n->u.thunk.code = rethrow_code;
+    n->u.thunk.env = env;
+    __atomic_store_n(&n->tag, AHC_THUNK, __ATOMIC_RELEASE);
+    while (w) {
+      AhcTask *nx = w->qnext;
+      wake(w);
+      w = nx;
+    }
+    cur_task->eval_top = f->prev;
+  }
   ahc_throw(env[0]);
 }
 
@@ -3100,10 +3172,11 @@ static AhcNode *mk_rethrow(AhcNode *exc) {
    blackholes (their contention spins), so on a worker the list is
    always empty. */
 static void exc_abandon(AhcEvalFrame *stop, AhcNode *exc) {
+  AhcNode *r = NULL;              /* one rethrow per raise, shared */
   while (cur_task->eval_top != stop) {
     AhcEvalFrame *f = cur_task->eval_top;
     AhcNode *n = f->node;
-    AhcNode *r = mk_rethrow(exc);
+    if (!r) r = mk_rethrow(exc);
     AhcTask *w = (AhcTask *)n->u.bh.waiters;
     __atomic_store_n(&n->u.ind, r, __ATOMIC_RELEASE);
     __atomic_store_n(&n->tag, AHC_IND, __ATOMIC_RELEASE);
@@ -3197,6 +3270,24 @@ static AhcNode *p_throw(AhcNode *exc) {
 static AhcNode *io_evaluate(AhcNode **env, AhcNode *w) {
   (void)w;
   return ahc_eval(env[0]);
+}
+
+/* IO's `fail s` = ioError (userError s) (Report 7.1): the description
+   is the Haskell String itself, unforced, exactly as userError's. */
+static AhcNode *io_fail(AhcNode **env, AhcNode *w) {
+  AhcNode *t, *l, *f, *ioe;
+  (void)w;
+  t = ahc_mk_int(IOE_USER_ERROR);
+  l = ahc_mk_string("");
+  f = mk_nothing();
+  ioe = mk_ioerror_hs(t, l, env[0], f);
+  exc_throw_ioe(ioe);
+}
+
+static AhcNode *p_fail_io(AhcNode *s) {
+  AhcNode **e = ahc_env(1);
+  e[0] = s;
+  return ahc_mk_fun(io_fail, e);
 }
 
 static AhcNode *p_evaluate(AhcNode *x) {
@@ -3437,6 +3528,44 @@ static int prot_barrier_holds(AhcProt *p, AhcNode *barrier) {
   return ahc_eval(ahc_apply(barrier, p->state))->u.con.contag == 2;
 }
 
+/* The epilogue evaluates a PARKED waiter's barrier and body on the
+   updater's stack. A raise there belongs to the waiter - its `entry`
+   is what raised - not to whoever happened to commit; so each
+   evaluation runs under a catch frame and a raise is handed to the
+   waiter (prot_exc), which rethrows when it resumes. The updater's
+   own transition was already committed and is unaffected; the state
+   is untouched by a body that raised (prot_commit assigns it last).
+   (The M137 review: before this, the parent's handler caught the
+   child's error, the parent's call reported failure although its
+   commit persisted, and the child parked forever - deadlock.)
+   Returns 1 when it evaluated normally, 0 when the waiter got the
+   exception and was unlinked + woken. */
+static int prot_eval_for(AhcProt *p, AhcProtWaiter **link, int commit,
+                         int *holds) {
+  AhcProtWaiter *w = *link;
+  AhcCatch c;
+  c.prev = cur_task->catch_top;
+  c.eval_top = cur_task->eval_top;
+  c.err_depth = cur_task->err_depth;
+  cur_task->catch_top = &c;
+  if (setjmp(c.jb) == 0) {
+    if (commit) {
+      w->task->xfer = prot_commit(p, w->body);
+    } else {
+      *holds = prot_barrier_holds(p, w->barrier);
+    }
+    cur_task->catch_top = c.prev;
+    return 1;
+  } else {
+    AhcNode *exc = cur_task->exc;
+    cur_task->exc = NULL;
+    *link = w->next;
+    w->task->prot_exc = exc;
+    wake(w->task);
+    return 0;
+  }
+}
+
 static void prot_epilogue(AhcProt *p) {
   int progressed = 1;
   while (progressed) {
@@ -3444,15 +3573,21 @@ static void prot_epilogue(AhcProt *p) {
     progressed = 0;
     while (*link) {
       AhcProtWaiter *w = *link;
+      int holds = 0;
       if (w->task->state >= 2) {     /* died while parked */
         *link = w->next;
         continue;
       }
-      if (prot_barrier_holds(p, w->barrier)) {
-        *link = w->next;
-        w->task->xfer = prot_commit(p, w->body);
-        wake(w->task);
-        progressed = 1;              /* state changed: rescan */
+      if (!prot_eval_for(p, link, 0, &holds)) {
+        progressed = 1;              /* queue changed: rescan */
+        break;
+      }
+      if (holds) {
+        if (prot_eval_for(p, link, 1, &holds)) {
+          *link = w->next;
+          wake(w->task);
+        }
+        progressed = 1;              /* state or queue changed */
         break;
       }
       link = &w->next;
@@ -3529,6 +3664,11 @@ static AhcNode *io_prot_entry(AhcNode **env, AhcNode *w) {
     *link = nw;
   }
   park();                    /* the epilogue ran our body for us */
+  if (cur_task->prot_exc) {  /* ... and it raised: that raise is ours */
+    AhcNode *exc = cur_task->prot_exc;
+    cur_task->prot_exc = NULL;
+    ahc_throw(exc);
+  }
   {
     AhcNode *r = cur_task->xfer;
     cur_task->xfer = NULL;
@@ -5282,38 +5422,68 @@ static AhcNode *p_peek_cstring(AhcNode *p) {
    freed memory. Slots 0..2 are the std streams. ---------------- */
 #define AHC_MAX_HANDLES 256
 static FILE *ahc_handles[AHC_MAX_HANDLES];
-/* The path each slot was opened on (GHC prints it in every IOError
-   about the handle - "<stdin>" and friends for 0..2), kept after
-   close so "handle is closed" can still name the file; freed when
-   the slot is reused. Mode as the IOMode index: 0 r, 1 w, 2 a, 3 rw. */
+/* A Handle value is GENERATION * AHC_MAX_HANDLES + SLOT: the slot's
+   generation advances at every close, so a Handle kept past its
+   hClose can never alias the file a later openFile put in the same
+   slot (the M137 review found exactly that). Slots 0..2 are the std
+   streams, generation 0 forever. The path each slot was opened on
+   (GHC prints it in every IOError about the handle - "<stdin>" and
+   friends for 0..2) stays with the slot after close, so "handle is
+   closed" names the file; when the slot is reused the name moves to
+   a bounded ring keyed by the old Handle value, so a stale Handle
+   still names its file until 256 further closes have happened. Mode
+   as the IOMode index: 0 r, 1 w, 2 a, 3 rw. */
 static char *ahc_handle_names[AHC_MAX_HANDLES];
 static signed char ahc_handle_modes[AHC_MAX_HANDLES];
+static long ahc_handle_gen[AHC_MAX_HANDLES];
+#define AHC_CLOSED_RING 256
+static long ahc_closed_ids[AHC_CLOSED_RING];
+static char *ahc_closed_names[AHC_CLOSED_RING];
+static int ahc_closed_next;
 
-static const char *handle_name(long i) {
-  if (i == 0) return "<stdin>";
-  if (i == 1) return "<stdout>";
-  if (i == 2) return "<stderr>";
-  return (i > 2 && i < AHC_MAX_HANDLES) ? ahc_handle_names[i] : NULL;
+static long handle_slot(long id) {
+  return id >= 0 ? id % AHC_MAX_HANDLES : -1;
 }
 
-static FILE *ahc_handle(long i, const char *what) {
-  FILE *f = (i >= 0 && i < AHC_MAX_HANDLES) ? ahc_handles[i] : NULL;
-  if (!f)
+/* Live iff the slot is open AND the generation matches. */
+static int handle_live(long id) {
+  long s = handle_slot(id);
+  return s >= 0 && ahc_handles[s]
+      && (s <= 2 ? id == s : id / AHC_MAX_HANDLES == ahc_handle_gen[s]);
+}
+
+static const char *handle_name(long id) {
+  long s = handle_slot(id);
+  int k;
+  if (id == 0) return "<stdin>";
+  if (id == 1) return "<stdout>";
+  if (id == 2) return "<stderr>";
+  if (s <= 2) return NULL;
+  if (id / AHC_MAX_HANDLES == ahc_handle_gen[s]) return ahc_handle_names[s];
+  for (k = 0; k < AHC_CLOSED_RING; k++)
+    if (ahc_closed_names[k] && ahc_closed_ids[k] == id)
+      return ahc_closed_names[k];
+  return NULL;
+}
+
+static FILE *ahc_handle(long id, const char *what) {
+  if (!handle_live(id))
     exc_throw_io(IOE_ILLEGAL_OPERATION, what, "handle is closed",
-                 handle_name(i));
-  return f;
+                 handle_name(id));
+  return ahc_handles[handle_slot(id)];
 }
 
 /* The same, checking the direction: GHC's "handle is not open for
    reading/writing". */
-static FILE *ahc_handle_rw(long i, const char *what, int want_write) {
-  FILE *f = ahc_handle(i, what);
+static FILE *ahc_handle_rw(long id, const char *what, int want_write) {
+  FILE *f = ahc_handle(id, what);
+  long i = handle_slot(id);
   int m = i == 0 ? 0 : (i == 1 || i == 2) ? 1 : ahc_handle_modes[i];
   if (want_write ? m == 0 : (m == 1 || m == 2))
     exc_throw_io(IOE_ILLEGAL_OPERATION, what,
                  want_write ? "handle is not open for writing"
                             : "handle is not open for reading",
-                 handle_name(i));
+                 handle_name(id));
   return f;
 }
 
@@ -5337,11 +5507,17 @@ static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
     free(pb.p);
     exc_throw_ioe(ioe);
   }
-  free(ahc_handle_names[i]);
+  if (ahc_handle_names[i]) {
+    /* the previous occupant's name goes to the ring under ITS id */
+    int k = ahc_closed_next++ % AHC_CLOSED_RING;
+    free(ahc_closed_names[k]);
+    ahc_closed_ids[k] = ahc_handle_gen[i] * AHC_MAX_HANDLES + i;
+    ahc_closed_names[k] = ahc_handle_names[i];
+  }
   ahc_handle_names[i] = pb.p;      /* the registry owns the path now */
   ahc_handle_modes[i] = (signed char)m;
   ahc_handles[i] = f;
-  return ahc_mk_int(i);
+  return ahc_mk_int(ahc_handle_gen[i] * AHC_MAX_HANDLES + i);
 }
 static AhcNode *p_h_open(AhcNode *path, AhcNode *mode) {
   AhcNode **e = ahc_env(2);
@@ -5350,16 +5526,19 @@ static AhcNode *p_h_open(AhcNode *path, AhcNode *mode) {
 }
 
 static AhcNode *io_h_close(AhcNode **env, AhcNode *w) {
-  long i = ahc_eval(env[0])->u.i;
+  long id = ahc_eval(env[0])->u.i;
+  long i = handle_slot(id);
   FILE *f;
   (void)w;
-  /* Closing a closed handle is a no-op, as in GHC. */
-  if (i > 2 && i < AHC_MAX_HANDLES && !ahc_handles[i])
+  /* Closing a closed (or stale) handle is a no-op, as in GHC - and
+     never touches the slot's current occupant. */
+  if (i > 2 && !handle_live(id))
     return ahc_mk_con(UNIT_TAG, 0);
-  f = ahc_handle(i, "hClose");
+  f = ahc_handle(id, "hClose");
   if (i > 2) {
     fclose(f);
     ahc_handles[i] = NULL;
+    ahc_handle_gen[i]++;        /* the old Handle value is stale now */
   } else
     fflush(f);   /* closing a std stream would break the runtime's
                     own writers; flush instead (documented) */
@@ -5515,9 +5694,10 @@ static AhcNode *io_getprogname(AhcNode **env, AhcNode *w) {
 /* exitWith raises ExitCode (GHC: it is an exception); uncaught, the
    top level exits with the code and prints nothing. */
 static AhcNode *io_exit_with(AhcNode **env, AhcNode *w) {
+  long n = ahc_eval(env[0])->u.i;
   (void)w;
   fflush(stdout);
-  ahc_throw(exc_exit(ahc_eval(env[0])->u.i));
+  ahc_throw(exc_exit(n == 0 ? 0 : EXIT_ENCODE(n)));
 }
 
 static AhcNode *p_exit_with(AhcNode *code) {
@@ -6151,7 +6331,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
-  *ahc_prim_ioe_description, *ahc_prim_ioe_filename;
+  *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
+  *ahc_prim_fail_io;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -6393,4 +6574,5 @@ void ahc_rts_init(void) {
   ahc_prim_ioe_location = mk_prim1(p_ioe_location);
   ahc_prim_ioe_description = mk_prim1(p_ioe_description);
   ahc_prim_ioe_filename = mk_prim1(p_ioe_filename);
+  ahc_prim_fail_io = mk_prim1(p_fail_io);
 }

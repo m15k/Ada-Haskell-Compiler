@@ -34,6 +34,17 @@ illegal operation
 illegal operation
 ("hGetLine",Just "/tmp/ahc_conf_ioerror.txt")
 [False,False,False,False,False,True,False,False]
+/tmp/ahc_conf_ioerror.txt: hGetLine: illegal operation (handle is closed)
+illegal operation
+illegal operation
+("hGetLine",Just "/tmp/ahc_conf_ioerror.txt")
+[False,False,False,False,False,True,False,False]
+from b
+/tmp/ahc_conf_ioerror.txt: withFile: does not exist (No such file or directory)
+does not exist
+does not exist
+("withFile",Just "/tmp/ahc_conf_ioerror.txt")
+[False,True,False,False,False,False,False,False]
 user error (plain user error)
 user error
 plain user error

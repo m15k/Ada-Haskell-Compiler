@@ -1255,7 +1255,8 @@ pointer — is fatal at that callback's own boundary (`ahc: FFI: an
 exception escaped a Haskell callback into C`): it cannot unwind
 through the foreign caller's frames, and before the frame was armed
 it silently did exactly that. One honest caveat: a thunk that was mid-
-evaluation when the error struck stays blackholed, so re-forcing
+evaluation when a *fatal* death (an FFI range death, a contract or
+refinement violation) struck stays blackholed, so re-forcing
 *that value* reports `<<loop>>` — the runtime itself continues
 fine, as the examples demonstrate by erroring and then computing.
 
@@ -1479,12 +1480,12 @@ x) h >> evaluate x` would report `<<loop>>` on the second force, and
 a green task parked on the blackhole would never wake. So
 `ahc_eval` keeps a per-task intrusive stack of the thunks it is
 evaluating — an `AhcEvalFrame` on the C stack per claimed thunk,
-two stores to push and one to pop — and `ahc_throw` walks it down
+three stores to push and one to pop — and `ahc_throw` walks it down
 to the target frame's saved top, updating each node to an
 indirection to a *rethrow thunk* (`mk_rethrow`: code that calls
 `ahc_throw` on the same value) and waking its waiters with the same
 publish protocol the normal update uses. Boundary frames get the
-same fix-up, which closed a latent gap: a spark that died used to
+same fix-up, which closed a latent gap: a spark that *raised* used to
 leave its *inner* blackholes owned by a worker forever.
 
 **What raises.** `error`, `undefined`, pattern-match failure, and
@@ -1512,8 +1513,11 @@ exception), the scope's ids are retired, and only then does it
 propagate — the first exception wins, a child raising during that
 join is lost, as in Ada. A raise inside a spark updates the spark
 root to a rethrow of the value, which surfaces on whichever task
-demands it. A task that *dies* keeps the old text path: the parent
-dies too. At a boundary the exception is never rendered — rendering
+demands it. A `Protected` object's epilogue evaluates a parked
+waiter's barrier and body on the updater's stack; a raise there is
+handed to the waiter, whose `entry` rethrows it when it resumes,
+while the updater's own committed transition stands. A task that
+*dies* keeps the old text path: the parent dies too. At a boundary the exception is never rendered — rendering
 forces the message, and with every catch frame already out of reach
 that turned a catchable value into whatever its lazy description
 raised (or into a fatal `<<loop>>`); `ahc_last_error` renders on

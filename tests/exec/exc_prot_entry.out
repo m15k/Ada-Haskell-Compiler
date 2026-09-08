@@ -1,0 +1,5 @@
+child A caught: state boom
+parent updated p
+parent updated q
+child B caught: barrier boom
+states after: (1,1)

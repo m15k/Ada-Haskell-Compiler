@@ -30,6 +30,10 @@ Left (ExitFailure 3)
 some exit: ExitFailure 4
 Left ExitSuccess
 escaped catch, caught later
+Left user error (failed in IO)
+bind failure is a user error: True
+Just (ExitFailure 0)
+Left (ExitFailure 0)
 user error (shown)
 divide by zero
 divide by zero

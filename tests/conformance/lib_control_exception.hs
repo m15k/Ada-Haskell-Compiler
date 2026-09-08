@@ -5,6 +5,10 @@
 import Control.Exception
 import System.Exit
 import System.IO
+import System.IO.Error (isUserError)
+
+isUserErrorE :: IOException -> Bool
+isUserErrorE = isUserError
 
 main :: IO ()
 main = do
@@ -72,6 +76,15 @@ main = do
   x <- catch (return (error "lazy")) (\e -> const (return 0) (e :: SomeException)) :: IO Int
   r12 <- try (evaluate x) :: IO (Either ErrorCall Int)
   putStrLn (either (const "escaped catch, caught later") show r12)
+  -- fail in IO is ioError (userError s), a catchable IOError (Report 7.1)
+  r13 <- try (fail "failed in IO") :: IO (Either IOException ())
+  print r13
+  r14 <- try (do { Just v <- return (Nothing :: Maybe Int); return v }) :: IO (Either IOException Int)
+  putStrLn (either (\e -> "bind failure is a user error: " ++ show (isUserErrorE e)) show r14)
+  -- ExitFailure 0 is a value of its own (only exitWith rejects it)
+  print (fromException (toException (ExitFailure 0)) :: Maybe ExitCode)
+  r15 <- try (throwIO (ExitFailure 0)) :: IO (Either ExitCode ())
+  print r15
   -- displayException and SomeException's show for the plain types
   putStrLn (displayException (userError "shown"))
   putStrLn (displayException DivideByZero)

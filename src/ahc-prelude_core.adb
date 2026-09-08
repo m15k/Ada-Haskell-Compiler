@@ -274,6 +274,8 @@ package body AHC.Prelude_Core is
         Prim ("primreturnIO", "ahc_prim_return_io");
       P_Error : constant Real_Var_Id :=
         Prim ("primerror", "ahc_prim_error");
+      P_FailIO : constant Real_Var_Id :=
+        Prim ("primfailIO", "ahc_prim_fail_io");
       P_Seq : constant Real_Var_Id :=
         Prim ("primseq", "ahc_prim_seq");
       P_FromRatD : constant Real_Var_Id :=
@@ -1747,8 +1749,9 @@ package body AHC.Prelude_Core is
                         Ms.Append (V (P_BindIO));
                         Ms.Append (V (P_ThenIO));
                         Ms.Append (V (P_RetIO));
-                        Ms.Append (Lam (S, Ap (V (P_Error),
-                                               V (S))));
+                        --  Report 7.1: IO's fail is ioError (userError s),
+                        --  a catchable IOError - not the class default.
+                        Ms.Append (Lam (S, Ap (V (P_FailIO), V (S))));
                         Give_Dict (Real_Instance_Id (II), Ms);
                      end;
                   elsif Cl_Id = Env.Monad_Cl

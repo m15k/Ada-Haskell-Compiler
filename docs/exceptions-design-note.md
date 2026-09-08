@@ -90,7 +90,7 @@ Haskell in `lib/` and `prelude/`:
 - **Prelude** (Report 9): `type IOError = IOException`, `ioError`,
   `userError`, and the `Show`/`Eq` instances for `IOException`.
 - **`System.IO.Error`** (Library Report 42): `IOErrorType` (the eight
-  Report kinds, plus `ResourceVanished`/`OtherError` for the errno
+  Report kinds, plus `InappropriateType`/`OtherError`/`InvalidArgument` for the errno
   mapping), the `is*Error`/`is*ErrorType` predicates, `*ErrorType`
   constants, `ioeGet*`/`ioeSet*` accessors, `mkIOError`,
   `annotateIOError`, `modifyIOError`, `catchIOError`, `tryIOError`.
@@ -106,7 +106,8 @@ Haskell in `lib/` and `prelude/`:
 - **`System.IO.withFile`** becomes `bracket`-based, so the handle is
   closed when the body raises - GHC's behaviour, and the reason the
   probe above says `withFile:` where AHC says `openFile:`.
-  (`readFile`/`writeFile` keep AHC's `openFile` location: both are
+  (`readFile` locates at `openFile` and `writeFile`/`appendFile` at
+  `withFile`, as GHC's do; the rest of this parenthesis predates that -
   wrong relative to GHC in one direction or the other, and a
   portable program does not print an IOError's location without
   also printing the path GHC would have chosen.)
@@ -144,7 +145,9 @@ primIoeDescription :: IOException -> String
 primIoeFilename  :: IOException -> Maybe String
 ```
 
-`IOErrorType` is a plain source enum in `System.IO.Error` whose
+`IOErrorType` is a newtype over the index in `System.IO.Error` (as built; a
+source enum would have put `EOF` and `UserError` into the program-global
+constructor namespace) whose
 `fromEnum` order is the runtime's kind table (one table, in
 `runtime/ahc_rts.c`, documented in the module). `ErrorCall`,
 `ArithException`, and `ExitCode` (which already exists in
@@ -239,7 +242,8 @@ cur_task->eval_top = ef.prev;
 and `ahc_throw` walks that stack down to the target frame's saved
 `eval_top`, updating every node to an indirection to a **rethrow
 thunk** (a thunk whose code raises the same exception value) and
-waking its waiters, before it jumps. Two stores per thunk
+waking its waiters, before it jumps. Three stores to push and one to
+pop per thunk
 evaluation on the hot path; the bench gate records the delta. The
 boundary frames get the same fix-up (a task's or spark's abandoned
 inner thunks become rethrows rather than dead blackholes), which is
@@ -269,7 +273,8 @@ the latent gap from Part 1.
 
 ### Uncaught
 
-`ahc_run_main` arms a boundary frame; an exception that reaches it is
+No frame is armed around `main` (as built): `ahc_throw` with no catch
+frame and no boundary falls through to `exc_uncaught`, where it is
 rendered by ONE C renderer (`exc_render`) that produces the same text
 `show` does, prefixed `ahc: `, and exits 1 (`ExitCode`: exits with the
 code, printing nothing). `ErrorCall` keeps today's `ahc: error: MSG`

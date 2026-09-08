@@ -1,5 +1,5 @@
 module System.IO.Error
-  ( IOErrorType, ioError, userError
+  ( IOError, IOErrorType, ioError, userError
   , mkIOError, annotateIOError, modifyIOError
   , catchIOError, tryIOError
   , ioeGetErrorType, ioeGetLocation, ioeGetErrorString, ioeGetFileName
@@ -87,24 +87,29 @@ ioeGetErrorString e
 ioeGetFileName :: IOError -> Maybe FilePath
 ioeGetFileName = primIoeFilename
 
+-- GHC's ioeSet*/annotateIOError are record updates, so they force the
+-- IOError: `ioeSetLocation undefined "l"` is undefined, not "l".
 rebuild :: Int -> String -> String -> Maybe FilePath -> IOError
 rebuild = primMkIOError
 
+forcing :: IOError -> IOError -> IOError
+forcing e r = e `seq` r
+
 ioeSetErrorType :: IOError -> IOErrorType -> IOError
-ioeSetErrorType e (MkIOErrorType t) =
-  rebuild t (primIoeLocation e) (primIoeDescription e) (primIoeFilename e)
+ioeSetErrorType e (MkIOErrorType t) = forcing e
+  (rebuild t (primIoeLocation e) (primIoeDescription e) (primIoeFilename e))
 
 ioeSetErrorString :: IOError -> String -> IOError
-ioeSetErrorString e s =
-  rebuild (primIoeType e) (primIoeLocation e) s (primIoeFilename e)
+ioeSetErrorString e s = forcing e
+  (rebuild (primIoeType e) (primIoeLocation e) s (primIoeFilename e))
 
 ioeSetLocation :: IOError -> String -> IOError
-ioeSetLocation e l =
-  rebuild (primIoeType e) l (primIoeDescription e) (primIoeFilename e)
+ioeSetLocation e l = forcing e
+  (rebuild (primIoeType e) l (primIoeDescription e) (primIoeFilename e))
 
 ioeSetFileName :: IOError -> FilePath -> IOError
-ioeSetFileName e f =
-  rebuild (primIoeType e) (primIoeLocation e) (primIoeDescription e) (Just f)
+ioeSetFileName e f = forcing e
+  (rebuild (primIoeType e) (primIoeLocation e) (primIoeDescription e) (Just f))
 
 isAlreadyExistsError, isDoesNotExistError, isAlreadyInUseError,
   isFullError, isEOFError, isIllegalOperation, isPermissionError,
@@ -124,11 +129,11 @@ mkIOError (MkIOErrorType t) loc _ path = rebuild t loc "" path
 -- GHC's: the location is replaced; a filename given here wins over
 -- the one already set (`path `mplus` ioe_filename`).
 annotateIOError :: IOError -> String -> Maybe Handle -> Maybe FilePath -> IOError
-annotateIOError e loc _ path =
-  rebuild (primIoeType e) loc (primIoeDescription e)
-          (case path of
-             Just f -> Just f
-             Nothing -> primIoeFilename e)
+annotateIOError e loc _ path = forcing e
+  (rebuild (primIoeType e) loc (primIoeDescription e)
+           (case path of
+              Just f -> Just f
+              Nothing -> primIoeFilename e))
 
 catchIOError :: IO a -> (IOError -> IO a) -> IO a
 catchIOError act h =

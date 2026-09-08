@@ -1187,6 +1187,24 @@ package body AHC.Typechecker is
 
          Level := Level - 1;
 
+         --  A RESTRICTED group is not generalized, so its type variables
+         --  are the enclosing scope's: demote their level, or a sibling
+         --  binding could generalize over them and orphan this group's
+         --  constraints. `case e of x -> ...` desugars to
+         --  `let $s = e in let x = $s in ...` with $s monomorphic; with
+         --  the metas left at the inner level, `x` quantified over
+         --  them, $s's `Num` wanted was defaulted to Integer while x
+         --  ran at Double, and `case fromIntegral n of d -> d / 2`
+         --  printed 2.0e-323 (the M138 adversarial review).
+         if Restricted then
+            for B of Binds loop
+               if M.Info (B.Binder).Var_Scheme = No_Scheme then
+                  Adjust_Levels
+                    (Real_Type_Id (M.Info (B.Binder).Var_Type), Level);
+               end if;
+            end loop;
+         end if;
+
          --  Solve the group's wanteds, then generalize with a shared
          --  quantifier set and context.
          for I in W_Mark + 1 .. W_List.Last_Index loop

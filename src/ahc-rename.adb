@@ -2133,7 +2133,11 @@ package body AHC.Rename is
                                  end loop;
                               end if;
                            elsif Own.Synonyms.Contains (E.Name.Name)
+                             or else Env.Synonyms.Contains (E.Name.Name)
                            then
+                              --  A synonym in scope may be RE-exported
+                              --  (Report 5.2): System.IO.Error exports
+                              --  the Prelude's IOError.
                               Ent.Exports.Synonyms.Include
                                 (E.Name.Name,
                                  Fixity.Fixity_Info'(others => <>));

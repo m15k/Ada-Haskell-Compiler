@@ -190,7 +190,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
-  *ahc_prim_ioe_description, *ahc_prim_ioe_filename;
+  *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
+  *ahc_prim_fail_io;
 
 void ahc_rts_init(void);
 

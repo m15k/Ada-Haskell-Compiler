@@ -44,7 +44,8 @@ hClose (MkHandle i) = primHClose i
 
 -- GHC's withFile: the handle is closed when the body raises, and
 -- any IOError escaping - from the open or from the body - is
--- reported at "withFile" with the file's name (readFile's own stays
+-- reported at "withFile" with THIS file's name, replacing whatever
+-- name it carried, as GHC's addFilePathToIOError does (readFile's own stays
 -- at "openFile": the probe in docs/exceptions-design-note.md). The
 -- relabel goes through the primitives directly: System.IO.Error
 -- imports THIS module for Handle, so it cannot be imported here.
@@ -53,12 +54,9 @@ withFile path mode act =
   primCatch (bracket (openFile path mode) hClose act) (\se ->
     if primExcKind se == 3
       then let e = primExcIO se
-               file = case primIoeFilename e of
-                        Just f -> Just f
-                        Nothing -> Just path
            in primThrowIO (primExcFromIO
                 (primMkIOError (primIoeType e) "withFile"
-                               (primIoeDescription e) file))
+                               (primIoeDescription e) (Just path)))
       else primThrowIO se)
 
 hPutStr :: Handle -> String -> IO ()

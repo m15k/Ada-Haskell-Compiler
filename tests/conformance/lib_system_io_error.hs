@@ -3,7 +3,7 @@
 -- mode, a directory), every predicate and accessor, and IOErrors
 -- built and edited by hand.
 import System.IO
-import System.IO.Error
+import System.IO.Error (IOError, catchIOError, tryIOError, ioeGetErrorType, ioeGetLocation, ioeGetErrorString, ioeGetFileName, isAlreadyExistsError, isDoesNotExistError, isAlreadyInUseError, isFullError, isEOFError, isIllegalOperation, isPermissionError, isUserError, mkIOError, annotateIOError, modifyIOError, ioeSetErrorString, ioeSetLocation, ioeSetFileName, ioeSetErrorType, alreadyExistsErrorType, doesNotExistErrorType, alreadyInUseErrorType, fullErrorType, eofErrorType, illegalOperationErrorType, permissionErrorType, userErrorType, isAlreadyExistsErrorType, isDoesNotExistErrorType, isAlreadyInUseErrorType, isFullErrorType, isEOFErrorType, isIllegalOperationErrorType, isPermissionErrorType, isUserErrorType)
 import System.Exit
 
 describe :: IOError -> IO ()
@@ -35,6 +35,17 @@ main = do
   w <- openFile "/tmp/ahc_conf_ioerror.txt" WriteMode
   attempt (hGetLine w >>= putStrLn)
   hClose w
+  -- a Handle kept past its hClose stays closed even after its slot
+  -- is reused by a later openFile, and still names ITS file
+  writeFile "/tmp/ahc_conf_ioerror_b.txt" "from b\n"
+  hb <- openFile "/tmp/ahc_conf_ioerror_b.txt" ReadMode
+  attempt (hGetLine h >>= putStrLn)
+  hClose h                                -- a no-op on the stale handle
+  hGetLine hb >>= putStrLn                -- hb is untouched
+  hClose hb
+  -- withFile reports the failure at "withFile" with ITS file's name
+  attempt (withFile "/tmp/ahc_conf_ioerror.txt" ReadMode
+             (\_ -> readFile "/nonexistent/ahc/inner.txt" >>= putStr))
   attempt (ioError (userError "plain user error"))
   attempt (exitWith (ExitFailure 0))          -- GHC: a catchable invalid-argument IOError
   attempt (ioError (userError ""))
