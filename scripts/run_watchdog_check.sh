@@ -52,11 +52,29 @@ echo "$out" | grep -q "gc_want="                      || note "armed: no rendezv
 echo "$out" | grep -q "sparks: created"               || note "armed: no spark counters"
 echo "$out" | grep -qE "deque\[0\] top=[0-9]+"        || note "armed: no deque extents"
 
+# 2 and 3 compare the watchdog-armed runs against a Boehm REFERENCE
+#    run of the same program. Build and run it loudly: this script
+#    silenced both, so when the reference produced nothing on the CI
+#    runner (four weeks of red builds) the checks below reported a
+#    mismatch against an empty string and hid the real failure.
+if AHC_GC=boehm scripts/ahc-build.sh "$tmp/probe.hs" "$tmp/probe_b" \
+     > "$tmp/ref_build.log" 2>&1
+then
+  ref=$("$tmp/probe_b" 2>&1); ref_rc=$?
+  if [ $ref_rc -ne 0 ] || [ -z "$ref" ]; then
+    note "reference run: exit $ref_rc, output '$ref' (expected the sum)"
+    echo "--- reference build log ---"; cat "$tmp/ref_build.log"
+    echo "--- end ---"
+  fi
+else
+  note "reference build failed (exit $?)"
+  cat "$tmp/ref_build.log"
+  ref=""
+fi
+
 # 2. Default limit (120s): must NOT fire on the same program, and
 #    must give the right answer. A watchdog that fires on healthy
 #    parallel code is a bug, not a safety net.
-ref=$(AHC_GC=boehm scripts/ahc-build.sh "$tmp/probe.hs" "$tmp/probe_b" \
-      >/dev/null 2>&1 && "$tmp/probe_b" 2>&1)
 got=$(AHC_WORKERS=4 "$tmp/probe" 2>&1)
 [ "$got" = "$ref" ] || note "default limit: got '$got' want '$ref'"
 
