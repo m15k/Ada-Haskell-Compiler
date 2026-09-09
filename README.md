@@ -574,6 +574,14 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.12** — the integers release (M139): `Int8..Int64`/`Word8..Word64`
+  wrap like GHC's (every result narrowed to the width; the wired
+  Num/Integral gave way to one generated block of Prelude instances),
+  `Data.Bits` as a class, `Data.IORef`, `Word` as `Word64`,
+  `quotRem`/`divMod`/`realToFrac`; a codegen initialization-order bug
+  and fourteen review findings fixed on the way, including the IORef
+  write barrier, atomic modification under the scheduler, and Word64
+  above 2⁶³ everywhere it is represented as a bignum.
 - **v1.11** — the exceptions release (M136–M138): the runtime can
   recover from an error for the first time — per-task catch frames
   beside the boundary frames, `ahc_throw` turning every abandoned

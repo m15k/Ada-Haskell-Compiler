@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## Unreleased
+## v1.12 (2026-09-08)
 
 **M139 - Data.Int, Data.Word, Data.Bits, Data.IORef.** The
 fixed-width types `Int8..Int64`/`Word8..Word64` had existed since the
