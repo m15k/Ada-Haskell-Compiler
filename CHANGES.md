@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## Unreleased
+## v1.13 (2026-09-09)
 
 **M140 - portable sockets.** A `Network.Socket` module - `Socket`
 (abstract), `listenOn`, `accept`, `connectTo` (numeric IPv4), `recv`,

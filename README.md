@@ -576,6 +576,14 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.13** — the sockets release (M140): `Network.Socket` — TCP over
+  IPv4 whose constants and `sockaddr` layout live in the runtime, with
+  `Text` payloads and would-block parking on the scheduler — and ahttpd
+  rewritten over it, carrying no platform constants at all. That closed
+  the arm64 inter-connection delivery gap open since August (an `EINTR`
+  parked a handler on a ready fd), and the httpd harness now runs on
+  Linux CI too. Two harness defects that had kept CI red since v1.10
+  are fixed with it, so the pipeline is green on both platforms.
 - **v1.12** — the integers release (M139): `Int8..Int64`/`Word8..Word64`
   wrap like GHC's (every result narrowed to the width; the wired
   Num/Integral gave way to one generated block of Prelude instances),
