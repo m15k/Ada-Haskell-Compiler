@@ -2396,9 +2396,19 @@ server still costs nothing; any other failure raises an `IOError`
 whose type comes from errno, exactly as the file operations do.
 Payloads are `Text` — the packed byte type — which makes this a
 text-protocol socket: invalid UTF-8 on the wire normalises to U+FFFD.
-`AHC_SOCKET_DEBUG=1` traces every call with its result and errno,
-which is how the arm64 inter-connection delivery gap (examples/httpd/
-README.md) is to be characterised on the runner that shows it.
+`AHC_SOCKET_DEBUG=1` traces every call with its result and errno.
+
+The rewrite closed a bug that had been open since August: with one
+connection's handler parked mid-request, a second connection's
+response was served and logged but never delivered — deterministically
+on Apple silicon, never on x86_64 (examples/httpd/README.md). The old
+example drove libc itself and treated *every* negative `read`/`write`
+as "would block", so an `EINTR` — which arm64's timing produced and
+x86_64's did not — parked a handler on an fd that was already ready,
+and nothing was left to wake it. A library that owns the retry gets
+this right once instead of in every program: would-block is
+`EAGAIN`/`EWOULDBLOCK`/`EINTR` at an unready fd, everything else
+raises.
 
 `Data.Text` is the one library module backed by a dedicated runtime
 representation rather than by ordinary Haskell — the packed

@@ -67,11 +67,15 @@ step "server up (multi-module ahc build, parked accept)"
 
 # 2. an idle server parks in poll: ~zero CPU
 sleep 2
+# ps prints M:SS.ss on Darwin and HH:MM:SS on Linux, so compare the
+# SECONDS numerically rather than matching a prefix (the prefix match
+# read Linux's "00:00:00" as CPU burned - the first thing this harness
+# said on Linux CI, and it was about itself).
 cpu=$(ps -o time= -p $spid | tr -d ' ')
-case "$cpu" in
-  0:00*) step "idle server: ~zero CPU ($cpu after 2s)";;
-  *)     flunk "idle server burned CPU ($cpu after 2s)";;
-esac
+cpu_secs=$(printf '%s' "$cpu" | awk -F: '{ s = 0; for (i = 1; i <= NF; i++) s = s * 60 + $i; printf "%.0f", s }')
+if [ "${cpu_secs:-99}" -le 1 ]
+then step "idle server: ~zero CPU ($cpu after 2s)"
+else flunk "idle server burned CPU ($cpu after 2s)"; fi
 
 base="http://127.0.0.1:$port"
 {

@@ -21,6 +21,32 @@ inter-connection delivery gap finally gets evidence on the runner that
 shows it. A loopback echo test (server and client as green tasks in
 one program, a golden transcript) pins the module.
 
+**The arm64 inter-connection delivery gap is closed by the rewrite.**
+Open since August: with one connection's handler parked mid-request, a
+second connection's response was served and logged but never delivered
+- deterministic on Apple silicon, absent on x86_64. The old code drove
+libc directly and treated EVERY negative `read`/`write` as "would
+block", so an `EINTR` (which arm64's timing produced and x86_64's did
+not) parked a handler on an fd that was already ready, with no event
+left to wake it. `Network.Socket` reports would-block only for
+EAGAIN/EWOULDBLOCK/EINTR at a genuinely unready fd and raises every
+other errno, and it owns the retry. The arm64 CI job runs the whole
+httpd harness green; the concurrent-handlers check is fatal on every
+platform again. Also fixed here: the harness read Linux's `ps` CPU
+format (`00:00:00`) as CPU burned, because it matched Darwin's
+`0:00.ss` as a prefix - the first thing it said on Linux CI was about
+itself.
+
+**CI is green again for the first time since v1.10.** Every run since
+August failed one macOS step, and the step could not say why: the
+watchdog check built and ran a Boehm reference of its probe with both
+streams silenced and its exit code swallowed, so when the arm64 runner
+killed that reference (exit 137 - 30 million thunks under a collector
+that runner cannot afford) both comparisons reported a mismatch
+against an empty string. The expected answer is a constant, so the
+second build is gone; a failure of anything the harness runs now
+reports itself with its log.
+
 ## v1.12 (2026-09-08)
 
 **M139 - Data.Int, Data.Word, Data.Bits, Data.IORef.** The
