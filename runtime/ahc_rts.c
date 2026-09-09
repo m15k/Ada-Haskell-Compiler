@@ -3283,6 +3283,7 @@ static AhcNode *p_narrow(AhcNode *bits_n, AhcNode *signed_n, AhcNode *v) {
   int sgn = ahc_eval(signed_n)->u.i != 0;
   AhcNode *e = ahc_eval(v);
   unsigned long low;
+  if (bits < 1 || bits > 64) ahc_die("primNarrow: width must be 1..64");
   if (e->tag == AHC_INT) {
     low = (unsigned long)e->u.i;
   } else {                       /* bignum: little-endian 32-bit limbs */
@@ -3302,9 +3303,26 @@ static AhcNode *p_narrow(AhcNode *bits_n, AhcNode *signed_n, AhcNode *v) {
 /* The representation cast Int8 <-> Int: the identity. */
 static AhcNode *p_fix_cast(AhcNode *a) { return a; }
 
+/* Unboxing a Word64 at the FFI boundary (generated code, DEF_POKE):
+   a value in [0, 2^64) is an Int >= 0 or a positive bignum of at most
+   two limbs; the M139 review found `c_malloc (maxBound :: Word64)`
+   dying "argument out of range" because the check wanted an Int. */
+int ahc_fits_u64(AhcNode *e) {
+  if (e->tag == AHC_INT) return e->u.i >= 0;
+  return e->tag == AHC_BIGINT && e->u.big.sign > 0 && e->u.big.n <= 2;
+}
+unsigned long ahc_u64_of(AhcNode *e) {
+  unsigned long mag;
+  if (e->tag == AHC_INT) return (unsigned long)e->u.i;
+  mag = e->u.big.n > 0 ? (unsigned long)e->u.big.d[0] : 0;
+  if (e->u.big.n > 1) mag |= (unsigned long)e->u.big.d[1] << 32;
+  return mag;
+}
+
 /* IORef: a one-field constructor node mutated in place. The store of
    a possibly YOUNG value into a possibly OLD cell needs the own
-   collector's write barrier, exactly like a thunk update. */
+   collector's write barrier on the fields ARRAY (the object holding
+   the changed word), the way a channel barriers its tail cell. */
 static AhcNode *io_ioref_new(AhcNode **env, AhcNode *w) {
   AhcNode *c = ahc_mk_con(1, 1);
   (void)w;
@@ -3330,7 +3348,11 @@ static AhcNode *io_ioref_write(AhcNode **env, AhcNode *w) {
   (void)w;
   c->u.con.fields[0] = env[1];
 #ifdef AHC_GC_OWN
-  own_write_barrier(c);
+  /* The word that changed lives in the FIELDS array - a separate
+     allocation from the node - so that is the object to remember;
+     barriering the node re-traced only its (already marked) fields
+     pointer and the young value was lost (the M139 review). */
+  own_write_barrier(c->u.con.fields);
 #endif
   return ahc_mk_con(UNIT_TAG, 0);
 }
@@ -3341,6 +3363,25 @@ static AhcNode *p_ioref_write(AhcNode *r, AhcNode *v) {
 }
 static AhcNode *p_ioref_same(AhcNode *a, AhcNode *b) {
   return ahc_mk_con(ahc_eval(a) == ahc_eval(b) ? 2 : 1, 0);
+}
+
+/* Write, then return a value, as ONE action: the atomic modify
+   variants need no bind between their read and their write, because
+   every bind (io_bind/io_then) is a scheduling point - the M139
+   review found atomicModifyIORef losing updates between two tasks. */
+static AhcNode *io_ioref_write_ret(AhcNode **env, AhcNode *w) {
+  AhcNode *c = ahc_eval(env[0]);
+  (void)w;
+  c->u.con.fields[0] = env[1];
+#ifdef AHC_GC_OWN
+  own_write_barrier(c->u.con.fields);   /* see io_ioref_write */
+#endif
+  return env[2];
+}
+static AhcNode *p_ioref_write_ret(AhcNode **a) {
+  AhcNode **e = ahc_env(3);
+  e[0] = a[0]; e[1] = a[1]; e[2] = a[2];
+  return ahc_mk_fun(io_ioref_write_ret, e);
 }
 
 /* IO's `fail s` = ioError (userError s) (Report 7.1): the description
@@ -4873,23 +4914,56 @@ static AhcNode *p_show_d(AhcNode *a) {
 
 /* ----- Data.Bits at Int ------------------------------------------ */
 
+/* Bit operations work on the value's LOW 64 BITS, two's complement -
+   also for a bignum, which is how a Word64 above 2^63 is represented
+   (M139: the fixed-width Bits instances narrow the result back to
+   their width). Shift counts at or beyond 64, undefined in C, are
+   defined here the way GHC defines them: a left shift or a logical
+   right shift by 64 or more is 0, an arithmetic right shift is the
+   sign fill; a negative count is an error in GHC and 0 here. */
+static unsigned long low64(AhcNode *v) {
+  AhcNode *e = ahc_eval(v);
+  unsigned long mag;
+  if (e->tag == AHC_INT) return (unsigned long)e->u.i;
+  mag = e->u.big.n > 0 ? (unsigned long)e->u.big.d[0] : 0;
+  if (e->u.big.n > 1) mag |= (unsigned long)e->u.big.d[1] << 32;
+  return e->u.big.sign < 0 ? 0UL - mag : mag;
+}
+
 #define BITOP(name, op)                                               \
   static AhcNode *name(AhcNode *a, AhcNode *b) {                      \
-    return ahc_mk_int(ahc_eval(a)->u.i op ahc_eval(b)->u.i);          \
+    return ahc_mk_int((long)(low64(a) op low64(b)));                  \
   }
 
 BITOP(p_band, &)
 BITOP(p_bor, |)
 BITOP(p_bxor, ^)
-BITOP(p_bshl, <<)
-BITOP(p_bshr, >>)
+
+static AhcNode *p_bshl(AhcNode *a, AhcNode *b) {
+  long n = (long)low64(b);
+  if (n < 0 || n >= 64) return ahc_mk_int(0);
+  return ahc_mk_int((long)(low64(a) << n));
+}
+/* arithmetic (the Int / signed view) */
+static AhcNode *p_bshr(AhcNode *a, AhcNode *b) {
+  long n = (long)low64(b);
+  long x = (long)low64(a);
+  if (n < 0) return ahc_mk_int(0);
+  if (n >= 64) return ahc_mk_int(x < 0 ? -1 : 0);
+  return ahc_mk_int(x >> n);
+}
+/* logical (the unsigned view: Word64 above 2^63 has its sign bit set) */
+static AhcNode *p_bshru(AhcNode *a, AhcNode *b) {
+  long n = (long)low64(b);
+  if (n < 0 || n >= 64) return ahc_mk_int(0);
+  return ahc_mk_int((long)(low64(a) >> n));
+}
 
 static AhcNode *p_bcompl(AhcNode *a) {
-  return ahc_mk_int(~ahc_eval(a)->u.i);
+  return ahc_mk_int((long)~low64(a));
 }
 static AhcNode *p_popcount(AhcNode *a) {
-  return ahc_mk_int(__builtin_popcountl(
-    (unsigned long)ahc_eval(a)->u.i));
+  return ahc_mk_int(__builtin_popcountl(low64(a)));
 }
 
 /* ----- Input, arguments, exit ------------------------------------ */
@@ -5054,7 +5128,23 @@ DEF_POKE_INT(i64, int64_t,  0)
 DEF_POKE_INT(u8,  uint8_t,  x < 0 || x > UINT8_MAX)
 DEF_POKE_INT(u16, uint16_t, x < 0 || x > UINT16_MAX)
 DEF_POKE_INT(u32, uint32_t, x < 0 || x > (long)UINT32_MAX)
-DEF_POKE_INT(u64, uint64_t, x < 0)
+/* u64: a Word64 above 2^63 is a bignum, so it has its own unboxing. */
+static AhcNode *io_poke_u64(AhcNode **env, AhcNode *w) {
+  char *p = (char *)marshal_ptr(env[0], "poke");
+  long off = ahc_eval(env[1])->u.i;
+  AhcNode *xv = ahc_eval(env[2]);
+  uint64_t v;
+  (void)w;
+  if (!ahc_fits_u64(xv)) ahc_die("poke: value out of range");
+  v = (uint64_t)ahc_u64_of(xv);
+  memcpy(p + off, &v, sizeof v);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_poke_u64(AhcNode *p, AhcNode *o, AhcNode *x) {
+  AhcNode **e = ahc_env(3);
+  e[0] = p; e[1] = o; e[2] = x;
+  return ahc_mk_fun(io_poke_u64, e);
+}
 
 static AhcNode *io_poke_d(AhcNode **env, AhcNode *w) {
   char *p = (char *)marshal_ptr(env[0], "poke");
@@ -6405,7 +6495,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
   *ahc_prim_fail_io,
   *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
-  *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same;
+  *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
+  *ahc_prim_ioref_write_ret, *ahc_prim_bshru;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -6654,4 +6745,6 @@ void ahc_rts_init(void) {
   ahc_prim_ioref_read = mk_prim1(p_ioref_read);
   ahc_prim_ioref_write = mk_prim2(p_ioref_write);
   ahc_prim_ioref_same = mk_prim2(p_ioref_same);
+  ahc_prim_ioref_write_ret = ahc_mk_primn(3, p_ioref_write_ret);
+  ahc_prim_bshru = mk_prim2(p_bshru);
 }

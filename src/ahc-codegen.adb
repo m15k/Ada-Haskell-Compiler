@@ -955,11 +955,22 @@ package body AHC.CodeGen is
       is
          Chk : constant String := Fix_Bounds (K, Node & "->u.i");
       begin
+         if K = M_U64 then
+            --  A Word64 above 2^63 is a bignum (M139): its own test.
+            return "  if (!ahc_fits_u64(" & Node & ")) ahc_die(""FFI: "
+              & Fix_Name (K) & " " & What & " out of range"");"
+              & ASCII.LF;
+         end if;
          return "  if (" & Node & "->tag != AHC_INT"
            & (if Chk = "" then "" else " || " & Chk)
            & ") ahc_die(""FFI: " & Fix_Name (K) & " " & What
            & " out of range"");" & ASCII.LF;
       end Fix_Check;
+
+      --  The unboxed C value of a checked node at width K.
+      function Fix_Unbox (K : Fixed_Marshal; Node : String) return String
+      is (if K = M_U64 then "(uint64_t)ahc_u64_of(" & Node & ")"
+          else "(" & C_Type (K) & ")" & Node & "->u.i");
 
       procedure Emit_Foreign (FI : Positive) is
          F : Foreign_Import renames M.Foreigns (FI);
@@ -1046,8 +1057,8 @@ package body AHC.CodeGen is
                                    & Fix_Check (KF, "e" & Ix,
                                                 "argument")
                                    & "  " & C_Type (KF) & " x" & Ix
-                                   & " = (" & C_Type (KF) & ")e"
-                                   & Ix & "->u.i;" & LF);
+                                   & " = " & Fix_Unbox (KF, "e" & Ix)
+                                   & ";" & LF);
                         end;
                      when M_Unit =>
                         null;   --  rejected during desugaring
@@ -1249,8 +1260,8 @@ package body AHC.CodeGen is
                   Append (Fns, "  return r->u.p;" & LF);
                when Fixed_Marshal =>
                   Append (Fns, Fix_Check (F.CB_Res, "r", "result")
-                          & "  return (" & C_Type (F.CB_Res)
-                          & ")r->u.i;" & LF);
+                          & "  return " & Fix_Unbox (F.CB_Res, "r")
+                          & ";" & LF);
             end case;
             Append (Fns, "}" & LF);
             declare
@@ -1442,8 +1453,8 @@ package body AHC.CodeGen is
                        & "ahc_err_disarm(); return v_; }" & LF);
             when Fixed_Marshal =>
                Append (Fns, Fix_Check (F.Res, "r", "result")
-                       & "  { " & C_Type (F.Res) & " v_ = ("
-                       & C_Type (F.Res) & ")r->u.i; "
+                       & "  { " & C_Type (F.Res) & " v_ = "
+                       & Fix_Unbox (F.Res, "r") & "; "
                        & "ahc_err_disarm(); return v_; }" & LF);
          end case;
          Append (Fns, "}" & LF & LF);
@@ -1681,9 +1692,15 @@ package body AHC.CodeGen is
                      end loop;
                      if not Progress then
                         --  A cycle of aliases (`a = b; b = a`) has no
-                        --  order; emit as written, as before.
+                        --  value: each is a thunk that reports
+                        --  <<loop>> when demanded, as GHC's would
+                        --  (copying as written stored NULL).
                         for B of Rest loop
-                           Emit (B);
+                           Append (Init, "  " & Sym_Of (B.Binder)
+                                   & " = ahc_mk_missing(""<<loop>>"");"
+                                   & ASCII.LF);
+                           Emitted.Include (Var_Id (B.Binder),
+                                            Null_Unbounded_String);
                         end loop;
                         Rest.Clear;
                      end if;

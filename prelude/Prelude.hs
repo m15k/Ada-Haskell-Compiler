@@ -656,15 +656,53 @@ instance Eq IOException where
 -- integer - so every arithmetic result is Int's result NARROWED to the
 -- width by primNarrow, which is what makes them wrap like GHC's; the
 -- literal `200 :: Int8` is -56 and `read "300" :: Word8` is 44. Eq, Ord
--- and Show are wired (Int's, correct on narrowed values). The error
--- texts are GHC 9.4.8's. This block is GENERATED (one shape, eight
--- types): edit the generator's shape in the M139 plan, not one copy.
+-- and Show are wired (Int's, correct on narrowed values). Enumeration
+-- goes through Integer, since a Word64 above 2^63 is a bignum that
+-- Int's range primitives cannot see; quot/div of minBound by -1 raise
+-- Overflow like GHC's, rem/mod return 0 like GHC's. The error texts are
+-- GHC 9.4.8's. This block is GENERATED (one shape, eight types): edit
+-- the generator's shape in the M139 plan, not one copy.
 
 type Word = Word64
 
 overflowQuot_ :: Bool -> Bool -> a -> a
 overflowQuot_ isMin isNegOne r =
   if isMin && isNegOne then primThrow (primExcArith 0) else r
+
+-- Lazy enumeration for the fixed-width types: one element at a time
+-- (Int's range primitives build the whole list, and a Word64 above
+-- 2^63 is a bignum they cannot see), the stride in Integer so a step
+-- of 2^64 - 1 cannot overflow; a zero stride repeats forever, as the
+-- Report's enumFromThenTo does.
+fixedEnumFromTo_ :: (Ord a, Num a) => a -> a -> [a]
+fixedEnumFromTo_ a b =
+  if a > b then [] else go a
+  where go x = x : (if x == b then [] else go (x + 1))
+
+fixedEnumFromThenTo_ :: (Integral a) => a -> a -> a -> [a]
+fixedEnumFromThenTo_ a b c =
+  let ia = toInteger a
+      d = toInteger b - ia
+      ic = toInteger c
+      go i = if (if d >= 0 then i > ic else i < ic) then []
+             else fromInteger i : go (i + d)
+  in if d == 0 then (if ia > ic then [] else repeat a) else go ia
+
+-- Report 6.4.1: subtract x y = y - x, through the type's own Num
+-- instance (a wired binding to Int's primitive ignored it: `subtract 1
+-- (0 :: Word16)` gave -1 - the M139 review).
+subtract :: Num a => a -> a -> a
+subtract x y = y - x
+
+-- Report 6.4.2 / 6.4.3 (Prelude functions, not class methods here).
+quotRem :: Integral a => a -> a -> (a, a)
+quotRem a b = (quot a b, rem a b)
+
+divMod :: Integral a => a -> a -> (a, a)
+divMod a b = (div a b, mod a b)
+
+realToFrac :: (Real a, Fractional b) => a -> b
+realToFrac x = fromRational (toRational x)
 
 narrowInt8_ :: Int -> Int8
 narrowInt8_ x = primFixCast (primNarrow 8 1 x)
@@ -686,7 +724,7 @@ instance Bounded Int8 where
   maxBound = narrowInt8_ (127)
 
 instance Real Int8 where
-  toRational a = toRational (toInt8_ a)
+  toRational a = toRational (toInteger (toInt8_ a))
 
 instance Enum Int8 where
   toEnum i =
@@ -702,19 +740,17 @@ instance Enum Int8 where
              then error "Enum.pred{Int8}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowInt8_ [toInt8_ a .. toInt8_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowInt8_ [toInt8_ a, toInt8_ b .. toInt8_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Int8 where
   quot a b = overflowQuot_ (a == minBound) (b == narrowInt8_ (-1))
                (narrowInt8_ (quot (toInt8_ a) (toInt8_ b)))
-  rem a b = overflowQuot_ (a == minBound) (b == narrowInt8_ (-1))
-              (narrowInt8_ (rem (toInt8_ a) (toInt8_ b)))
+  rem a b = narrowInt8_ (rem (toInt8_ a) (toInt8_ b))
   div a b = overflowQuot_ (a == minBound) (b == narrowInt8_ (-1))
               (narrowInt8_ (div (toInt8_ a) (toInt8_ b)))
-  mod a b = overflowQuot_ (a == minBound) (b == narrowInt8_ (-1))
-              (narrowInt8_ (mod (toInt8_ a) (toInt8_ b)))
+  mod a b = narrowInt8_ (mod (toInt8_ a) (toInt8_ b))
   toInteger a = toInteger (toInt8_ a)
 
 instance Read Int8 where
@@ -740,7 +776,7 @@ instance Bounded Int16 where
   maxBound = narrowInt16_ (32767)
 
 instance Real Int16 where
-  toRational a = toRational (toInt16_ a)
+  toRational a = toRational (toInteger (toInt16_ a))
 
 instance Enum Int16 where
   toEnum i =
@@ -756,19 +792,17 @@ instance Enum Int16 where
              then error "Enum.pred{Int16}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowInt16_ [toInt16_ a .. toInt16_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowInt16_ [toInt16_ a, toInt16_ b .. toInt16_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Int16 where
   quot a b = overflowQuot_ (a == minBound) (b == narrowInt16_ (-1))
                (narrowInt16_ (quot (toInt16_ a) (toInt16_ b)))
-  rem a b = overflowQuot_ (a == minBound) (b == narrowInt16_ (-1))
-              (narrowInt16_ (rem (toInt16_ a) (toInt16_ b)))
+  rem a b = narrowInt16_ (rem (toInt16_ a) (toInt16_ b))
   div a b = overflowQuot_ (a == minBound) (b == narrowInt16_ (-1))
               (narrowInt16_ (div (toInt16_ a) (toInt16_ b)))
-  mod a b = overflowQuot_ (a == minBound) (b == narrowInt16_ (-1))
-              (narrowInt16_ (mod (toInt16_ a) (toInt16_ b)))
+  mod a b = narrowInt16_ (mod (toInt16_ a) (toInt16_ b))
   toInteger a = toInteger (toInt16_ a)
 
 instance Read Int16 where
@@ -794,7 +828,7 @@ instance Bounded Int32 where
   maxBound = narrowInt32_ (2147483647)
 
 instance Real Int32 where
-  toRational a = toRational (toInt32_ a)
+  toRational a = toRational (toInteger (toInt32_ a))
 
 instance Enum Int32 where
   toEnum i =
@@ -810,19 +844,17 @@ instance Enum Int32 where
              then error "Enum.pred{Int32}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowInt32_ [toInt32_ a .. toInt32_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowInt32_ [toInt32_ a, toInt32_ b .. toInt32_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Int32 where
   quot a b = overflowQuot_ (a == minBound) (b == narrowInt32_ (-1))
                (narrowInt32_ (quot (toInt32_ a) (toInt32_ b)))
-  rem a b = overflowQuot_ (a == minBound) (b == narrowInt32_ (-1))
-              (narrowInt32_ (rem (toInt32_ a) (toInt32_ b)))
+  rem a b = narrowInt32_ (rem (toInt32_ a) (toInt32_ b))
   div a b = overflowQuot_ (a == minBound) (b == narrowInt32_ (-1))
               (narrowInt32_ (div (toInt32_ a) (toInt32_ b)))
-  mod a b = overflowQuot_ (a == minBound) (b == narrowInt32_ (-1))
-              (narrowInt32_ (mod (toInt32_ a) (toInt32_ b)))
+  mod a b = narrowInt32_ (mod (toInt32_ a) (toInt32_ b))
   toInteger a = toInteger (toInt32_ a)
 
 instance Read Int32 where
@@ -848,7 +880,7 @@ instance Bounded Int64 where
   maxBound = narrowInt64_ (9223372036854775807)
 
 instance Real Int64 where
-  toRational a = toRational (toInt64_ a)
+  toRational a = toRational (toInteger (toInt64_ a))
 
 instance Enum Int64 where
   toEnum i =
@@ -864,19 +896,17 @@ instance Enum Int64 where
              then error "Enum.pred{Int64}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowInt64_ [toInt64_ a .. toInt64_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowInt64_ [toInt64_ a, toInt64_ b .. toInt64_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Int64 where
   quot a b = overflowQuot_ (a == minBound) (b == narrowInt64_ (-1))
                (narrowInt64_ (quot (toInt64_ a) (toInt64_ b)))
-  rem a b = overflowQuot_ (a == minBound) (b == narrowInt64_ (-1))
-              (narrowInt64_ (rem (toInt64_ a) (toInt64_ b)))
+  rem a b = narrowInt64_ (rem (toInt64_ a) (toInt64_ b))
   div a b = overflowQuot_ (a == minBound) (b == narrowInt64_ (-1))
               (narrowInt64_ (div (toInt64_ a) (toInt64_ b)))
-  mod a b = overflowQuot_ (a == minBound) (b == narrowInt64_ (-1))
-              (narrowInt64_ (mod (toInt64_ a) (toInt64_ b)))
+  mod a b = narrowInt64_ (mod (toInt64_ a) (toInt64_ b))
   toInteger a = toInteger (toInt64_ a)
 
 instance Read Int64 where
@@ -902,7 +932,7 @@ instance Bounded Word8 where
   maxBound = narrowWord8_ (255)
 
 instance Real Word8 where
-  toRational a = toRational (toWord8_ a)
+  toRational a = toRational (toInteger (toWord8_ a))
 
 instance Enum Word8 where
   toEnum i =
@@ -918,19 +948,17 @@ instance Enum Word8 where
              then error "Enum.pred{Word8}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowWord8_ [toWord8_ a .. toWord8_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowWord8_ [toWord8_ a, toWord8_ b .. toWord8_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Word8 where
   quot a b = overflowQuot_ (False) (b == narrowWord8_ (-1))
                (narrowWord8_ (quot (toWord8_ a) (toWord8_ b)))
-  rem a b = overflowQuot_ (False) (b == narrowWord8_ (-1))
-              (narrowWord8_ (rem (toWord8_ a) (toWord8_ b)))
+  rem a b = narrowWord8_ (rem (toWord8_ a) (toWord8_ b))
   div a b = overflowQuot_ (False) (b == narrowWord8_ (-1))
               (narrowWord8_ (div (toWord8_ a) (toWord8_ b)))
-  mod a b = overflowQuot_ (False) (b == narrowWord8_ (-1))
-              (narrowWord8_ (mod (toWord8_ a) (toWord8_ b)))
+  mod a b = narrowWord8_ (mod (toWord8_ a) (toWord8_ b))
   toInteger a = toInteger (toWord8_ a)
 
 instance Read Word8 where
@@ -956,7 +984,7 @@ instance Bounded Word16 where
   maxBound = narrowWord16_ (65535)
 
 instance Real Word16 where
-  toRational a = toRational (toWord16_ a)
+  toRational a = toRational (toInteger (toWord16_ a))
 
 instance Enum Word16 where
   toEnum i =
@@ -972,19 +1000,17 @@ instance Enum Word16 where
              then error "Enum.pred{Word16}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowWord16_ [toWord16_ a .. toWord16_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowWord16_ [toWord16_ a, toWord16_ b .. toWord16_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Word16 where
   quot a b = overflowQuot_ (False) (b == narrowWord16_ (-1))
                (narrowWord16_ (quot (toWord16_ a) (toWord16_ b)))
-  rem a b = overflowQuot_ (False) (b == narrowWord16_ (-1))
-              (narrowWord16_ (rem (toWord16_ a) (toWord16_ b)))
+  rem a b = narrowWord16_ (rem (toWord16_ a) (toWord16_ b))
   div a b = overflowQuot_ (False) (b == narrowWord16_ (-1))
               (narrowWord16_ (div (toWord16_ a) (toWord16_ b)))
-  mod a b = overflowQuot_ (False) (b == narrowWord16_ (-1))
-              (narrowWord16_ (mod (toWord16_ a) (toWord16_ b)))
+  mod a b = narrowWord16_ (mod (toWord16_ a) (toWord16_ b))
   toInteger a = toInteger (toWord16_ a)
 
 instance Read Word16 where
@@ -1010,7 +1036,7 @@ instance Bounded Word32 where
   maxBound = narrowWord32_ (4294967295)
 
 instance Real Word32 where
-  toRational a = toRational (toWord32_ a)
+  toRational a = toRational (toInteger (toWord32_ a))
 
 instance Enum Word32 where
   toEnum i =
@@ -1026,19 +1052,17 @@ instance Enum Word32 where
              then error "Enum.pred{Word32}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowWord32_ [toWord32_ a .. toWord32_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowWord32_ [toWord32_ a, toWord32_ b .. toWord32_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Word32 where
   quot a b = overflowQuot_ (False) (b == narrowWord32_ (-1))
                (narrowWord32_ (quot (toWord32_ a) (toWord32_ b)))
-  rem a b = overflowQuot_ (False) (b == narrowWord32_ (-1))
-              (narrowWord32_ (rem (toWord32_ a) (toWord32_ b)))
+  rem a b = narrowWord32_ (rem (toWord32_ a) (toWord32_ b))
   div a b = overflowQuot_ (False) (b == narrowWord32_ (-1))
               (narrowWord32_ (div (toWord32_ a) (toWord32_ b)))
-  mod a b = overflowQuot_ (False) (b == narrowWord32_ (-1))
-              (narrowWord32_ (mod (toWord32_ a) (toWord32_ b)))
+  mod a b = narrowWord32_ (mod (toWord32_ a) (toWord32_ b))
   toInteger a = toInteger (toWord32_ a)
 
 instance Read Word32 where
@@ -1064,7 +1088,7 @@ instance Bounded Word64 where
   maxBound = narrowWord64_ (18446744073709551615)
 
 instance Real Word64 where
-  toRational a = toRational (toWord64_ a)
+  toRational a = toRational (toInteger (toWord64_ a))
 
 instance Enum Word64 where
   toEnum i =
@@ -1080,19 +1104,17 @@ instance Enum Word64 where
              then error "Enum.pred{Word64}: tried to take `pred' of minBound"
              else a - 1
   enumFrom a = enumFromTo a maxBound
-  enumFromTo a b = map narrowWord64_ [toWord64_ a .. toWord64_ b]
+  enumFromTo a b = fixedEnumFromTo_ a b
   enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
-  enumFromThenTo a b c = map narrowWord64_ [toWord64_ a, toWord64_ b .. toWord64_ c]
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
 
 instance Integral Word64 where
   quot a b = overflowQuot_ (False) (b == narrowWord64_ (-1))
                (narrowWord64_ (quot (toWord64_ a) (toWord64_ b)))
-  rem a b = overflowQuot_ (False) (b == narrowWord64_ (-1))
-              (narrowWord64_ (rem (toWord64_ a) (toWord64_ b)))
+  rem a b = narrowWord64_ (rem (toWord64_ a) (toWord64_ b))
   div a b = overflowQuot_ (False) (b == narrowWord64_ (-1))
               (narrowWord64_ (div (toWord64_ a) (toWord64_ b)))
-  mod a b = overflowQuot_ (False) (b == narrowWord64_ (-1))
-              (narrowWord64_ (mod (toWord64_ a) (toWord64_ b)))
+  mod a b = narrowWord64_ (mod (toWord64_ a) (toWord64_ b))
   toInteger a = toInteger (toWord64_ a)
 
 instance Read Word64 where

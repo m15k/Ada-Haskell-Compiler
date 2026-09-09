@@ -1215,18 +1215,9 @@ package body AHC.Prelude_Core is
                                       V (Y)))));
       end;
       Bind (Env.Otherwise_V, ConE (Env.True_DC));
-      declare
-         D : constant Real_Var_Id := Fresh ("$d");
-         X : constant Real_Var_Id := Fresh ("x");
-         Y : constant Real_Var_Id := Fresh ("y");
-      begin
-         --  subtract d x y = (-) d y x; '-' is Num's second method,
-         --  but the prim works for the defaultable types directly.
-         Bind_Name ("subtract",
-           Lam (D, Lam (X, Lam (Y,
-             Ap2 (V (P_Sub), V (Y),
-                  V (X))))));
-      end;
+      --  subtract is Prelude SOURCE since M139: the wired binding
+      --  applied Int's primitive to every Num type, ignoring the
+      --  dictionary (`subtract 1 (0 :: Word16)` gave -1).
       Bind_Name ("undefined", Err ("Prelude.undefined"));
       Bind_Name ("error", V (P_Error));
       Bind_Name ("putStr", V (P_PutStr));
@@ -1298,6 +1289,8 @@ package body AHC.Prelude_Core is
          BP ("primReadIORef", "ahc_prim_ioref_read");
          BP ("primWriteIORef", "ahc_prim_ioref_write");
          BP ("primSameIORef", "ahc_prim_ioref_same");
+         BP ("primWriteIORefRet", "ahc_prim_ioref_write_ret");
+         BP ("primShiftRU", "ahc_prim_bshru");
          BP ("primAndI", "ahc_prim_band");
          BP ("primOrI", "ahc_prim_bor");
          BP ("primXorI", "ahc_prim_bxor");

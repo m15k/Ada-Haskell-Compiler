@@ -6,7 +6,9 @@ module Data.Bits
 -- before): instances at Int and the eight fixed-width types. The
 -- fixed-width instances work on Int's representation and narrow the
 -- result, so shifts wrap, complement stays in range, and popCount
--- counts the width's bits (popCount (-1 :: Int8) is 8).
+-- counts the width's bits (popCount (-1 :: Int8) is 8). The unsigned
+-- types shift right LOGICALLY (a Word64 above 2^63 has its sign bit
+-- set in Int's view); testBit beyond the width is False, as GHC's.
 
 infixl 8 `shiftL`, `shiftR`, `shift`
 infixl 7 .&.
@@ -30,11 +32,12 @@ class Eq a => Bits a where
   clearBit x i = x .&. complement (bit i)
   complementBit x i = x `xor` bit i
 
+-- A negative count is GHC's `arithmetic overflow`.
 shiftL :: Bits a => a -> Int -> a
-shiftL x i = shift x i
+shiftL x i = if i < 0 then primThrow (primExcArith 0) else shift x i
 
 shiftR :: Bits a => a -> Int -> a
-shiftR x i = shift x (negate i)
+shiftR x i = if i < 0 then primThrow (primExcArith 0) else shift x (negate i)
 
 popCount :: Bits a => a -> Int
 popCount = popCountBits
@@ -51,8 +54,9 @@ instance Bits Int where
   xor a b = primXorI a b
   complement a = primComplementI a
   shift a i = if i >= 0 then primShiftLI a i else primShiftRI a (negate i)
-  bit i = primShiftLI 1 i
-  testBit a i = primAndI (primShiftRI a i) 1 /= 0
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 64 && primAndI (primShiftRI a i) 1 /= 0
+  bit i = if i < 0 then primThrow (primExcArith 0) else primShiftLI 1 i
   popCountBits a = primPopCountI a
   bitSizeOf _ = 64
 
@@ -63,8 +67,10 @@ instance Bits Int8 where
   complement a = primFixCast (primNarrow 8 1 (primComplementI (primFixCast a))) :: Int8
   shift a i = primFixCast (primNarrow 8 1 (if i >= 0 then primShiftLI (primFixCast a) i
                                           else primShiftRI (primFixCast a) (negate i))) :: Int8
-  bit i = primFixCast (primNarrow 8 1 (primShiftLI 1 i)) :: Int8
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 8 1 (primShiftLI 1 i)) :: Int8
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 8 && primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 8 0 (primFixCast a))
   bitSizeOf _ = 8
 
@@ -75,8 +81,10 @@ instance Bits Int16 where
   complement a = primFixCast (primNarrow 16 1 (primComplementI (primFixCast a))) :: Int16
   shift a i = primFixCast (primNarrow 16 1 (if i >= 0 then primShiftLI (primFixCast a) i
                                           else primShiftRI (primFixCast a) (negate i))) :: Int16
-  bit i = primFixCast (primNarrow 16 1 (primShiftLI 1 i)) :: Int16
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 16 1 (primShiftLI 1 i)) :: Int16
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 16 && primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 16 0 (primFixCast a))
   bitSizeOf _ = 16
 
@@ -87,8 +95,10 @@ instance Bits Int32 where
   complement a = primFixCast (primNarrow 32 1 (primComplementI (primFixCast a))) :: Int32
   shift a i = primFixCast (primNarrow 32 1 (if i >= 0 then primShiftLI (primFixCast a) i
                                           else primShiftRI (primFixCast a) (negate i))) :: Int32
-  bit i = primFixCast (primNarrow 32 1 (primShiftLI 1 i)) :: Int32
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 32 1 (primShiftLI 1 i)) :: Int32
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 32 && primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 32 0 (primFixCast a))
   bitSizeOf _ = 32
 
@@ -99,8 +109,10 @@ instance Bits Int64 where
   complement a = primFixCast (primNarrow 64 1 (primComplementI (primFixCast a))) :: Int64
   shift a i = primFixCast (primNarrow 64 1 (if i >= 0 then primShiftLI (primFixCast a) i
                                           else primShiftRI (primFixCast a) (negate i))) :: Int64
-  bit i = primFixCast (primNarrow 64 1 (primShiftLI 1 i)) :: Int64
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 64 1 (primShiftLI 1 i)) :: Int64
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 64 && primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 64 0 (primFixCast a))
   bitSizeOf _ = 64
 
@@ -110,9 +122,11 @@ instance Bits Word8 where
   xor a b = primFixCast (primNarrow 8 0 (primXorI (primFixCast a) (primFixCast b))) :: Word8
   complement a = primFixCast (primNarrow 8 0 (primComplementI (primFixCast a))) :: Word8
   shift a i = primFixCast (primNarrow 8 0 (if i >= 0 then primShiftLI (primFixCast a) i
-                                          else primShiftRI (primFixCast a) (negate i))) :: Word8
-  bit i = primFixCast (primNarrow 8 0 (primShiftLI 1 i)) :: Word8
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+                                          else primShiftRU (primFixCast a) (negate i))) :: Word8
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 8 0 (primShiftLI 1 i)) :: Word8
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 8 && primAndI (primShiftRU (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 8 0 (primFixCast a))
   bitSizeOf _ = 8
 
@@ -122,9 +136,11 @@ instance Bits Word16 where
   xor a b = primFixCast (primNarrow 16 0 (primXorI (primFixCast a) (primFixCast b))) :: Word16
   complement a = primFixCast (primNarrow 16 0 (primComplementI (primFixCast a))) :: Word16
   shift a i = primFixCast (primNarrow 16 0 (if i >= 0 then primShiftLI (primFixCast a) i
-                                          else primShiftRI (primFixCast a) (negate i))) :: Word16
-  bit i = primFixCast (primNarrow 16 0 (primShiftLI 1 i)) :: Word16
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+                                          else primShiftRU (primFixCast a) (negate i))) :: Word16
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 16 0 (primShiftLI 1 i)) :: Word16
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 16 && primAndI (primShiftRU (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 16 0 (primFixCast a))
   bitSizeOf _ = 16
 
@@ -134,9 +150,11 @@ instance Bits Word32 where
   xor a b = primFixCast (primNarrow 32 0 (primXorI (primFixCast a) (primFixCast b))) :: Word32
   complement a = primFixCast (primNarrow 32 0 (primComplementI (primFixCast a))) :: Word32
   shift a i = primFixCast (primNarrow 32 0 (if i >= 0 then primShiftLI (primFixCast a) i
-                                          else primShiftRI (primFixCast a) (negate i))) :: Word32
-  bit i = primFixCast (primNarrow 32 0 (primShiftLI 1 i)) :: Word32
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+                                          else primShiftRU (primFixCast a) (negate i))) :: Word32
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 32 0 (primShiftLI 1 i)) :: Word32
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 32 && primAndI (primShiftRU (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 32 0 (primFixCast a))
   bitSizeOf _ = 32
 
@@ -146,8 +164,10 @@ instance Bits Word64 where
   xor a b = primFixCast (primNarrow 64 0 (primXorI (primFixCast a) (primFixCast b))) :: Word64
   complement a = primFixCast (primNarrow 64 0 (primComplementI (primFixCast a))) :: Word64
   shift a i = primFixCast (primNarrow 64 0 (if i >= 0 then primShiftLI (primFixCast a) i
-                                          else primShiftRI (primFixCast a) (negate i))) :: Word64
-  bit i = primFixCast (primNarrow 64 0 (primShiftLI 1 i)) :: Word64
-  testBit a i = primAndI (primShiftRI (primFixCast a :: Int) i) 1 /= 0
+                                          else primShiftRU (primFixCast a) (negate i))) :: Word64
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 64 0 (primShiftLI 1 i)) :: Word64
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 64 && primAndI (primShiftRU (primFixCast a :: Int) i) 1 /= 0
   popCountBits a = primPopCountI (primNarrow 64 0 (primFixCast a))
   bitSizeOf _ = 64

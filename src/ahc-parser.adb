@@ -1,3 +1,4 @@
+with AHC.Builtins;
 with AHC.Layout;
 
 package body AHC.Parser is
@@ -130,7 +131,21 @@ package body AHC.Parser is
          return Closed;
       end Try_Layout_Close;
 
-      procedure Expect (K : Token_Kind; What : String) is
+      --  Tuples wider than Builtins.Max_Tuple have no wired constructor;
+   --  say so here, once, instead of crashing later (the M139 review
+   --  found an 8-tuple dying with CONSTRAINT_ERROR in the desugarer).
+   procedure Check_Tuple_Width
+     (N : Natural; Span : Diagnostics.Source_Span) is
+   begin
+      if N > Builtins.Max_Tuple then
+         Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
+                  "tuples of more than"
+                  & Integer'Image (Builtins.Max_Tuple)
+                  & " components are not supported");
+      end if;
+   end Check_Tuple_Width;
+
+   procedure Expect (K : Token_Kind; What : String) is
       begin
          if Tok.Kind = K then
             Advance;
@@ -350,6 +365,7 @@ package body AHC.Parser is
                         Items.Append (Parse_Type);
                      end loop;
                      Expect (Right_Paren, "')'");
+                     Check_Tuple_Width (Natural (Items.Length), Span);
                      return Arena.Add
                        (Type_Node'(Kind => Tuple_T, Span => Span,
                                    Items => Items));
@@ -634,6 +650,7 @@ package body AHC.Parser is
                         Items.Append (Parse_Pat);
                      end loop;
                      Expect (Right_Paren, "')'");
+                     Check_Tuple_Width (Natural (Items.Length), Span);
                      return Arena.Add
                        (Pat_Node'(Kind => Tuple_P, Span => Span,
                                   Items => Items));
@@ -1113,6 +1130,7 @@ package body AHC.Parser is
                      Items.Append (Parse_Expr);
                   end loop;
                   Expect (Right_Paren, "')'");
+                  Check_Tuple_Width (Natural (Items.Length), Span);
                   return Arena.Add
                     (Expr_Node'(Kind => Tuple_E, Span => Span,
                                 Items => Items));

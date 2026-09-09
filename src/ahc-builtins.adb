@@ -1057,10 +1057,7 @@ package body AHC.Builtins is
               ("print",
                Poly1 (A, FN (TV (A), IO_T (Unit_T)),
                       Ctx1 (Real_Class_Id (Env.Show_Cl), TV (A))));
-            Ignore := Def_Global
-              ("subtract",
-               Poly1 (A, FN (TV (A), TV (A), TV (A)),
-                      Ctx1 (Real_Class_Id (Env.Num_Cl), TV (A))));
+            
             --  quot/rem/div/mod are real Integral methods now.
             Ignore := Def_Global
               ("length", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
@@ -1266,6 +1263,12 @@ package body AHC.Builtins is
                   Ignore := Def_Global
                     ("primSameIORef",
                      Poly1 (A2, FN (Ref_A, FN (Ref_A, TC (Env.Bool_TC)))));
+                  Ignore := Def_Global
+                    ("primWriteIORefRet",
+                     Poly2 (A2, B, FN (Ref_A, FN (TV (A2),
+                                                   FN (TV (B), IO_T (TV (B)))))));
+                  Ignore := Def_Global
+                    ("primShiftRU", Mono (FN (Int_T, FN (Int_T, Int_T))));
                end;
                Ignore := Def_Global ("primAndI", Mono (III));
                Ignore := Def_Global ("primOrI", Mono (III));

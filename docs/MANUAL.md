@@ -2363,15 +2363,20 @@ representation, with Int's dictionaries borrowed wholesale — so
 of an Int or bignum, masked and sign- or zero-extended), which is
 what makes them wrap like GHC's; the instances — Num, Real, Enum
 with GHC's error texts, Integral raising `ArithException Overflow`
-for `quot minBound (-1)`, Bounded, Read, Ix, Bits — are one
-generated block of Prelude source, eight copies of one shape.
+for `quot minBound (-1)` (and 0 for `rem`/`mod`, as GHC), Bounded,
+Read — are one generated block of Prelude source, eight copies of one
+shape; the Ix and Bits instances live in their modules, and
+enumeration goes through Integer because a `Word64` above 2⁶³ is a
+bignum Int's range primitives cannot see.
 `Data.Bits` became a class in the same move. `Data.IORef` is a
 one-field constructor node the runtime mutates in place behind the
 own collector's write barrier (a young value stored into an old
 cell is exactly a thunk update's hazard), and the library is four
-primitives plus ordinary Haskell; under the deterministic scheduler
-a read or write is never a scheduling point, so the atomic variants
-are the plain ones. Writing the block flushed out a codegen
+primitives plus ordinary Haskell. Every *bind* is a scheduling
+point, so a modification is atomic exactly when no bind separates
+its read from its write: `modifyIORef'` has none, and the atomic
+variants write and return in one primitive action (the review found
+the `writeIORef r y >> return b` version losing updates). Writing the block flushed out a codegen
 initialization-order bug: a Prelude binding that is a bare alias of
 a primitive (`toInt8_ = primFixCast`) was copied before the
 primitive globals were assigned and became NULL — no Prelude binding

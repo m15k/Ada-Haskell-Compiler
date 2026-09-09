@@ -14,9 +14,11 @@ GHC's: `200 :: Int8` is -56, `read "300" :: Word8` is 44, `negate 1 ::
 Word8` is 255. The instances - Num, Real, Enum (GHC's texts:
 `Enum.toEnum{Word8}: tag (300) is outside of bounds (0,255)`,
 `Enum.succ{Int8}: tried to take \`succ' of maxBound`), Integral
-(`quot`/`div` of minBound by -1 raise `ArithException Overflow`),
-Bounded, Read, Ix, Bits - are one generated block of Prelude source,
-eight copies of one shape; `type Word = Word64`; `Data.Int` and
+(`quot`/`div` of minBound by -1 raise `ArithException Overflow`,
+`rem`/`mod` return 0, as GHC's),
+Bounded, Read - are one generated block of Prelude source, eight copies
+of one shape (Ix's live in Data.Ix, Bits' in Data.Bits); `type Word =
+Word64`; `quotRem`/`divMod`/`realToFrac` join the Prelude; `Data.Int` and
 `Data.Word` exist as facades for portable imports. `Data.Bits` is a
 CLASS now (`class Eq a => Bits a`, instances at Int and the eight
 types; popCount counts the width's bits, shifts wrap, complement stays
@@ -24,8 +26,9 @@ in range) where it was monomorphic at Int. `Data.IORef` is base's
 surface (newIORef, readIORef, writeIORef, modifyIORef, modifyIORef',
 atomicModifyIORef, atomicModifyIORef', atomicWriteIORef, Eq) over a
 one-field node the runtime mutates in place behind the own collector's
-write barrier; the atomic variants are the plain ones under the
-deterministic scheduler. Three GHC-oracled conformance programs
+write barrier; the atomic variants do their write and return in ONE
+primitive action, because every bind is a scheduling point. Three
+GHC-oracled conformance programs
 (lib_data_int_word, lib_data_bits, lib_data_ioref) and an exec test of
 an IORef shared by green tasks pin it. Writing the block found a
 CODEGEN bug: a Prelude binding that is a bare alias of a primitive
@@ -35,7 +38,52 @@ and became NULL - a segfault on `100 + 100 :: Int8`; no Prelude
 binding had ever aliased a primitive. A unit's init now assigns
 non-alias globals first and same-unit aliases after their targets.
 Found in passing, not fixed: the wired `Rational` that `toRational`
-returns has no Show/Eq/Num instance (EXCLUSIONS).
+returns has no Show/Eq/Num instance, and `toRational` has no runtime at
+Int or Integer (EXCLUSIONS).
+
+**M139 review - three reviewers, fourteen defects fixed**, all
+post-green, on paths the three conformance programs did not walk.
+Runtime/GC: (1) the IORef write barrier was applied to the cell NODE
+while the word that changed lives in its separately allocated fields
+array - the own collector re-traced an already-marked pointer and lost
+the young value (verified with the paranoid verifier); the barrier is
+on the fields array now, as a channel's is on its tail cell. Data.Bits:
+(2) the bit primitives read a bignum-represented `Word64` (any value
+above 2^63) as garbage - `popCount maxBound` was 2; they work on the
+value's low 64 bits, two's complement, for Int and bignum alike; (3)
+shift counts of 64 or more were C-undefined; they are 0 (or the sign
+fill) as GHC defines them, and the unsigned types shift right
+logically; (4) `testBit` beyond the width read the sign extension
+(`testBit (-1 :: Int8) 20` was True); (5) negative shift counts raise
+`arithmetic overflow` like GHC's. Enum: (6) the fixed-width ranges
+delegated to Int's range primitives, which build the whole list
+eagerly and cannot see a bignum - `take 3 [minBound ..] :: [Int64]`
+hung and `[maxBound - 1 .. maxBound] :: [Word64]` was wrong; they are
+lazy now, one element at a time, with the stride in Integer so
+`[minBound, maxBound ..] :: [Int64]` cannot overflow. Integral: (7)
+`rem`/`mod` of minBound by -1 raised where GHC returns 0. Prelude: (8)
+`subtract` was a wired binding to Int's primitive that ignored the
+dictionary - `subtract 1 (0 :: Word16)` was -1 for every Num type -
+it is `subtract x y = y - x` in source; (9) `quotRem`, `divMod`,
+`realToFrac` were missing. IORef: (10) `atomicModifyIORef`/
+`atomicModifyIORef'` lost updates between two tasks: their
+`writeIORef r y >> return b` put a bind - a scheduling point - between
+the read and the write; the write and the return are one primitive
+action now (exec test ioref_atomic). FFI: (11) a `Word64` above 2^63 -
+a bignum - died "argument out of range" at every unboxing site and in
+`pokeWord64`; unboxing accepts it (exec test ffi_word64). Data.Ix:
+(12) `index` never range-checked, at the eight new types or at the
+pre-existing Int/Char; it does, with GHC's texts. Compiler: (13) an
+8-tuple crashed the compiler with CONSTRAINT_ERROR in the desugarer;
+the parser reports "tuples of more than 7 components are not
+supported"; (14) a top-level alias cycle (`p = q; q = p`) copied NULL
+into both globals and segfaulted with the program's output lost; each
+is a thunk that reports `<<loop>>` when demanded, as GHC's. Recorded,
+not fixed: `fromEnum` of a `Word64` above Int's range yields the
+bignum where GHC raises; `atomicModifyIORef'` whose new value raises
+leaves the old value where GHC's ref holds the raising thunk; `reads`
+does not lex `0x`/`0o` literals or `- 5`; `Data.Array` is Int-indexed
+only; there is no `Ix (a, b)`.
 
 ## v1.11 (2026-09-08)
 

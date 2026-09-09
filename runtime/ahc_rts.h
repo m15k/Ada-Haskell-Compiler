@@ -105,6 +105,9 @@ void ahc_callback_landing(void) __attribute__((noreturn));
    unwinds to the nearest catch frame, else to the armed entry frame
    with the rendered text in ahc_last_error(). */
 void ahc_throw(AhcNode *exc) __attribute__((noreturn));
+/* Word64 unboxing at the FFI boundary (M139). */
+int ahc_fits_u64(AhcNode *e);
+unsigned long ahc_u64_of(AhcNode *e);
 
 /* Wired primitives (globals initialized by ahc_rts_init). */
 extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
@@ -193,7 +196,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
   *ahc_prim_fail_io,
   *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
-  *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same;
+  *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
+  *ahc_prim_ioref_write_ret, *ahc_prim_bshru;
 
 void ahc_rts_init(void);
 
