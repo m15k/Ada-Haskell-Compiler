@@ -2383,6 +2383,23 @@ primitive globals were assigned and became NULL — no Prelude binding
 had ever aliased a primitive — so a unit's init now assigns
 non-alias globals first and same-unit aliases after their targets.
 
+`Network.Socket` (v1.13, M140) is the module the httpd dogfood
+should have had from the start: six runtime primitives — listen,
+accept, connect, recv, send, close — own the socket constants and the
+`sockaddr` layout, so the example that used to poke Darwin's
+`sockaddr_in` byte by byte through the FFI carries nothing
+platform-specific, and the httpd harness runs on Linux CI. Every fd
+the runtime hands out is nonblocking; "would block" comes back as a
+value (-1, or `Nothing` from `recv`) and the library parks the green
+thread on the fd with M127's `waitRead`/`waitWrite`, so an idle
+server still costs nothing; any other failure raises an `IOError`
+whose type comes from errno, exactly as the file operations do.
+Payloads are `Text` — the packed byte type — which makes this a
+text-protocol socket: invalid UTF-8 on the wire normalises to U+FFFD.
+`AHC_SOCKET_DEBUG=1` traces every call with its result and errno,
+which is how the arm64 inter-connection delivery gap (examples/httpd/
+README.md) is to be characterised on the runner that shows it.
+
 `Data.Text` is the one library module backed by a dedicated runtime
 representation rather than by ordinary Haskell — the packed
 `AHC_BYTES` slice of chapter 14 — and the one whose *type* name is

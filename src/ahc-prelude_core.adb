@@ -1291,6 +1291,12 @@ package body AHC.Prelude_Core is
          BP ("primSameIORef", "ahc_prim_ioref_same");
          BP ("primWriteIORefRet", "ahc_prim_ioref_write_ret");
          BP ("primShiftRU", "ahc_prim_bshru");
+         BP ("primSockListen", "ahc_prim_sock_listen");
+         BP ("primSockAccept", "ahc_prim_sock_accept");
+         BP ("primSockConnect", "ahc_prim_sock_connect");
+         BP ("primSockRecv", "ahc_prim_sock_recv");
+         BP ("primSockSend", "ahc_prim_sock_send");
+         BP ("primSockClose", "ahc_prim_sock_close");
          BP ("primAndI", "ahc_prim_band");
          BP ("primOrI", "ahc_prim_bor");
          BP ("primXorI", "ahc_prim_bxor");

@@ -30,14 +30,11 @@ set -u
 cd "$(dirname "$0")/.."
 [ -x ./bin/ahc ] || { echo "build first: alr build --validation" >&2; exit 2; }
 
-# ahttpd hard-codes Darwin's SOL_SOCKET/SO_REUSEADDR/O_NONBLOCK and
-# the sockaddr_in sin_len byte (examples/httpd/README.md says so).
-# Porting the example is its own piece of work; until then this
-# harness is honest about where it applies.
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "skip ahttpd harness: the example's socket constants are Darwin's"
-  exit 0
-fi
+# Since M140 ahttpd runs over Network.Socket (the runtime owns the
+# constants), so this harness applies on every platform. The server
+# runs with AHC_SOCKET_DEBUG=1: its stderr traces every socket call,
+# and the concurrent-handlers check dumps that trace when it fails -
+# the arm64 delivery gap's evidence.
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"; kill $spid 2>/dev/null' EXIT
 fail=0
@@ -53,7 +50,7 @@ warn()  { echo "WARN $1"; }
 # A port that is free right now; retry a few candidates.
 port=""
 for cand in 18731 18747 18763 18779; do
-  "$tmp/ahttpd" "$cand" > "$tmp/log" 2>&1 &
+  AHC_SOCKET_DEBUG=1 "$tmp/ahttpd" "$cand" > "$tmp/log" 2> "$tmp/trace" &
   spid=$!
   ok=""
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -118,8 +115,10 @@ elif [ "$arch" = "arm64" ]; then
   #  other ahttpd check stays fatal everywhere. See
   #  examples/httpd/README.md ("Known limitation").
   warn "concurrent handlers: B served+logged but not delivered on arm64 - known issue (B=[$b] rc=${b_rc:-?})"
+  echo "--- server socket trace (AHC_SOCKET_DEBUG) ---"; cat "$tmp/trace"; echo "--- end trace ---"
 else
   flunk "concurrent handlers (B=[$b] rc=${b_rc:-?} curl=[$(cat "$tmp/b.err" 2>/dev/null)])"
+  echo "--- server socket trace (AHC_SOCKET_DEBUG) ---"; cat "$tmp/trace"; echo "--- end trace ---"
 fi
 
 # 6. quit is a channel signal; the response still says bye

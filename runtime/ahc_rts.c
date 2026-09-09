@@ -30,6 +30,10 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <math.h>
 #include <limits.h>
 #include <string.h>
@@ -3384,6 +3388,174 @@ static AhcNode *p_ioref_write_ret(AhcNode **a) {
   return ahc_mk_fun(io_ioref_write_ret, e);
 }
 
+/* ----- sockets (Network.Socket, M140) ------------------------------
+   The constants and the sockaddr layout live HERE, so the library and
+   the programs over it carry nothing platform-specific (ahttpd used to
+   hard-code Darwin's). Every fd the runtime hands out is O_NONBLOCK;
+   "would block" is reported as a value (-1 / Nothing) and the library
+   parks on the fd with M127's waitRead/waitWrite. Any other failure is
+   an IOError with the errno-derived type. AHC_SOCKET_DEBUG=1 traces
+   each call's result and errno to stderr. */
+static const uint8_t *text_bytes(AhcNode *w);            /* fwd: Text */
+static AhcNode *text_from_bytes_norm(const uint8_t *p, size_t len);
+static int sock_debug = -1;
+static void sock_trace(const char *what, long fd, long r, int e) {
+  if (sock_debug < 0) sock_debug = getenv("AHC_SOCKET_DEBUG") != NULL;
+  if (sock_debug)
+    fprintf(stderr, "[sock] %s fd=%ld -> %ld errno=%d %s\n", what, fd, r, e,
+            r < 0 ? strerror(e) : "");
+}
+static void sock_throw(const char *loc, int e) {
+  exc_throw_io(ioe_type_of_errno(e), loc, strerror(e), NULL);
+}
+static int sock_nonblock(int fd) {
+  int fl = fcntl(fd, F_GETFL, 0);
+  return fl < 0 ? -1 : fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static AhcNode *io_sock_listen(AhcNode **env, AhcNode *w) {
+  long port = ahc_eval(env[0])->u.i, backlog = ahc_eval(env[1])->u.i;
+  struct sockaddr_in sa;
+  int fd, one = 1, e;
+  (void)w;
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { e = errno; sock_trace("socket", -1, -1, e); sock_throw("listenOn", e); }
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+  memset(&sa, 0, sizeof sa);
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((unsigned short)port);
+  sa.sin_addr.s_addr = htonl(INADDR_ANY);
+  if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0
+      || listen(fd, (int)backlog) < 0 || sock_nonblock(fd) < 0) {
+    e = errno; sock_trace("bind/listen", fd, -1, e); close(fd);
+    sock_throw("listenOn", e);
+  }
+  sock_trace("listen", fd, fd, 0);
+  return ahc_mk_int(fd);
+}
+static AhcNode *p_sock_listen(AhcNode *port, AhcNode *backlog) {
+  AhcNode **e = ahc_env(2);
+  e[0] = port; e[1] = backlog;
+  return ahc_mk_fun(io_sock_listen, e);
+}
+
+static AhcNode *io_sock_accept(AhcNode **env, AhcNode *w) {
+  long lfd = ahc_eval(env[0])->u.i;
+  int fd, e;
+  (void)w;
+  fd = accept((int)lfd, NULL, NULL);
+  if (fd < 0) {
+    e = errno;
+    sock_trace("accept", lfd, -1, e);
+    if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) return ahc_mk_int(-1);
+    sock_throw("accept", e);
+  }
+  if (sock_nonblock(fd) < 0) { e = errno; close(fd); sock_throw("accept", e); }
+  sock_trace("accept", lfd, fd, 0);
+  return ahc_mk_int(fd);
+}
+static AhcNode *p_sock_accept(AhcNode *lfd) {
+  AhcNode **e = ahc_env(1);
+  e[0] = lfd;
+  return ahc_mk_fun(io_sock_accept, e);
+}
+
+static AhcNode *io_sock_connect(AhcNode **env, AhcNode *w) {
+  AhcNode *host = ahc_eval(env[0]);
+  long port = ahc_eval(env[1])->u.i;
+  struct sockaddr_in sa;
+  char hbuf[64];
+  int fd, e;
+  size_t hl = host->u.bytes.len < sizeof hbuf - 1 ? (size_t)host->u.bytes.len
+                                                  : sizeof hbuf - 1;
+  (void)w;
+  memcpy(hbuf, text_bytes(host), hl);
+  hbuf[hl] = 0;
+  memset(&sa, 0, sizeof sa);
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((unsigned short)port);
+  if (inet_pton(AF_INET, hbuf, &sa.sin_addr) != 1)
+    exc_throw_io(IOE_INVALID_ARGUMENT, "connectTo",
+                 "numeric IPv4 address expected", NULL);
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { e = errno; sock_throw("connectTo", e); }
+  if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0
+      || sock_nonblock(fd) < 0) {
+    e = errno; sock_trace("connect", fd, -1, e); close(fd);
+    sock_throw("connectTo", e);
+  }
+  sock_trace("connect", fd, fd, 0);
+  return ahc_mk_int(fd);
+}
+static AhcNode *p_sock_connect(AhcNode *host, AhcNode *port) {
+  AhcNode **e = ahc_env(2);
+  e[0] = host; e[1] = port;
+  return ahc_mk_fun(io_sock_connect, e);
+}
+
+static AhcNode *io_sock_recv(AhcNode **env, AhcNode *w) {
+  long fd = ahc_eval(env[0])->u.i, max = ahc_eval(env[1])->u.i;
+  char *buf;
+  ssize_t n;
+  int e;
+  AhcNode *t;
+  (void)w;
+  if (max < 1) max = 1;
+  if (max > (1 << 20)) max = 1 << 20;
+  buf = (char *)malloc((size_t)max);
+  if (!buf) ahc_die("out of memory");
+  n = read((int)fd, buf, (size_t)max);
+  e = errno;
+  sock_trace("recv", fd, (long)n, n < 0 ? e : 0);
+  if (n < 0) {
+    free(buf);
+    if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) return mk_nothing();
+    sock_throw("recv", e);
+  }
+  t = text_from_bytes_norm((const uint8_t *)buf, (size_t)n);
+  free(buf);
+  return mk_just(t);
+}
+static AhcNode *p_sock_recv(AhcNode *fd, AhcNode *max) {
+  AhcNode **e = ahc_env(2);
+  e[0] = fd; e[1] = max;
+  return ahc_mk_fun(io_sock_recv, e);
+}
+
+static AhcNode *io_sock_send(AhcNode **env, AhcNode *w) {
+  long fd = ahc_eval(env[0])->u.i;
+  AhcNode *t = ahc_eval(env[1]);
+  ssize_t n;
+  int e;
+  (void)w;
+  if (t->u.bytes.len == 0) return ahc_mk_int(0);
+  n = write((int)fd, text_bytes(t), (size_t)t->u.bytes.len);
+  e = errno;
+  sock_trace("send", fd, (long)n, n < 0 ? e : 0);
+  if (n < 0) {
+    if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) return ahc_mk_int(-1);
+    sock_throw("send", e);
+  }
+  return ahc_mk_int((long)n);
+}
+static AhcNode *p_sock_send(AhcNode *fd, AhcNode *t) {
+  AhcNode **e = ahc_env(2);
+  e[0] = fd; e[1] = t;
+  return ahc_mk_fun(io_sock_send, e);
+}
+
+static AhcNode *io_sock_close(AhcNode **env, AhcNode *w) {
+  long fd = ahc_eval(env[0])->u.i;
+  (void)w;
+  sock_trace("close", fd, close((int)fd), errno);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_sock_close(AhcNode *fd) {
+  AhcNode **e = ahc_env(1);
+  e[0] = fd;
+  return ahc_mk_fun(io_sock_close, e);
+}
+
 /* IO's `fail s` = ioError (userError s) (Report 7.1): the description
    is the Haskell String itself, unforced, exactly as userError's. */
 static AhcNode *io_fail(AhcNode **env, AhcNode *w) {
@@ -6496,7 +6668,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_fail_io,
   *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
   *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
-  *ahc_prim_ioref_write_ret, *ahc_prim_bshru;
+  *ahc_prim_ioref_write_ret, *ahc_prim_bshru,
+  *ahc_prim_sock_listen, *ahc_prim_sock_accept, *ahc_prim_sock_connect,
+  *ahc_prim_sock_recv, *ahc_prim_sock_send, *ahc_prim_sock_close;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -6747,4 +6921,10 @@ void ahc_rts_init(void) {
   ahc_prim_ioref_same = mk_prim2(p_ioref_same);
   ahc_prim_ioref_write_ret = ahc_mk_primn(3, p_ioref_write_ret);
   ahc_prim_bshru = mk_prim2(p_bshru);
+  ahc_prim_sock_listen = mk_prim2(p_sock_listen);
+  ahc_prim_sock_accept = mk_prim1(p_sock_accept);
+  ahc_prim_sock_connect = mk_prim2(p_sock_connect);
+  ahc_prim_sock_recv = mk_prim2(p_sock_recv);
+  ahc_prim_sock_send = mk_prim2(p_sock_send);
+  ahc_prim_sock_close = mk_prim1(p_sock_close);
 }

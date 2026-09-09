@@ -106,6 +106,9 @@ jobs:
 
       - name: FFI exports (C main against an AHC library)
         run: scripts/run_export.sh
+      - name: ahttpd (Network.Socket, portable since M140)
+        timeout-minutes: 6
+        run: scripts/run_httpd.sh
 
       - name: Fuzz (50 seeds)
         run: scripts/run_fuzz.sh 50 1
@@ -159,7 +162,7 @@ jobs:
       - name: Main stack (deep chains + clean overflow)
         run: scripts/run_stack.sh
 
-      - name: ahttpd (Darwin-only socket constants)
+      - name: ahttpd (the arm64 inter-connection probe; trace dumped on failure)
         # Bounded: this step hung for the job's whole hour on its
         # first arm64 macOS run. The harness now times out its own
         # client calls; this is the backstop.

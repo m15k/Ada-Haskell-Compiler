@@ -394,7 +394,9 @@ Control.Exception (catchable `IOError`s shaped exactly like GHC's,
 `bracket`/`finally` over a closed `SomeException` — see
 docs/exceptions-design-note.md), Data.Int / Data.Word (wrapping
 `Int8..Word64` with their instances, `Word` = `Word64`), Data.IORef,
-Numeric (showHex and
+Network.Socket (TCP over IPv4 with `Text` payloads; nonblocking
+underneath, parking on the scheduler; the runtime owns the constants,
+so ahttpd carries none), Numeric (showHex and
 friends), Data.Bits as a class over Int and the fixed-width types, Data.Ix as
 an ordinary source class,
 Data.Map and Data.Set (a weight-balanced search tree matching the

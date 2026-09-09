@@ -197,7 +197,9 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_fail_io,
   *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
   *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
-  *ahc_prim_ioref_write_ret, *ahc_prim_bshru;
+  *ahc_prim_ioref_write_ret, *ahc_prim_bshru,
+  *ahc_prim_sock_listen, *ahc_prim_sock_accept, *ahc_prim_sock_connect,
+  *ahc_prim_sock_recv, *ahc_prim_sock_send, *ahc_prim_sock_close;
 
 void ahc_rts_init(void);
 

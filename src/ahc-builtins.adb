@@ -1269,6 +1269,27 @@ package body AHC.Builtins is
                                                    FN (TV (B), IO_T (TV (B)))))));
                   Ignore := Def_Global
                     ("primShiftRU", Mono (FN (Int_T, FN (Int_T, Int_T))));
+                  --  Sockets (Network.Socket, M140): fds as Int, payloads
+                  --  as Text; would-block is a value (-1 / Nothing).
+                  declare
+                     Text_T2 : constant Real_Type_Id := TC (Env.Text_TC);
+                     MText   : constant Real_Type_Id :=
+                       AP (TC (Env.Maybe_TC), Text_T2);
+                     Unit_T  : constant Real_Type_Id := TC (Env.Unit_TC);
+                  begin
+                     Ignore := Def_Global
+                       ("primSockListen", Mono (FN (Int_T, FN (Int_T, IO_T (Int_T)))));
+                     Ignore := Def_Global
+                       ("primSockAccept", Mono (FN (Int_T, IO_T (Int_T))));
+                     Ignore := Def_Global
+                       ("primSockConnect", Mono (FN (Text_T2, FN (Int_T, IO_T (Int_T)))));
+                     Ignore := Def_Global
+                       ("primSockRecv", Mono (FN (Int_T, FN (Int_T, IO_T (MText)))));
+                     Ignore := Def_Global
+                       ("primSockSend", Mono (FN (Int_T, FN (Text_T2, IO_T (Int_T)))));
+                     Ignore := Def_Global
+                       ("primSockClose", Mono (FN (Int_T, IO_T (Unit_T))));
+                  end;
                end;
                Ignore := Def_Global ("primAndI", Mono (III));
                Ignore := Def_Global ("primOrI", Mono (III));

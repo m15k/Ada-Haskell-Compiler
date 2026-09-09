@@ -52,11 +52,12 @@ shutdown; the harness never needs `kill`).
   entire client session — headers included — is one golden file.
 
 Like `examples/cal`, this example is AHC-only by construction: the
-refinement surface is not GHC syntax, and direct `String`
-marshalling is an AHC convenience beyond GHC's FFI. Its goldens are
-AHC's own output. The socket constants are Darwin's
-(`SOL_SOCKET`/`SO_REUSEADDR`/`O_NONBLOCK` and the `sin_len` byte
-differ on Linux; the source notes the values).
+refinement surface is not GHC syntax. Its goldens are AHC's own
+output. Since M140 the server runs over `Network.Socket` - the
+runtime owns the constants and the `sockaddr` layout, so the example
+carries nothing platform-specific and the harness runs on Linux CI
+too (the first version poked Darwin's `sockaddr_in` byte by byte
+through the FFI, and was honest about being Darwin-only).
 
 ## The findings — surfaced, then closed
 

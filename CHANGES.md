@@ -1,5 +1,26 @@
 # AHC Changelog
 
+## Unreleased
+
+**M140 - portable sockets.** A `Network.Socket` module - `Socket`
+(abstract), `listenOn`, `accept`, `connectTo` (numeric IPv4), `recv`,
+`send`, `sendAll`, `close`, `socketFd` - over six runtime primitives
+that own the constants and the `sockaddr` layout, so a program over it
+carries nothing platform-specific. Every socket is nonblocking; a call
+that would block parks the green thread on the fd (M127) and the
+library retries; any other failure is an `IOError` with the
+errno-derived type (M137). Payloads are `Text`, the packed byte type,
+so invalid UTF-8 on the wire normalises to U+FFFD - a text-protocol
+socket, not a byte pipe (EXCLUSIONS). `AHC_SOCKET_DEBUG=1` traces every
+call with its result and errno to stderr. ahttpd is rewritten over the
+module - no `foreign import`, no Darwin constants - and
+`scripts/run_httpd.sh` drops its Darwin-only skip, runs the server
+traced, dumps the trace when the concurrent-handlers check fails, and
+runs in the ubuntu CI job as well as the macOS one: the arm64
+inter-connection delivery gap finally gets evidence on the runner that
+shows it. A loopback echo test (server and client as green tasks in
+one program, a golden transcript) pins the module.
+
 ## v1.12 (2026-09-08)
 
 **M139 - Data.Int, Data.Word, Data.Bits, Data.IORef.** The
