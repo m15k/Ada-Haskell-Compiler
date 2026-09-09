@@ -1,5 +1,42 @@
 # AHC Changelog
 
+## Unreleased
+
+**M139 - Data.Int, Data.Word, Data.Bits, Data.IORef.** The
+fixed-width types `Int8..Int64`/`Word8..Word64` had existed since the
+FFI milestone as wired names sharing Int's exact, promoting
+representation with Int's dictionaries borrowed wholesale - so
+`200 :: Int8` was 200. Now every arithmetic result is Int's result
+NARROWED to the width by one runtime primitive (`primNarrow`: the low
+64 bits of an Int or bignum, masked, sign- or zero-extended; a Word64
+above 2^63 is a positive bignum), which is what makes them wrap like
+GHC's: `200 :: Int8` is -56, `read "300" :: Word8` is 44, `negate 1 ::
+Word8` is 255. The instances - Num, Real, Enum (GHC's texts:
+`Enum.toEnum{Word8}: tag (300) is outside of bounds (0,255)`,
+`Enum.succ{Int8}: tried to take \`succ' of maxBound`), Integral
+(`quot`/`div` of minBound by -1 raise `ArithException Overflow`),
+Bounded, Read, Ix, Bits - are one generated block of Prelude source,
+eight copies of one shape; `type Word = Word64`; `Data.Int` and
+`Data.Word` exist as facades for portable imports. `Data.Bits` is a
+CLASS now (`class Eq a => Bits a`, instances at Int and the eight
+types; popCount counts the width's bits, shifts wrap, complement stays
+in range) where it was monomorphic at Int. `Data.IORef` is base's
+surface (newIORef, readIORef, writeIORef, modifyIORef, modifyIORef',
+atomicModifyIORef, atomicModifyIORef', atomicWriteIORef, Eq) over a
+one-field node the runtime mutates in place behind the own collector's
+write barrier; the atomic variants are the plain ones under the
+deterministic scheduler. Three GHC-oracled conformance programs
+(lib_data_int_word, lib_data_bits, lib_data_ioref) and an exec test of
+an IORef shared by green tasks pin it. Writing the block found a
+CODEGEN bug: a Prelude binding that is a bare alias of a primitive
+(`toInt8_ = primFixCast`) was copied into its global before the
+primitive globals were assigned (they come last in the unit's init)
+and became NULL - a segfault on `100 + 100 :: Int8`; no Prelude
+binding had ever aliased a primitive. A unit's init now assigns
+non-alias globals first and same-unit aliases after their targets.
+Found in passing, not fixed: the wired `Rational` that `toRational`
+returns has no Show/Eq/Num instance (EXCLUSIONS).
+
 ## v1.11 (2026-09-08)
 
 The exceptions release (M136-M138): AHC programs can recover from

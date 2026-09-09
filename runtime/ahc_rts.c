@@ -3272,6 +3272,77 @@ static AhcNode *io_evaluate(AhcNode **env, AhcNode *w) {
   return ahc_eval(env[0]);
 }
 
+/* ----- fixed-width integers and IORef (M139) ---------------------
+   Int8..Word64 share Int's exact, promoting representation; the
+   Prelude's instances narrow every result through primNarrow, which
+   is what makes them wrap like GHC's. The low 64 bits of the value
+   (two's complement, also for a bignum) are masked to `bits` and
+   sign- or zero-extended; a Word64 above 2^63 is a positive bignum. */
+static AhcNode *p_narrow(AhcNode *bits_n, AhcNode *signed_n, AhcNode *v) {
+  long bits = ahc_eval(bits_n)->u.i;
+  int sgn = ahc_eval(signed_n)->u.i != 0;
+  AhcNode *e = ahc_eval(v);
+  unsigned long low;
+  if (e->tag == AHC_INT) {
+    low = (unsigned long)e->u.i;
+  } else {                       /* bignum: little-endian 32-bit limbs */
+    unsigned long mag = e->u.big.n > 0 ? (unsigned long)e->u.big.d[0] : 0;
+    if (e->u.big.n > 1) mag |= (unsigned long)e->u.big.d[1] << 32;
+    low = e->u.big.sign < 0 ? 0UL - mag : mag;
+  }
+  if (bits < 64) {
+    unsigned long mask = (1UL << bits) - 1;
+    low &= mask;
+    if (sgn && ((low >> (bits - 1)) & 1)) low |= ~mask;
+  }
+  if (sgn) return ahc_mk_int((long)low);
+  return ahc_mk_ulong(low);
+}
+
+/* The representation cast Int8 <-> Int: the identity. */
+static AhcNode *p_fix_cast(AhcNode *a) { return a; }
+
+/* IORef: a one-field constructor node mutated in place. The store of
+   a possibly YOUNG value into a possibly OLD cell needs the own
+   collector's write barrier, exactly like a thunk update. */
+static AhcNode *io_ioref_new(AhcNode **env, AhcNode *w) {
+  AhcNode *c = ahc_mk_con(1, 1);
+  (void)w;
+  c->u.con.fields[0] = env[0];
+  return c;
+}
+static AhcNode *p_ioref_new(AhcNode *v) {
+  AhcNode **e = ahc_env(1);
+  e[0] = v;
+  return ahc_mk_fun(io_ioref_new, e);
+}
+static AhcNode *io_ioref_read(AhcNode **env, AhcNode *w) {
+  (void)w;
+  return ahc_eval(env[0])->u.con.fields[0];
+}
+static AhcNode *p_ioref_read(AhcNode *r) {
+  AhcNode **e = ahc_env(1);
+  e[0] = r;
+  return ahc_mk_fun(io_ioref_read, e);
+}
+static AhcNode *io_ioref_write(AhcNode **env, AhcNode *w) {
+  AhcNode *c = ahc_eval(env[0]);
+  (void)w;
+  c->u.con.fields[0] = env[1];
+#ifdef AHC_GC_OWN
+  own_write_barrier(c);
+#endif
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_ioref_write(AhcNode *r, AhcNode *v) {
+  AhcNode **e = ahc_env(2);
+  e[0] = r; e[1] = v;
+  return ahc_mk_fun(io_ioref_write, e);
+}
+static AhcNode *p_ioref_same(AhcNode *a, AhcNode *b) {
+  return ahc_mk_con(ahc_eval(a) == ahc_eval(b) ? 2 : 1, 0);
+}
+
 /* IO's `fail s` = ioError (userError s) (Report 7.1): the description
    is the Haskell String itself, unforced, exactly as userError's. */
 static AhcNode *io_fail(AhcNode **env, AhcNode *w) {
@@ -6332,7 +6403,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
-  *ahc_prim_fail_io;
+  *ahc_prim_fail_io,
+  *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
+  *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -6575,4 +6648,10 @@ void ahc_rts_init(void) {
   ahc_prim_ioe_description = mk_prim1(p_ioe_description);
   ahc_prim_ioe_filename = mk_prim1(p_ioe_filename);
   ahc_prim_fail_io = mk_prim1(p_fail_io);
+  ahc_prim_narrow = mk_prim3(p_narrow);
+  ahc_prim_fix_cast = mk_prim1(p_fix_cast);
+  ahc_prim_ioref_new = mk_prim1(p_ioref_new);
+  ahc_prim_ioref_read = mk_prim1(p_ioref_read);
+  ahc_prim_ioref_write = mk_prim2(p_ioref_write);
+  ahc_prim_ioref_same = mk_prim2(p_ioref_same);
 }

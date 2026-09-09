@@ -1607,20 +1607,90 @@ package body AHC.CodeGen is
             TLit_Map.Clear;
             TLit_Next := 0;
 
-            for GI in 1 .. M.Top_Binds.Last_Index loop
-               if (if GI <= Owners.Last_Index
+            --  Init assigns every global of the unit. A binding whose
+            --  RHS is a bare global VARIABLE (an alias, `toInt8_ =
+            --  primFixCast`) is copied eagerly by Gen_Lazy, so it must
+            --  run AFTER its target's own assignment - and the prim
+            --  globals come last in Top_Binds. So: non-aliases first,
+            --  then same-unit aliases in dependency order (an alias of
+            --  a global from an earlier unit is safe at once: units
+            --  initialize in dependency order). Found when the first
+            --  Prelude alias of a primitive copied NULL (M139).
+            declare
+               In_Unit : Scope_Maps.Map;
+               Emitted : Scope_Maps.Map;
+               Pending : Core.Bind_Vectors.Vector;
+
+               function Owned (GI : Positive) return Boolean
+               is (if GI <= Owners.Last_Index
                    then To_String (Owners (GI)) = U
-                   else U = "Prelude")
-               then
-                  for B of M.Top_Binds (GI).Binds loop
-                     Append (Decl, "AhcNode *" & Sym_Of (B.Binder)
-                             & ";" & ASCII.LF);
-                     Append (Init, "  " & Sym_Of (B.Binder) & " = "
-                             & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map)
-                             & ";" & ASCII.LF);
-                  end loop;
-               end if;
-            end loop;
+                   else U = "Prelude");
+
+               function Alias_Target (B : Core.Bind_Pair) return Var_Id
+               is
+                  N : constant Expr_Node := M.Node (B.Rhs);
+               begin
+                  if N.Kind = Var_C and then M.Info (N.V).Is_Global
+                    and then In_Unit.Contains (N.V)
+                  then
+                     return N.V;
+                  end if;
+                  return No_Var;
+               end Alias_Target;
+
+               procedure Emit (B : Core.Bind_Pair) is
+               begin
+                  Append (Init, "  " & Sym_Of (B.Binder) & " = "
+                          & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map)
+                          & ";" & ASCII.LF);
+                  Emitted.Include (Var_Id (B.Binder), Null_Unbounded_String);
+               end Emit;
+            begin
+               for GI in 1 .. M.Top_Binds.Last_Index loop
+                  if Owned (GI) then
+                     for B of M.Top_Binds (GI).Binds loop
+                        In_Unit.Include (Var_Id (B.Binder), Null_Unbounded_String);
+                        Append (Decl, "AhcNode *" & Sym_Of (B.Binder)
+                                & ";" & ASCII.LF);
+                     end loop;
+                  end if;
+               end loop;
+               for GI in 1 .. M.Top_Binds.Last_Index loop
+                  if Owned (GI) then
+                     for B of M.Top_Binds (GI).Binds loop
+                        if Alias_Target (B) = No_Var then
+                           Emit (B);
+                        else
+                           Pending.Append (B);
+                        end if;
+                     end loop;
+                  end if;
+               end loop;
+               while not Pending.Is_Empty loop
+                  declare
+                     Rest : Core.Bind_Vectors.Vector;
+                     Progress : Boolean := False;
+                  begin
+                     for B of Pending loop
+                        if Emitted.Contains (Alias_Target (B)) then
+                           Emit (B);
+                           Progress := True;
+                        else
+                           Rest.Append (B);
+                        end if;
+                     end loop;
+                     if not Progress then
+                        --  A cycle of aliases (`a = b; b = a`) has no
+                        --  order; emit as written, as before.
+                        for B of Rest loop
+                           Emit (B);
+                        end loop;
+                        Rest.Clear;
+                     end if;
+                     Pending := Rest;
+                  end;
+               end loop;
+            end;
 
             for FI in 1 .. M.Foreigns.Last_Index loop
                if F_Owner (FI) = U then

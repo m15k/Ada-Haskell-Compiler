@@ -392,8 +392,11 @@ readFile, interact, getArgs, exit codes), System.IO.Error and
 Control.Exception (catchable `IOError`s shaped exactly like GHC's,
 `ErrorCall`/`ArithException`/`ExitCode`, `catch`/`try`/`evaluate`/
 `bracket`/`finally` over a closed `SomeException` — see
-docs/exceptions-design-note.md), Numeric (showHex and
-friends), Data.Bits at Int, Data.Ix as an ordinary source class,
+docs/exceptions-design-note.md), Data.Int / Data.Word (wrapping
+`Int8..Word64` with their instances, `Word` = `Word64`), Data.IORef,
+Numeric (showHex and
+friends), Data.Bits as a class over Int and the fixed-width types, Data.Ix as
+an ordinary source class,
 Data.Map and Data.Set (a weight-balanced search tree matching the
 containers library's observable behavior exactly — toList order, Show
 format, union bias — and oracled against the real thing), Data.Ratio

@@ -21,3 +21,61 @@ instance Ix Char where
   inRange (lo, hi) c = c >= lo && c <= hi
   rangeSize (lo, hi) =
     if hi < lo then 0 else ord hi - ord lo + 1
+
+-- The fixed-width types (Data.Int / Data.Word, M139): through Int.
+
+instance Ix Int8 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Int16 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Int32 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Int64 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Word8 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Word16 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Word32 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Word64 where
+  range (lo, hi) = [lo .. hi]
+  index (lo, _) i = fromIntegral i - fromIntegral lo
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1

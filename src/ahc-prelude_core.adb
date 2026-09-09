@@ -1292,6 +1292,12 @@ package body AHC.Prelude_Core is
          BP ("primIoeLocation", "ahc_prim_ioe_location");
          BP ("primIoeDescription", "ahc_prim_ioe_description");
          BP ("primIoeFilename", "ahc_prim_ioe_filename");
+         BP ("primNarrow", "ahc_prim_narrow");
+         BP ("primFixCast", "ahc_prim_fix_cast");
+         BP ("primNewIORef", "ahc_prim_ioref_new");
+         BP ("primReadIORef", "ahc_prim_ioref_read");
+         BP ("primWriteIORef", "ahc_prim_ioref_write");
+         BP ("primSameIORef", "ahc_prim_ioref_same");
          BP ("primAndI", "ahc_prim_band");
          BP ("primOrI", "ahc_prim_bor");
          BP ("primXorI", "ahc_prim_bxor");

@@ -2354,6 +2354,30 @@ dictionary knot whenever a user instance omits them; an Ord
 instance can even define only `<=`, with `compare` itself defaulting
 through the superclass Eq dictionary.
 
+`Data.Int`, `Data.Word`, `Data.Bits`, and `Data.IORef` arrived
+together in v1.12 (M139). The fixed-width types had existed since the
+FFI milestone as wired names sharing `Int`'s exact, promoting
+representation, with Int's dictionaries borrowed wholesale — so
+`200 :: Int8` was 200. Now every arithmetic result is Int's result
+*narrowed* to the width by one runtime primitive (the low 64 bits
+of an Int or bignum, masked and sign- or zero-extended), which is
+what makes them wrap like GHC's; the instances — Num, Real, Enum
+with GHC's error texts, Integral raising `ArithException Overflow`
+for `quot minBound (-1)`, Bounded, Read, Ix, Bits — are one
+generated block of Prelude source, eight copies of one shape.
+`Data.Bits` became a class in the same move. `Data.IORef` is a
+one-field constructor node the runtime mutates in place behind the
+own collector's write barrier (a young value stored into an old
+cell is exactly a thunk update's hazard), and the library is four
+primitives plus ordinary Haskell; under the deterministic scheduler
+a read or write is never a scheduling point, so the atomic variants
+are the plain ones. Writing the block flushed out a codegen
+initialization-order bug: a Prelude binding that is a bare alias of
+a primitive (`toInt8_ = primFixCast`) was copied before the
+primitive globals were assigned and became NULL — no Prelude binding
+had ever aliased a primitive — so a unit's init now assigns
+non-alias globals first and same-unit aliases after their targets.
+
 `Data.Text` is the one library module backed by a dedicated runtime
 representation rather than by ordinary Haskell — the packed
 `AHC_BYTES` slice of chapter 14 — and the one whose *type* name is

@@ -257,6 +257,8 @@ package body AHC.Builtins is
       --  reach them through the prim* accessors declared below.
       Env.Exc_TC      := TyCon_Id (Def_TyCon ("SomeException", 0, Star_K));
       Env.IOExc_TC    := TyCon_Id (Def_TyCon ("IOException", 0, Star_K));
+      --  Data.IORef (M139): a mutable cell, opaque; the runtime owns it.
+      Env.IORef_TC    := TyCon_Id (Def_TyCon ("IORef", 1, Star1));
 
       --  Fixed-width C types: distinct tycons whose runtime nodes
       --  are plain AHC_INT - only the FFI boundary knows the width.
@@ -937,13 +939,13 @@ package body AHC.Builtins is
          --  so their dictionaries reuse Int's prims wholesale
          --  (arithmetic is exact/promoting, not wrapping - only the
          --  FFI boundary enforces the width).
+         --  Since M139 Num/Integral (and Bounded, Enum, Real, Read) are
+         --  Prelude SOURCE instances that narrow every result to the
+         --  width - GHC's wrapping semantics; Eq/Ord/Show stay Int's.
          for K in C_Fix_Kind loop
             Def_Instance (Cl (Env.Eq_Cl), TCn (Env.CFix_TCs (K)));
             Def_Instance (Cl (Env.Ord_Cl), TCn (Env.CFix_TCs (K)));
             Def_Instance (Cl (Env.Show_Cl), TCn (Env.CFix_TCs (K)));
-            Def_Instance (Cl (Env.Num_Cl), TCn (Env.CFix_TCs (K)));
-            Def_Instance (Cl (Env.Integral_Cl),
-                          TCn (Env.CFix_TCs (K)));
          end loop;
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Double_TC));
@@ -1240,6 +1242,30 @@ package body AHC.Builtins is
                   Ignore := Def_Global
                     ("primIoeDescription", Mono (FN (IOExc_T, Str)));
                   Ignore := Def_Global ("primIoeFilename", Mono (FN (IOExc_T, MStr)));
+               end;
+               --  Fixed-width narrowing and IORef (M139).
+               declare
+                  B       : constant Real_TyVar_Id := New_Tv ("b");
+                  Int_T   : constant Real_Type_Id := TC (Env.Int_TC);
+                  Ref_A   : constant Real_Type_Id :=
+                    AP (TC (Env.IORef_TC), TV (A2));
+               begin
+                  Ignore := Def_Global
+                    ("primNarrow",
+                     Mono (FN (Int_T, FN (Int_T, FN (Int_T, Int_T)))));
+                  Ignore := Def_Global
+                    ("primFixCast", Poly2 (A2, B, FN (TV (A2), TV (B))));
+                  Ignore := Def_Global
+                    ("primNewIORef", Poly1 (A2, FN (TV (A2), IO_T (Ref_A))));
+                  Ignore := Def_Global
+                    ("primReadIORef", Poly1 (A2, FN (Ref_A, IO_T (TV (A2)))));
+                  Ignore := Def_Global
+                    ("primWriteIORef",
+                     Poly1 (A2, FN (Ref_A, FN (TV (A2),
+                                               IO_T (TC (Env.Unit_TC))))));
+                  Ignore := Def_Global
+                    ("primSameIORef",
+                     Poly1 (A2, FN (Ref_A, FN (Ref_A, TC (Env.Bool_TC)))));
                end;
                Ignore := Def_Global ("primAndI", Mono (III));
                Ignore := Def_Global ("primOrI", Mono (III));
