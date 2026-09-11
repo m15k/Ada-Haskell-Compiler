@@ -12,6 +12,18 @@ module Data.List
   , maximumBy, minimumBy
   , foldl', genericLength
   , lookup
+  -- Report/base: Data.List also carries the Prelude's list API, so
+  -- `import Data.List as List` then `List.null` works. Found by
+  -- renaudpg/sudocurry, which qualifies every list call that way.
+  , (++), head, last, tail, init, null, length
+  , map, reverse, foldl, foldl1, foldr, foldr1
+  , concat, concatMap, and, or, any, all, sum, product
+  , maximum, minimum, elem, notElem
+  , iterate, repeat, replicate, cycle
+  , take, drop, splitAt, takeWhile, dropWhile, span, break
+  , lines, words, unlines, unwords
+  , filter
+  , zip, zipWith, unzip
   ) where
 
 import Data.Ord (comparing)

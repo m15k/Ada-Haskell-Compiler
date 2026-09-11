@@ -161,8 +161,17 @@ package body AHC.Rename is
           or else N = Names.Name_Id (Nil_Name)
           or else N = Names.Name_Id (Cons_Name));
 
-      --  The import view matching qualifier Q (alias first), 0 if
-      --  none.
+      --  Does view I answer to qualifier Q? A module may be imported
+      --  more than once - Report 5.3.1, and `import Prelude hiding
+      --  (String)` beside `import qualified Prelude (String)` in the
+      --  wild - and a qualified name is in scope if ANY of those
+      --  imports brings it, so every matching view must be asked.
+      function View_Matches
+        (I : Positive; Q : Names.Name_Id) return Boolean
+      is (Imp_Views (I).Alias = Q or else Imp_Views (I).Module = Q);
+
+      --  The FIRST import view matching qualifier Q, 0 if none: for
+      --  "is this a legal qualifier at all", never for lookup.
       function Find_View (Q : Names.Name_Id) return Natural is
       begin
          for I in 1 .. Imp_Views.Last_Index loop
@@ -221,22 +230,20 @@ package body AHC.Rename is
                      or else Prelude_Explicit)
            and then Q.Qualifier /= Arena.Module_Name
          then
-            declare
-               VI : constant Natural := Find_View (Q.Qualifier);
-            begin
-               if VI = 0 then
-                  return Core.No_TyCon;
+            for I in 1 .. Imp_Views.Last_Index loop
+               if View_Matches (I, Q.Qualifier) then
+                  declare
+                     C : constant Builtins.TyCon_Maps.Cursor :=
+                       Imp_Views (I).Visible.TyCons.Find (Q.Name);
+                  begin
+                     if Builtins.TyCon_Maps.Has_Element (C) then
+                        return Core.TyCon_Id
+                          (Builtins.TyCon_Maps.Element (C));
+                     end if;
+                  end;
                end if;
-               declare
-                  C : constant Builtins.TyCon_Maps.Cursor :=
-                    Imp_Views (VI).Visible.TyCons.Find (Q.Name);
-               begin
-                  return (if Builtins.TyCon_Maps.Has_Element (C)
-                          then Core.TyCon_Id
-                                 (Builtins.TyCon_Maps.Element (C))
-                          else Core.No_TyCon);
-               end;
-            end;
+            end loop;
+            return Core.No_TyCon;
          end if;
          declare
             C : Builtins.TyCon_Maps.Cursor := Own.TyCons.Find (Q.Name);
@@ -362,13 +369,15 @@ package body AHC.Rename is
                      or else Prelude_Explicit)
            and then Q.Qualifier /= Arena.Module_Name
          then
-            declare
-               VI : constant Natural := Find_View (Q.Qualifier);
-            begin
-               return VI /= 0
-                 and then Imp_Views (VI).Visible.Synonyms.Contains
-                            (Q.Name);
-            end;
+            for I in 1 .. Imp_Views.Last_Index loop
+               if View_Matches (I, Q.Qualifier)
+                 and then Imp_Views (I).Visible.Synonyms.Contains
+                            (Q.Name)
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
          end if;
          if Own.Synonyms.Contains (Q.Name)
            or else (not Prelude_Explicit
@@ -406,9 +415,22 @@ package body AHC.Rename is
          Scopes (Scopes.Last_Index).Include (Name, V);
       end Bind_In_Scope;
 
+      --  Quiet: answer "is this name in scope" without reporting.
+      --  The export list's C(..) asks that of every method of a class
+      --  it may only have imported; a method that is not in scope is
+      --  simply not re-exported, not an error at the class.
       function Lookup_Value
-        (Q : QName; Span : Diagnostics.Source_Span) return Resolution
+        (Q : QName; Span : Diagnostics.Source_Span;
+         Quiet : Boolean := False) return Resolution
       is
+         procedure Not_In_Scope is
+         begin
+            if not Quiet then
+               Bag.Add (Diagnostics.Error,
+                        Diagnostics.Rename_Out_Of_Scope, Span,
+                        "variable not in scope: " & Text (Q.Name));
+            end if;
+         end Not_In_Scope;
       begin
          if not Check_Qualifier (Q, Span) then
             return (Kind => Unresolved);
@@ -434,14 +456,19 @@ package body AHC.Rename is
               and then Q.Qualifier /= Arena.Module_Name
             then
                declare
-                  VI : constant Natural := Find_View (Q.Qualifier);
                   C : Builtins.Var_Maps.Cursor;
                begin
-                  C := Imp_Views (VI).Visible.Values.Find (Q.Name);
-                  if Builtins.Var_Maps.Has_Element (C) then
-                     return (Kind => Var_Res,
-                             Var => Builtins.Var_Maps.Element (C));
-                  end if;
+                  for I in 1 .. Imp_Views.Last_Index loop
+                     if View_Matches (I, Q.Qualifier) then
+                        C := Imp_Views (I).Visible.Values.Find
+                               (Q.Name);
+                        if Builtins.Var_Maps.Has_Element (C) then
+                           return (Kind => Var_Res,
+                                   Var => Builtins.Var_Maps.Element
+                                            (C));
+                        end if;
+                     end if;
+                  end loop;
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Rename_Out_Of_Scope, Span,
                            "module '" & Text (Q.Qualifier)
@@ -533,10 +560,7 @@ package body AHC.Rename is
                   end if;
                end;
             end if;
-            Bag.Add (Diagnostics.Error,
-                     Diagnostics.Rename_Out_Of_Scope,
-                     Span,
-                     "variable not in scope: " & Text (Q.Name));
+            Not_In_Scope;
             return (Kind => Unresolved);
          end if;
          declare
@@ -548,8 +572,7 @@ package body AHC.Rename is
                        Var => Builtins.Var_Maps.Element (C));
             end if;
          end;
-         Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
-                  Span, "variable not in scope: " & Text (Q.Name));
+         Not_In_Scope;
          return (Kind => Unresolved);
       end Lookup_Value;
 
@@ -2112,22 +2135,30 @@ package body AHC.Rename is
                                 (E.Name.Name,
                                  Core.Real_Class_Id (Cl));
                               if E.Sub_All then
+                                 --  Through Lookup_Value, not
+                                 --  Own.Values: C(..) may RE-export a
+                                 --  class this module only imported,
+                                 --  whose selectors are not its own.
+                                 --  Control.Applicative exports
+                                 --  Applicative(..) for the Prelude's
+                                 --  class, and `import
+                                 --  Control.Applicative ((<*>))` was
+                                 --  refused because no selector ever
+                                 --  reached the iface.
                                  for Mth of M.Info
                                    (Core.Real_Class_Id (Cl)).Methods
                                  loop
                                     declare
-                                       C : constant Builtins
-                                         .Var_Maps.Cursor :=
-                                           Own.Values.Find
-                                             (Mth.Name);
+                                       R : constant Resolution :=
+                                         Lookup_Value
+                                           ((Qualifier =>
+                                               Names.No_Name,
+                                             Name => Mth.Name),
+                                            (1, 1), Quiet => True);
                                     begin
-                                       if Builtins.Var_Maps
-                                         .Has_Element (C)
-                                       then
+                                       if R.Kind = Var_Res then
                                           Ent.Exports.Values.Include
-                                            (Mth.Name,
-                                             Builtins.Var_Maps
-                                               .Element (C));
+                                            (Mth.Name, R.Var);
                                        end if;
                                     end;
                                  end loop;

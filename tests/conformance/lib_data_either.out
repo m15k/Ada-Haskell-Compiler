@@ -1,0 +1,13 @@
+[1,2,3]
+"ab"
+([1,2,3],"ab")
+([True,False,True,False,True],[False,True,False,True,False])
+(9,0)
+('x','q')
+"7"
+"k"
+"aehkls"
+('a','k')
+(3,Nothing)
+42
+done

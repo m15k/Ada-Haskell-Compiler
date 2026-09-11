@@ -718,6 +718,21 @@ interact f = getContents >>= \s -> putStr (f s)
 getChar :: IO Char
 getChar = primHGetChar 0
 
+putChar :: Char -> IO ()
+putChar c = putStr [c]
+
+-- Report 9: `readIO` fails in the IO monad rather than calling
+-- `error`, and distinguishes no parse from an ambiguous one.
+readIO :: Read a => String -> IO a
+readIO s =
+  case [x | (x, t) <- reads s, allSpace_ t] of
+    [x] -> return x
+    []  -> ioError (userError "Prelude.readIO: no parse")
+    _   -> ioError (userError "Prelude.readIO: ambiguous parse")
+
+readLn :: Read a => IO a
+readLn = getLine >>= readIO
+
 cycle :: [a] -> [a]
 cycle [] = error "Prelude.cycle: empty list"
 cycle xs = xs' where xs' = xs ++ xs'

@@ -2,6 +2,7 @@ module Data.Set
   ( Set, empty, singleton, null, size, member, notMember
   , insert, delete, union, difference, intersection
   , fromList, fromDistinctAscList, toList, toAscList, elems
+  , elemAt, findIndex, lookupIndex
   , filter, map
   ) where
 
@@ -47,6 +48,37 @@ member x (SBin _ y l r) =
 
 notMember :: Ord a => a -> Set a -> Bool
 notMember x s = not (member x s)
+
+--  Index into the ascending order, in O(log n) off the size
+--  annotation rather than O(n) through toAscList. base calls it an
+--  error, not a Maybe, and counts from 0.
+elemAt :: Int -> Set a -> a
+elemAt _ STip = error "Set.elemAt: index out of range"
+elemAt i (SBin _ x l r) =
+  case compare i sl of
+    LT -> elemAt i l
+    EQ -> x
+    GT -> elemAt (i - sl - 1) r
+  where sl = size l
+
+--  The index of an element, and its Maybe form.
+findIndex :: Ord a => a -> Set a -> Int
+findIndex _ STip = error "Set.findIndex: element is not in the set"
+findIndex a (SBin _ x l r) =
+  case compare a x of
+    LT -> findIndex a l
+    EQ -> size l
+    GT -> size l + 1 + findIndex a r
+
+lookupIndex :: Ord a => a -> Set a -> Maybe Int
+lookupIndex _ STip = Nothing
+lookupIndex a (SBin _ x l r) =
+  case compare a x of
+    LT -> lookupIndex a l
+    EQ -> Just (size l)
+    GT -> case lookupIndex a r of
+            Nothing -> Nothing
+            Just i  -> Just (size l + 1 + i)
 
 bin :: a -> Set a -> Set a -> Set a
 bin x l r = SBin (size l + size r + 1) x l r
