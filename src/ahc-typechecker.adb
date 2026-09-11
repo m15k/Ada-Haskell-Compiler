@@ -458,6 +458,15 @@ package body AHC.Typechecker is
 
       Givens : Given_Vectors.Vector;
 
+      --  Is T exactly the type variable Tv?
+      function Is_Tv (T : Real_Type_Id; Tv : Real_TyVar_Id)
+        return Boolean
+      is
+         N : constant Type_Node := M.Node (Repr (T));
+      begin
+         return N.Kind = TVar_T and then N.Tv = Tv;
+      end Is_Tv;
+
       function Same_Tv_Arg (A, B : Real_Type_Id) return Boolean is
          NA : constant Type_Node := M.Node (Repr (A));
          NB : constant Type_Node := M.Node (Repr (B));
@@ -1591,11 +1600,59 @@ package body AHC.Typechecker is
                                  Map : TyVar_Type_Maps.Map;
                                  W_Mark : constant Natural :=
                                    W_List.Last_Index;
+                                 Params : Var_Id_Vectors.Vector;
+                                 M_Mark : constant Natural :=
+                                   Givens.Last_Index;
                               begin
                                  if not Sch.Tvs.Is_Empty then
                                     Map.Include (Sch.Tvs (1),
                                                  Head_T);
                                  end if;
+                                 --  A method may carry its OWN context
+                                 --  beyond the class's (Report 4.3.1):
+                                 --  `traverse :: Applicative f => ...`.
+                                 --  Those dictionaries are arguments of
+                                 --  the value stored in the dictionary -
+                                 --  which is what a lifted class DEFAULT
+                                 --  already expects - so assume them
+                                 --  here and wrap the definition in the
+                                 --  matching lambdas below. Without this
+                                 --  the instance's method took the value
+                                 --  arguments directly while every call
+                                 --  site applied the extra dictionary
+                                 --  first: "applied a non-function" at
+                                 --  run time (M141, found by two JSON
+                                 --  parsers wanting `traverse`).
+                                 for C of Sch.Context loop
+                                    if not (Class_Id (C.Class)
+                                              = Inst.Of_Class
+                                            and then not Sch.Tvs.Is_Empty
+                                            and then Is_Tv (C.Arg,
+                                                            Sch.Tvs (1)))
+                                    then
+                                       declare
+                                          D : constant Real_Var_Id :=
+                                            M.Mint_Var
+                                              ((Name => Table.Intern ("$d"),
+                                                Span =>
+                                                  M.Info (B.Binder).Span,
+                                                others => <>));
+                                       begin
+                                          Params.Append (D);
+                                          Assume
+                                            (Constraint'
+                                               (Class => C.Class,
+                                                Arg => Subst_TyVars
+                                                         (C.Arg, Map),
+                                                Span => C.Span),
+                                             M.Add (Expr_Node'
+                                               (Kind => Var_C,
+                                                Span =>
+                                                  M.Info (B.Binder).Span,
+                                                V => D)));
+                                       end;
+                                    end if;
+                                 end loop;
                                  M.Vars (B.Binder).Var_Type :=
                                    Type_Id (Subst_TyVars
                                      (Real_Type_Id (Sch.S_Body),
@@ -1610,6 +1667,14 @@ package body AHC.Typechecker is
                                  loop
                                     Solve (I, 0);
                                  end loop;
+                                 while Givens.Last_Index > M_Mark loop
+                                    Givens.Delete_Last;
+                                 end loop;
+                                 if not Params.Is_Empty then
+                                    Wraps.Append
+                                      (Wrap_Rec'(Binder => B.Binder,
+                                                 Params => Params));
+                                 end if;
                               end;
                            end if;
                         end loop;
@@ -1902,6 +1967,18 @@ package body AHC.Typechecker is
                begin
                   Wrap_In (Binds);
                   M.Classes (Real_Class_Id (CI)).Default_Binds :=
+                    Binds;
+               end;
+            end loop;
+            --  Instance methods too, since a method's own context
+            --  makes their definitions take dictionaries (M141).
+            for II in 1 .. M.Last_Instance loop
+               declare
+                  Binds : Bind_Vectors.Vector :=
+                    M.Instances (Real_Instance_Id (II)).Method_Binds;
+               begin
+                  Wrap_In (Binds);
+                  M.Instances (Real_Instance_Id (II)).Method_Binds :=
                     Binds;
                end;
             end loop;

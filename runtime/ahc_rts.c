@@ -1662,6 +1662,26 @@ static double rat_to_double(AhcNode *n, AhcNode *d) {
   }
 }
 
+static AhcNode *p_mul(AhcNode *a, AhcNode *b);   /* fwd: bignum */
+
+/* `read` at Double (M141): mantissa and a power-of-ten exponent to
+   the nearest Double, through the same converter a float LITERAL
+   uses - so `read "0.1"` and the literal 0.1 are the same value, and
+   both agree with GHC. Doing it in Haskell would round twice. */
+static AhcNode *p_double_from_dec(AhcNode *mant, AhcNode *exp10) {
+  AhcNode *m = ahc_eval(mant);
+  long e = ahc_eval(exp10)->u.i;
+  AhcNode *num = m, *den = ahc_mk_int(1);
+  AhcNode *ten = ahc_mk_int(10);
+  long i;
+  if (e >= 0) {
+    for (i = 0; i < e; i++) num = p_mul(num, ten);
+  } else {
+    for (i = 0; i < -e; i++) den = p_mul(den, ten);
+  }
+  return ahc_mk_double(rat_to_double(ahc_eval(num), ahc_eval(den)));
+}
+
 static AhcNode *p_from_rational_d(AhcNode *a) {
   AhcNode *e = ahc_eval(a);
   if (e->tag == AHC_DOUBLE) return e;   /* legacy literal path */
@@ -6670,7 +6690,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
   *ahc_prim_ioref_write_ret, *ahc_prim_bshru,
   *ahc_prim_sock_listen, *ahc_prim_sock_accept, *ahc_prim_sock_connect,
-  *ahc_prim_sock_recv, *ahc_prim_sock_send, *ahc_prim_sock_close;
+  *ahc_prim_sock_recv, *ahc_prim_sock_send, *ahc_prim_sock_close,
+  *ahc_prim_double_from_dec;
 
 void ahc_rts_init(void) {
 #ifdef AHC_USE_BOEHM
@@ -6927,4 +6948,5 @@ void ahc_rts_init(void) {
   ahc_prim_sock_recv = mk_prim2(p_sock_recv);
   ahc_prim_sock_send = mk_prim2(p_sock_send);
   ahc_prim_sock_close = mk_prim1(p_sock_close);
+  ahc_prim_double_from_dec = mk_prim2(p_double_from_dec);
 }

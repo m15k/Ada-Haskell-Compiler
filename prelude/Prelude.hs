@@ -651,6 +651,104 @@ instance Eq IOException where
         && primIoeDescription a == primIoeDescription b
         && primIoeFilename a == primIoeFilename b
 
+-- read at Double (M141) --------------------------------------------
+-- The digits are parsed here and converted by the runtime through the
+-- same exact path a float LITERAL takes, so `read "0.1" :: Double` and
+-- the literal 0.1 are the same value and both agree with GHC. Two RPN
+-- calculators off GitHub wanted this (docs/repos-to-try.md).
+
+readsDouble_ :: String -> [(Double, String)]
+readsDouble_ s0 =
+  case skipSpace_ s0 of
+    ('-' : t) -> [(negate v, r) | (v, r) <- unsigned t]
+    ('(' : t) ->
+      [ (v, r2)
+      | (v, r) <- readsDouble_ t
+      , (')' : r2) <- [skipSpace_ r]
+      ]
+    t -> unsigned t
+  where
+    unsigned t =
+      case span isDigit_ t of
+        ([], _) -> []
+        (whole, rest) ->
+          let (frac, rest2) = fracPart rest
+              (ex, rest3) = expPart rest2
+              digits = whole ++ frac
+              mant = foldl (\a c -> a * 10 + toInteger (fromEnum c - 48)) 0 digits
+          in [(primDoubleFromDec mant (ex - length frac), rest3)]
+    fracPart ('.' : u) =
+      case span isDigit_ u of
+        ([], _) -> ("", '.' : u)
+        (ds, r) -> (ds, r)
+    fracPart u = ("", u)
+    expPart (c : u) =
+      if c == 'e' || c == 'E'
+        then case u of
+               ('-' : v) -> negExp v (c : u)
+               ('+' : v) -> posExp v (c : u)
+               _ -> posExp u (c : u)
+        else ("" `seq` 0, c : u)
+    expPart u = (0, u)
+    negExp v orig = case span isDigit_ v of
+                      ([], _) -> (0, orig)
+                      (ds, r) -> (negate (digitsToInt_ ds), r)
+    posExp v orig = case span isDigit_ v of
+                      ([], _) -> (0, orig)
+                      (ds, r) -> (digitsToInt_ ds, r)
+
+digitsToInt_ :: String -> Int
+digitsToInt_ = foldl (\a c -> a * 10 + (fromEnum c - 48)) 0
+
+instance Read Double where
+  readsPrec _ s = readsDouble_ s
+
+-- Report 9 Prelude entries that were only in System.IO (M141: three
+-- repos wanted `interact` or `getChar` with no import at all).
+
+interact :: (String -> String) -> IO ()
+interact f = getContents >>= \s -> putStr (f s)
+
+-- stdin is handle 0 in the runtime's registry; System.IO's `stdin`
+-- is the same handle behind an abstract type. (`writeFile` and
+-- `appendFile` stay in System.IO, where `Handle`, `IOMode` and the
+-- bracket-based `withFile` they are built on live - the one place
+-- AHC's Prelude is smaller than the Report's, recorded in
+-- EXCLUSIONS.)
+getChar :: IO Char
+getChar = primHGetChar 0
+
+cycle :: [a] -> [a]
+cycle [] = error "Prelude.cycle: empty list"
+cycle xs = xs' where xs' = xs ++ xs'
+
+
+-- Traversable (base-compat beyond the 2010 Report, like Applicative
+-- and Semigroup): `traverse` and `sequenceA` only. The Report's
+-- `mapM`/`sequence` stay the list-specific Prelude functions above, so
+-- this class does not carry them - the divergence is in EXCLUSIONS.
+class Functor t => Traversable t where
+  traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+
+-- GHC has sequenceA as a second method whose default is `traverse id`
+-- (and traverse's default is `sequenceA . fmap f`). One method and one
+-- function are indistinguishable to a user of the class, and they do
+-- not need mutually recursive defaults to typecheck.
+sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
+sequenceA xs = traverse id xs
+
+instance Traversable [] where
+  traverse f = foldr (\x acc -> pure (:) <*> f x <*> acc) (pure [])
+
+instance Traversable Maybe where
+  traverse _ Nothing = pure Nothing
+  traverse f (Just x) = pure Just <*> f x
+
+instance Traversable (Either a) where
+  traverse _ (Left e) = pure (Left e)
+  traverse f (Right x) = pure Right <*> f x
+
+
 -- Fixed-width integers (Data.Int / Data.Word, M139) -----------------
 -- Int8..Word64 share Int's runtime representation - an exact, promoting
 -- integer - so every arithmetic result is Int's result NARROWED to the

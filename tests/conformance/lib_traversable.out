@@ -1,0 +1,9 @@
+Just [1,2,3]
+Nothing
+(Just [1,2],Nothing)
+["ab","ab","ab","ab"]
+[Just 1,Just 2]
+Right [2,4]
+Left "5"
+Just (Right 'x')
+(Just Nothing,Just (Just 1))

@@ -154,7 +154,18 @@ package body AHC.Layout is
             elsif T.First_On_Line and then not S.Newline_Done
               and then not S.Stack.Is_Empty and then Top (S) /= 0
             then
-               if N = Top (S) then
+               if N = Top (S) and then T.Kind = Kw_Where then
+                  --  Report 10.3's parse-error(t) rule, in the one
+                  --  shape that matters: `where` can never begin a
+                  --  declaration, statement or alternative, so the
+                  --  `;` this column would otherwise insert is always
+                  --  a parse error - and the rule says close the
+                  --  implicit block instead. The `where` then attaches
+                  --  to the enclosing declaration, which is what a
+                  --  case whose alternatives and `where` share a
+                  --  column means (found by M141 in magetron/hson).
+                  Close_Implicit (S, T);
+               elsif N = Top (S) then
                   S.Newline_Done := True;
                   Enqueue (S, Virtual (V_Semicolon, T));
                elsif N < Top (S) then

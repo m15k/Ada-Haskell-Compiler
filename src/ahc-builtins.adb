@@ -1290,6 +1290,11 @@ package body AHC.Builtins is
                      Ignore := Def_Global
                        ("primSockClose", Mono (FN (Int_T, IO_T (Unit_T))));
                   end;
+                  --  read at Double (M141): mantissa, power of ten.
+                  Ignore := Def_Global
+                    ("primDoubleFromDec",
+                     Mono (FN (TC (Env.Integer_TC),
+                               FN (TC (Env.Int_TC), TC (Env.Double_TC)))));
                end;
                Ignore := Def_Global ("primAndI", Mono (III));
                Ignore := Def_Global ("primOrI", Mono (III));
