@@ -36,7 +36,8 @@ usage() { sed -n '2,16p' "$0"; exit 2; }
 filter_dir() {
   local dir=$1 mods hs pragmas imports bad
   mods=$(ahc_modules | sort -u)
-  hs=$(find "$dir" -name '*.hs' -not -path '*/dist*' -not -path '*/.stack-work/*')
+  hs=$(find "$dir" -name '*.hs' -not -path '*/dist*' -not -path '*/.stack-work/*' \
+       -not -name 'Setup.hs')
   [ -n "$hs" ] || { echo "no .hs files"; return 1; }
   # tr -d '\r' everywhere: a CRLF repo would otherwise leave the
   # carriage return on the module name and every import would look
@@ -94,8 +95,14 @@ cmd_try() {
   # flatten a src/+app/ layout (a MOVE, not an edit)
   local flat=$dir/_flat
   mkdir -p "$flat"
+  # Setup.hs is Cabal's build driver, not part of the program. Reading
+  # it made the filter reject every repo with a stock cabal skeleton on
+  # its `import Distribution.Simple` - including 2016rshah/sudoku-solver,
+  # which round one lists as working. A scout that cannot re-find what
+  # round one found is not evidence.
   find "$dir" -name '*.hs' -not -path "$flat/*" -not -path '*/dist*' \
        -not -path '*/.stack-work/*' -not -path '*/test*/*' \
+       -not -name 'Setup.hs' \
        -exec cp {} "$flat/" \; 2>/dev/null
   local why
   why=$(filter_dir "$flat")
