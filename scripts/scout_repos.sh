@@ -162,8 +162,8 @@ cap_secs() { cat "$work/.cap_secs" 2>/dev/null || echo '?'; }
 cap() {
   local t0 t1 rc
   t0=$(perl -MTime::HiRes=time -e 'printf "%.2f", time')
-  (cd "$SCOUT_CWD" && perl -e "alarm ${SCOUT_ALARM:-120}; exec @ARGV" "$@" \
-     <"${SCOUT_STDIN:-/dev/null}" 2>&1)
+  (cd "$SCOUT_CWD" && perl -e "alarm ${SCOUT_ALARM:-120}; exec @ARGV" \
+     "$@" $SCOUT_ARGS <"${SCOUT_STDIN:-/dev/null}" 2>&1)
   rc=$?
   t1=$(perl -MTime::HiRes=time -e 'printf "%.2f", time')
   perl -e "printf '%.2f', $t1 - $t0" > "$work/.cap_secs"
@@ -171,6 +171,7 @@ cap() {
 }
 
 stdin_note() {
+  [ -n "$SCOUT_ARGS" ] && printf ' %s' "$SCOUT_ARGS"
   [ "$SCOUT_STDIN" = /dev/null ] && return
   printf ' < %s' "$SCOUT_STDIN"
 }
@@ -178,10 +179,24 @@ stdin_note() {
 differential() {
   local repo=$1 dir=$2 main=$3
   local a_out a_rc g_out g_rc
-  local SCOUT_STDIN=$work/stdin/$(echo "$repo" | tr / _)
+  local key
+  key=$(echo "$repo" | tr / _)
+  local SCOUT_STDIN=$work/stdin/$key
   [ -f "$SCOUT_STDIN" ] || SCOUT_STDIN=/dev/null
+  # Command-line arguments, one line, word-split on purpose: several
+  # of these programs do all their work in argv and print nothing
+  # without it (tmhedberg/caesar, nlarosa/HaskellRomanNumerals both
+  # "agreed" on zero lines of output until they got some).
+  local SCOUT_ARGS=""
+  [ -f "$work/args/$key" ] && SCOUT_ARGS=$(head -1 "$work/args/$key")
   local SCOUT_CWD=$dir
-  a_out=$(cap "$dir/prog"); a_rc=$?
+  # BOTH binaries are named prog, in sibling directories: a program
+  # that branches on getProgName (nlarosa/HaskellRomanNumerals picks
+  # its conversion that way) would otherwise be asked to do two
+  # different jobs and then be blamed for the difference.
+  mkdir -p "$dir/.bin.ahc" "$dir/.bin.ghc"
+  cp "$dir/prog" "$dir/.bin.ahc/prog"
+  a_out=$(cap "$dir/.bin.ahc/prog"); a_rc=$?
   local a_secs; a_secs=$(cap_secs)
   local base
   base=$(basename "$main")
@@ -194,11 +209,11 @@ differential() {
             | awk '{print $2}' | sed 's/(.*//' | tr -d ' \r')
   [ -n "$modname" ] && [ "$modname" != Main ] && mainis=(-main-is "$modname")
   if ! (cd "$dir/_flat" && ghc -v0 "${mainis[@]+"${mainis[@]}"}" \
-          -o "$dir/prog.ghc" "$base") >/dev/null 2>&1; then
+          -o "$dir/.bin.ghc/prog" "$base") >/dev/null 2>&1; then
     record "$repo" NO-ORACLE "$base builds and runs (rc=$a_rc); GHC 9.4.8 will not build it"
     return
   fi
-  g_out=$(cap "$dir/prog.ghc"); g_rc=$?
+  g_out=$(cap "$dir/.bin.ghc/prog"); g_rc=$?
   local g_secs; g_secs=$(cap_secs)
   # 142 is the alarm. AHC computing the right answer far slower than
   # GHC is a PERFORMANCE result, and calling it DIFFERS would report
@@ -213,7 +228,7 @@ differential() {
       "$base -> $dir/prog$(stdin_note); rc=$a_rc, $(printf '%s' "$a_out" | grep -c '' | tr -d ' ') lines identical to GHC (${a_secs}s vs ${g_secs}s)"
   elif [ "$a_rc" = "$g_rc" ] \
        && [ "$(printf '%s' "$a_out" | sed 's|ahc: |PROG: |g')" \
-          = "$(printf '%s' "$g_out" | sed 's|prog\.ghc: |PROG: |g')" ]; then
+          = "$(printf '%s' "$g_out" | sed 's|prog: |PROG: |g')" ]; then
     # AHC's fatal banner says "ahc:" where GHC says the program's own
     # name. A known gap, recorded as its own outcome rather than
     # normalised away silently - and kept out of DIFFERS, where it
