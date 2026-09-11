@@ -104,6 +104,14 @@ cmd_try() {
        -not -path '*/.stack-work/*' -not -path '*/test*/*' \
        -not -name 'Setup.hs' \
        -exec cp {} "$flat/" \; 2>/dev/null
+  # Data files the program needs but the repo does not ship: anything
+  # under $work/files/<owner_repo>/ is copied in after the clone.
+  # Input, not an edit - the rule is that no line of HASKELL changes.
+  local key
+  key=$(echo "$repo" | tr / _)
+  if [ -d "$work/files/$key" ]; then
+    cp -R "$work/files/$key/." "$dir/" 2>/dev/null
+  fi
   local why
   why=$(filter_dir "$flat")
   if [ "$why" != OK ]; then record "$repo" FILTERED "$why"; return; fi
@@ -188,7 +196,7 @@ differential() {
   local a_out a_rc g_out g_rc
   local key
   key=$(echo "$repo" | tr / _)
-  local SCOUT_STDIN=$work/stdin/$key
+  local SCOUT_STDIN=$work/stdin/$key   # set again: separate function
   [ -f "$SCOUT_STDIN" ] || SCOUT_STDIN=/dev/null
   # Command-line arguments, one line, word-split on purpose: several
   # of these programs do all their work in argv and print nothing
