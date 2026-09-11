@@ -889,8 +889,33 @@ package body AHC.Kinds is
       --  Per-declaration processing
       ------------------------------------------------------------------
 
-      --  Data/newtype: mint canonical tyvars, kind the tycon, convert
-      --  constructor fields, build Con_Schemes and field selectors.
+      --  Data/newtype kind skeleton: k1->..->kn->* over fresh metas.
+      --  Report 4.2.1 makes the type declarations of a module mutually
+      --  recursive regardless of order, so every tycon must carry a
+      --  kind before ANY constructor field is converted - a field of
+      --  the first declaration may name the last one.
+      procedure Pre_Data (N : Decl_Node) is
+         TC : constant Core.Real_TyCon_Id :=
+           Builtins.TyCon_Maps.Element (Env.TyCons.Find (N.D_Name));
+         K : Core.Real_Kind_Id := Star_K;
+         Metas : array (1 .. Natural (N.D_Vars.Length)) of
+           Core.Real_Kind_Id;
+      begin
+         for I in Metas'Range loop
+            Metas (I) := Fresh_KMeta;
+         end loop;
+         for I in reverse Metas'Range loop
+            K := M.Add (Core.Kind_Node'(Kind => Core.KFun_K,
+                                        KFrom => Metas (I),
+                                        KTo => K));
+         end loop;
+         M.TyCons (TC).TC_Kind := Core.Kind_Id (K);
+      end Pre_Data;
+
+      --  Data/newtype: mint canonical tyvars, convert constructor
+      --  fields, build Con_Schemes and field selectors. The tycon's
+      --  kind is already in place (Pre_Data); its argument metas are
+      --  read back off the spine so the tyvars share them.
       procedure Do_Data (N : Decl_Node) is
          TC : constant Core.Real_TyCon_Id :=
            Builtins.TyCon_Maps.Element (Env.TyCons.Find (N.D_Name));
@@ -898,21 +923,17 @@ package body AHC.Kinds is
          Tvs   : TyVar_Vectors.Vector;
          Result_T : Core.Type_Id;
       begin
-         --  Tyvars with fresh kind metas; tycon kind k1->..->kn->*.
+         --  Tyvars over the metas Pre_Data hung off the tycon kind.
          declare
-            K : Core.Real_Kind_Id := Star_K;
+            K : Core.Real_Kind_Id :=
+              Core.Real_Kind_Id (M.TyCons (TC).TC_Kind);
             Metas : array (1 .. Natural (N.D_Vars.Length)) of
               Core.Real_Kind_Id;
          begin
             for I in Metas'Range loop
-               Metas (I) := Fresh_KMeta;
+               Metas (I) := M.Node (K).KFrom;
+               K := M.Node (K).KTo;
             end loop;
-            for I in reverse Metas'Range loop
-               K := M.Add (Core.Kind_Node'(Kind => Core.KFun_K,
-                                           KFrom => Metas (I),
-                                           KTo => K));
-            end loop;
-            M.TyCons (TC).TC_Kind := Core.Kind_Id (K);
             for I in 1 .. N.D_Vars.Last_Index loop
                declare
                   Tv : constant Core.Real_TyVar_Id :=
@@ -1192,9 +1213,21 @@ package body AHC.Kinds is
       Method_Selectors : Sig_Maps.Map;   --  selector set (value unused)
 
    begin
-      --  Data/newtype first (mutual recursion between types works
-      --  because each user tycon's kind is a meta structure that other
-      --  conversions unify against).
+      --  Data/newtype kinds first, for the whole module: mutual
+      --  recursion between types works because each user tycon's kind
+      --  is a meta structure that other conversions unify against, and
+      --  a field may name a type declared further down the file.
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind in Data_D | Newtype_D then
+               Pre_Data (N);
+            end if;
+         end;
+      end loop;
+
+      --  Then the constructors.
       for D of Arena.Top_Decls loop
          declare
             N : constant Decl_Node := Arena.Node (D);
