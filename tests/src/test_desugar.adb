@@ -111,7 +111,7 @@ package body Test_Desugar is
       Check_Equal
         (DS ("s = [ x | x <- xs, x ] where xs = []"),
          "(bindrec (s (letrec ((xs (con []))) (app (app (var"
-         & " concatMap) (lam x (case (var x) (alt (con True) (app"
+         & " concatMapList_) (lam x (case (var x) (alt (con True) (app"
          & " (app (con :) (var x)) (con []))) (alt _ (con [])))))"
          & " (var xs)))))",
          "comprehension: concatMap over generator, guard to Bool case");

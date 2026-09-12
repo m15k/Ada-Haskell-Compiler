@@ -52,6 +52,14 @@ notMember x s = not (member x s)
 --  Index into the ascending order, in O(log n) off the size
 --  annotation rather than O(n) through toAscList. base calls it an
 --  error, not a Maybe, and counts from 0.
+--  Foldable over the ascending order, so the Prelude's elem/length/
+--  null/sum/toList work on a Set the way base's do. size and the
+--  emptiness test are O(1) off the annotation rather than folds.
+instance Foldable Set where
+  foldr f z s = foldrList_ f z (toAscList s)
+  null s = Data.Set.null s
+  length s = size s
+
 elemAt :: Int -> Set a -> a
 elemAt _ STip = error "Set.elemAt: index out of range"
 elemAt i (SBin _ x l r) =

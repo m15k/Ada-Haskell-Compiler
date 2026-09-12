@@ -1030,11 +1030,11 @@ package body AHC.Prelude_Core is
          H : constant Real_Var_Id := Fresh ("h");
          T : constant Real_Var_Id := Fresh ("t");
       begin
-         Bind_Name ("foldr",
+         Bind_Name ("foldrList_",
            Lam (F, Lam (Z, Lam (XS, List_Case
              (V (XS), V (Z), H, T,
               Ap2 (V (F), V (H),
-                   Ap (Ap2 (V ((Lookup ("foldr"))),
+                   Ap (Ap2 (V ((Lookup ("foldrList_"))),
                             V (F), V (Z)),
                        V (T))))))));
       end;
@@ -1060,11 +1060,11 @@ package body AHC.Prelude_Core is
          H : constant Real_Var_Id := Fresh ("h");
          T : constant Real_Var_Id := Fresh ("t");
       begin
-         Bind_Name ("concat",
+         Bind_Name ("concatList_",
            Lam (XS, List_Case
              (V (XS), Nil, H, T,
               Ap2 (V (Env.Append_V), V (H),
-                   Ap (V ((Lookup ("concat"))),
+                   Ap (V ((Lookup ("concatList_"))),
                        V (T))))));
       end;
       declare
@@ -1073,7 +1073,7 @@ package body AHC.Prelude_Core is
       begin
          Bind (Env.Concat_Map_V,
            Lam (F, Lam (XS,
-             Ap (V ((Lookup ("concat"))),
+             Ap (V ((Lookup ("concatList_"))),
                  Ap2 (V (Env.Map_V), V (F),
                       V (XS))))));
       end;
@@ -1092,11 +1092,11 @@ package body AHC.Prelude_Core is
                                      Text => Names.Name_Id
                                        (Table.Intern ("1")))));
       begin
-         Bind_Name ("length",
+         Bind_Name ("lengthList_",
            Lam (XS, List_Case
              (V (XS), Zero, H, T,
               Ap2 (V (P_Add), One,
-                   Ap (V ((Lookup ("length"))),
+                   Ap (V ((Lookup ("lengthList_"))),
                        V (T))))));
       end;
 

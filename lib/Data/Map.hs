@@ -35,6 +35,13 @@ null :: Map k a -> Bool
 null Tip = True
 null _ = False
 
+--  base folds a Map over its VALUES in ascending key order, so
+--  `length m` is its size and `elem v m` searches the values.
+instance Foldable (Map k) where
+  foldr f z m = foldrList_ f z (elems m)
+  null m = Data.Map.null m
+  length m = size m
+
 size :: Map k a -> Int
 size Tip = 0
 size (Bin s _ _ _ _) = s

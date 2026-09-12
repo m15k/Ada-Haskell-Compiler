@@ -1,0 +1,21 @@
+(3,True,55)
+(3,'a',24)
+(True,False,False)
+(True,[1,2],"ab")
+(11,5)
+(True,True,6,False)
+("aehkls",'s','a')
+("aehkls","slkhea")
+(True,True,Just 'l')
+(3,True,["one","two","three"],False)
+"onetwothree"
+(1,True,[1])
+(3,0)
+(1,0)
+("r",True)
+6
+2
+("+>",True)
+1
+2
+9

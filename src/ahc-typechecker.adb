@@ -680,6 +680,15 @@ package body AHC.Typechecker is
             end;
          end loop;
 
+         --  TWO PASSES. Defaulting is a whole-group operation, but
+         --  reporting used to happen in the same sweep that binds, so
+         --  whichever ambiguous constraint came first won the race:
+         --  `print (maximum "abc")` leaves Show ?a beside Foldable ?t,
+         --  and Show ?a - which has no defaultable class of its own -
+         --  was reported before ?t could be defaulted to [] and pin ?a
+         --  to Char through IsString. Pass 1 binds everything it can;
+         --  only pass 2 reports what is still ambiguous.
+         for Pass in 1 .. 2 loop
          for I in 1 .. W_List.Last_Index loop
             if W_List (I).Sol = Unsolved then
                declare
@@ -693,9 +702,24 @@ package body AHC.Typechecker is
                      declare
                         Numeric : Boolean := False;
                         Stringy : Boolean := False;
+                        --  This meta is the HEAD of an applied type
+                        --  that IsString constrains: `elem c "abc"`
+                        --  unifies the literal's type with `t a`, so
+                        --  what is left is `Foldable ?t` beside
+                        --  `IsString (?t Char)` and the plain Stringy
+                        --  test - which looks for IsString on the
+                        --  meta itself - never fires. Defaulting ?t
+                        --  to [] restores the pre-Foldable reading.
+                        Stringy_Fun : Boolean := False;
                         Solved : Boolean := False;
                      begin
-                        for J in I .. W_List.Last_Index loop
+                        --  From 1, not I: the classes constraining
+                        --  this meta can have been recorded BEFORE
+                        --  it. `filter (`elem` "..") s` files its
+                        --  IsString ahead of the Foldable, and a
+                        --  forward-only scan saw a meta with no
+                        --  defaultable class on it at all.
+                        for J in 1 .. W_List.Last_Index loop
                            if W_List (J).Sol = Unsolved then
                               declare
                                  ZJ : constant Real_Type_Id :=
@@ -735,6 +759,21 @@ package body AHC.Typechecker is
                                        Env.IsString_Cl
                                  then
                                     Stringy := True;
+                                 elsif NJ.Kind = TApp_T
+                                   and then
+                                     Class_Id (W_List (J).C.Class) =
+                                       Env.IsString_Cl
+                                 then
+                                    declare
+                                       H : constant Type_Node :=
+                                         M.Node (Repr (NJ.T_Fun));
+                                    begin
+                                       if H.Kind = TMeta_T
+                                         and then H.Meta = N.Meta
+                                       then
+                                          Stringy_Fun := True;
+                                       end if;
+                                    end;
                                  end if;
                               end;
                            end if;
@@ -746,13 +785,18 @@ package body AHC.Typechecker is
                         --  pre-OverloadedStrings meaning of every
                         --  ambiguous literal. Numeric wins a mixed
                         --  set (can't satisfy both anyway).
-                        if Numeric or else Stringy then
+                        if Numeric or else Stringy
+                          or else Stringy_Fun
+                        then
                            for Cand in 1 .. (if Numeric then 2 else 1)
                            loop
                               if not Solved then
                                  declare
                                     T : constant Real_Type_Id :=
-                                      (if not Numeric then
+                                      (if not Numeric and then not
+                                         Stringy and then Stringy_Fun
+                                       then TCon (Env.List_TC)
+                                       elsif not Numeric then
                                          M.Add (Type_Node'
                                            (Kind => TApp_T,
                                             T_Fun =>
@@ -822,25 +866,49 @@ package body AHC.Typechecker is
                                     if Ok then
                                        Bind_Meta (N.Meta, T);
                                        Solved := True;
-                                       --  Re-solve for evidence.
-                                       for J in 1 .. Mark loop
-                                          if W_List (J).Sol = Unsolved
-                                          then
-                                             Solve (J, 0);
-                                          end if;
+                                       --  Re-solve for evidence, to
+                                       --  a FIXPOINT: one pass is
+                                       --  order-dependent the same
+                                       --  way the first attempt was.
+                                       --  Binding ?t to [] lets
+                                       --  IsString ([] ?a) pin ?a to
+                                       --  Char, but a single sweep
+                                       --  that reaches Show ?a first
+                                       --  leaves it unsolved - and
+                                       --  elaboration then emitted
+                                       --  $dMISSING, which the
+                                       --  compiled program printed.
+                                       loop
+                                          declare
+                                             Moved : Boolean := False;
+                                          begin
+                                             for J in 1 .. Mark loop
+                                                if W_List (J).Sol =
+                                                     Unsolved
+                                                then
+                                                   Solve (J, 0);
+                                                   if W_List (J).Sol /=
+                                                        Unsolved
+                                                   then
+                                                      Moved := True;
+                                                   end if;
+                                                end if;
+                                             end loop;
+                                             exit when not Moved;
+                                          end;
                                        end loop;
                                     end if;
                                  end;
                               end if;
                            end loop;
-                           if not Solved then
+                           if not Solved and then Pass = 2 then
                               Bag.Add (Diagnostics.Error,
                                        Diagnostics.Type_Ambiguous,
                                        W_List (I).C.Span,
                                        "ambiguous type variable in"
                                        & " constraints");
                            end if;
-                        else
+                        elsif Pass = 2 then
                            Bag.Add
                              (Diagnostics.Error,
                               Diagnostics.Type_Ambiguous,
@@ -864,6 +932,7 @@ package body AHC.Typechecker is
                   --  elaboration decides to emit $dMISSING.
                end;
             end if;
+         end loop;
          end loop;
       end Try_Default;
 

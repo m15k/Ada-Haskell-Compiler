@@ -56,12 +56,12 @@ swap (a, b) = (b, a)
 
 -- Lists ---------------------------------------------------------------
 
-foldl :: (b -> a -> b) -> b -> [a] -> b
-foldl _ z [] = z
-foldl f z (x : xs) = foldl f (f z x) xs
+foldlList_ :: (b -> a -> b) -> b -> [a] -> b
+foldlList_ _ z [] = z
+foldlList_ f z (x : xs) = foldlList_ f (f z x) xs
 
 reverse :: [a] -> [a]
-reverse = foldl (flip (:)) []
+reverse = foldlList_ (flip (:)) []
 
 take :: Int -> [a] -> [a]
 take n xs = if n <= 0 then [] else takeGo xs
@@ -90,9 +90,9 @@ zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
 zipWith f (a : as) (b : bs) = f a b : zipWith f as bs
 zipWith _ _ _ = []
 
-null :: [a] -> Bool
-null [] = True
-null _ = False
+nullList_ :: [a] -> Bool
+nullList_ [] = True
+nullList_ _ = False
 
 head :: [a] -> a
 head (x : _) = x
@@ -103,11 +103,11 @@ tail (_ : xs) = xs
 tail [] = error "Prelude.tail: empty list"
 
 last :: [a] -> a
-last (x : xs) = if null xs then x else last xs
+last (x : xs) = if nullList_ xs then x else last xs
 last [] = error "Prelude.last: empty list"
 
 init :: [a] -> [a]
-init (x : xs) = if null xs then [] else x : init xs
+init (x : xs) = if nullList_ xs then [] else x : init xs
 init [] = error "Prelude.init: empty list"
 
 -- Report 9.1: infixl 9 !! (the fixity is wired in AHC.Fixity).
@@ -126,46 +126,37 @@ dropWhile :: (a -> Bool) -> [a] -> [a]
 dropWhile _ [] = []
 dropWhile p ys = if p (head ys) then dropWhile p (tail ys) else ys
 
-sum :: Num a => [a] -> a
-sum = foldl (+) 0
+sumList_ :: Num a => [a] -> a
+sumList_ = foldlList_ (+) 0
 
-product :: Num a => [a] -> a
-product = foldl (*) 1
+productList_ :: Num a => [a] -> a
+productList_ = foldlList_ (*) 1
 
-maximum :: Ord a => [a] -> a
-maximum (x : xs) = foldl max x xs
-maximum [] = error "Prelude.maximum: empty list"
+maximumList_ :: Ord a => [a] -> a
+maximumList_ (x : xs) = foldlList_ max x xs
+maximumList_ [] = error "Prelude.maximum: empty list"
 
-minimum :: Ord a => [a] -> a
-minimum (x : xs) = foldl min x xs
-minimum [] = error "Prelude.minimum: empty list"
+minimumList_ :: Ord a => [a] -> a
+minimumList_ (x : xs) = foldlList_ min x xs
+minimumList_ [] = error "Prelude.minimum: empty list"
 
-elem :: Eq a => a -> [a] -> Bool
-elem _ [] = False
-elem e (x : xs) = e == x || elem e xs
-
-notElem :: Eq a => a -> [a] -> Bool
-notElem e xs = not (elem e xs)
+elemList_ :: Eq a => a -> [a] -> Bool
+elemList_ _ [] = False
+elemList_ e (x : xs) = e == x || elemList_ e xs
 
 lookup :: Eq a => a -> [(a, b)] -> Maybe b
 lookup _ [] = Nothing
 lookup k ((a, b) : rest) = if k == a then Just b else lookup k rest
 
-and :: [Bool] -> Bool
-and = foldl (&&) True
+andList_ :: [Bool] -> Bool
+andList_ = foldlList_ (&&) True
 
-or :: [Bool] -> Bool
-or = foldl (||) False
-
-any :: (a -> Bool) -> [a] -> Bool
-any p xs = or (map p xs)
-
-all :: (a -> Bool) -> [a] -> Bool
-all p xs = and (map p xs)
+orList_ :: [Bool] -> Bool
+orList_ = foldlList_ (||) False
 
 unwords :: [String] -> String
 unwords [] = ""
-unwords (w : ws) = if null ws then w else w ++ " " ++ unwords ws
+unwords (w : ws) = if nullList_ ws then w else w ++ " " ++ unwords ws
 
 unlines :: [String] -> String
 unlines [] = ""
@@ -175,17 +166,17 @@ mapM :: Monad m => (a -> m b) -> [a] -> m [b]
 mapM _ [] = return []
 mapM f (x : xs) = f x >>= \y -> mapM f xs >>= \ys -> return (y : ys)
 
-mapM_ :: Monad m => (a -> m b) -> [a] -> m ()
-mapM_ f xs = go xs
+mapMList__ :: Monad m => (a -> m b) -> [a] -> m ()
+mapMList__ f xs = go xs
   where go [] = return ()
         go (y : ys) = f y >> go ys
 
 sequence :: Monad m => [m a] -> m [a]
 sequence ms = mapM (\m -> m) ms
 
-sequence_ :: Monad m => [m a] -> m ()
-sequence_ [] = return ()
-sequence_ (m : ms) = m >> sequence_ ms
+sequenceList__ :: Monad m => [m a] -> m ()
+sequenceList__ [] = return ()
+sequenceList__ (m : ms) = m >> sequenceList__ ms
 
 gcd :: Integral a => a -> a -> a
 gcd a 0 = abs a
@@ -315,7 +306,7 @@ instance Applicative Maybe where
 
 instance Applicative [] where
   pure x = [x]
-  fs <*> xs = concatMap (\f -> map f xs) fs
+  fs <*> xs = concatMapList_ (\f -> map f xs) fs
 
 instance Applicative IO where
   pure x = return x
@@ -333,14 +324,14 @@ splitAt n xs = (take n xs, drop n xs)
 unzip :: [(a, b)] -> ([a], [b])
 unzip xs = (map fst xs, map snd xs)
 
-foldr1 :: (a -> a -> a) -> [a] -> a
-foldr1 _ [x] = x
-foldr1 f (x : xs) = f x (foldr1 f xs)
-foldr1 _ [] = error "foldr1: empty list"
+foldr1List_ :: (a -> a -> a) -> [a] -> a
+foldr1List_ _ [x] = x
+foldr1List_ f (x : xs) = f x (foldr1List_ f xs)
+foldr1List_ _ [] = error "foldr1: empty list"
 
-foldl1 :: (a -> a -> a) -> [a] -> a
-foldl1 f (x : xs) = foldl f x xs
-foldl1 _ [] = error "foldl1: empty list"
+foldl1List_ :: (a -> a -> a) -> [a] -> a
+foldl1List_ f (x : xs) = foldlList_ f x xs
+foldl1List_ _ [] = error "foldl1: empty list"
 
 lines :: String -> [String]
 lines [] = []
@@ -503,7 +494,7 @@ readsNat_ s =
   case span isDigit_ s of
     ([], _)     -> []
     (digits, r) ->
-      [(foldl (\a c -> a * 10 + digitVal_ c) 0 digits, r)]
+      [(foldlList_ (\a c -> a * 10 + digitVal_ c) 0 digits, r)]
 
 digitVal_ :: Char -> Integer
 digitVal_ c =
@@ -570,7 +561,7 @@ class Semigroup a => Monoid a where
   mappend :: a -> a -> a
   mappend = (<>)
   mconcat :: [a] -> a
-  mconcat = foldr (<>) mempty
+  mconcat = foldrList_ (<>) mempty
 
 instance Semigroup [a] where
   (<>) = (++)
@@ -628,8 +619,8 @@ instance Show IOException where
       showFile = case primIoeFilename e of
         Just f -> showString f . showString ": "
         Nothing -> id
-      showLoc = if null loc then id else showString loc . showString ": "
-      showDesc = if null desc then id
+      showLoc = if nullList_ loc then id else showString loc . showString ": "
+      showDesc = if nullList_ desc then id
                  else showString " (" . showString desc . showString ")"
       -- the runtime's IOErrorType table, in declaration order
       typeName t = case t of
@@ -675,8 +666,8 @@ readsDouble_ s0 =
           let (frac, rest2) = fracPart rest
               (ex, rest3) = expPart rest2
               digits = whole ++ frac
-              mant = foldl (\a c -> a * 10 + toInteger (fromEnum c - 48)) 0 digits
-          in [(primDoubleFromDec mant (ex - length frac), rest3)]
+              mant = foldlList_ (\a c -> a * 10 + toInteger (fromEnum c - 48)) 0 digits
+          in [(primDoubleFromDec mant (ex - lengthList_ frac), rest3)]
     fracPart ('.' : u) =
       case span isDigit_ u of
         ([], _) -> ("", '.' : u)
@@ -698,7 +689,7 @@ readsDouble_ s0 =
                       (ds, r) -> (digitsToInt_ ds, r)
 
 digitsToInt_ :: String -> Int
-digitsToInt_ = foldl (\a c -> a * 10 + (fromEnum c - 48)) 0
+digitsToInt_ = foldlList_ (\a c -> a * 10 + (fromEnum c - 48)) 0
 
 instance Read Double where
   readsPrec _ s = readsDouble_ s
@@ -738,6 +729,109 @@ cycle [] = error "Prelude.cycle: empty list"
 cycle xs = xs' where xs' = xs ++ xs'
 
 
+-- Foldable (base-compat beyond the 2010 Report, like Applicative and
+-- Semigroup). The 2010 Prelude's list functions are list-ONLY; base's
+-- are `Foldable t => ...`, which is why `elem x aSet` is ordinary code
+-- in the wild and was a type error here (thibaudmichaud/lambda-calculus
+-- folds over Data.Set through the Prelude).
+--
+-- Every method has a default in terms of foldr, so an instance need
+-- only give foldr - but the containers override the cheap ones
+-- (Set.length is its size annotation, not a traversal). The list
+-- instance forwards to the list-monomorphic originals, kept under
+-- *List_ names, so `length someList` costs exactly what it always did
+-- and the desugarer still has a concatMap needing no dictionary.
+--  `toList` is NOT here: base keeps it in Data.Foldable, and this
+--  Prelude has no export list, so defining it would shadow every
+--  program's own toList. toListF_ is the internal spelling; the
+--  public name is Data.Foldable's.
+class Foldable t where
+  foldr :: (a -> b -> b) -> b -> t a -> b
+  null :: t a -> Bool
+  length :: t a -> Int
+  foldl :: (b -> a -> b) -> b -> t a -> b
+  elem :: Eq a => a -> t a -> Bool
+  sum :: Num a => t a -> a
+  product :: Num a => t a -> a
+  maximum :: Ord a => t a -> a
+  minimum :: Ord a => t a -> a
+
+  null t = foldr (\_ _ -> False) True t
+  length t = foldr (\_ n -> n + 1) 0 t
+  foldl f z t = foldlList_ f z (toListF_ t)
+  elem e t = elemList_ e (toListF_ t)
+  sum t = sumList_ (toListF_ t)
+  product t = productList_ (toListF_ t)
+  maximum t = maximumList_ (toListF_ t)
+  minimum t = minimumList_ (toListF_ t)
+
+toListF_ :: Foldable t => t a -> [a]
+toListF_ t = foldr (:) [] t
+
+instance Foldable [] where
+  foldr = foldrList_
+  null = nullList_
+  length = lengthList_
+  foldl = foldlList_
+  elem = elemList_
+  sum = sumList_
+  product = productList_
+  maximum = maximumList_
+  minimum = minimumList_
+
+instance Foldable Maybe where
+  foldr _ z Nothing = z
+  foldr f z (Just x) = f x z
+  null Nothing = True
+  null (Just _) = False
+  length Nothing = 0
+  length (Just _) = 1
+
+-- base folds over the RIGHT component only, so `length (Left e)` is 0
+-- and `length (Right x)` is 1.
+instance Foldable (Either a) where
+  foldr _ z (Left _) = z
+  foldr f z (Right x) = f x z
+  null (Left _) = True
+  null (Right _) = False
+  length (Left _) = 0
+  length (Right _) = 1
+
+-- The Foldable-general functions that are not methods (base keeps
+-- these as plain functions over the class, and so does this).
+notElem :: (Foldable t, Eq a) => a -> t a -> Bool
+notElem e t = not (elem e t)
+
+concat :: Foldable t => t [a] -> [a]
+concat t = concatList_ (toListF_ t)
+
+concatMap :: Foldable t => (a -> [b]) -> t a -> [b]
+concatMap f t = concatMapList_ f (toListF_ t)
+
+and :: Foldable t => t Bool -> Bool
+and t = andList_ (toListF_ t)
+
+or :: Foldable t => t Bool -> Bool
+or t = orList_ (toListF_ t)
+
+any :: Foldable t => (a -> Bool) -> t a -> Bool
+any p t = orList_ (map p (toListF_ t))
+
+all :: Foldable t => (a -> Bool) -> t a -> Bool
+all p t = andList_ (map p (toListF_ t))
+
+foldr1 :: Foldable t => (a -> a -> a) -> t a -> a
+foldr1 f t = foldr1List_ f (toListF_ t)
+
+foldl1 :: Foldable t => (a -> a -> a) -> t a -> a
+foldl1 f t = foldl1List_ f (toListF_ t)
+
+mapM_ :: (Foldable t, Monad m) => (a -> m b) -> t a -> m ()
+mapM_ f t = mapMList__ f (toListF_ t)
+
+sequence_ :: (Foldable t, Monad m) => t (m a) -> m ()
+sequence_ t = sequenceList__ (toListF_ t)
+
 -- Traversable (base-compat beyond the 2010 Report, like Applicative
 -- and Semigroup): `traverse` and `sequenceA` only. The Report's
 -- `mapM`/`sequence` stay the list-specific Prelude functions above, so
@@ -753,7 +847,7 @@ sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
 sequenceA xs = traverse id xs
 
 instance Traversable [] where
-  traverse f = foldr (\x acc -> pure (:) <*> f x <*> acc) (pure [])
+  traverse f = foldrList_ (\x acc -> pure (:) <*> f x <*> acc) (pure [])
 
 instance Traversable Maybe where
   traverse _ Nothing = pure Nothing

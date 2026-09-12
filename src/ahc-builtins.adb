@@ -1012,7 +1012,7 @@ package body AHC.Builtins is
                              FN (FN (TV (A), TV (B)),
                                  LST (TV (A)), LST (TV (B))))));
             Env.Concat_Map_V := Var_Id (Def_Global
-              ("concatMap",
+              ("concatMapList_",
                Poly2 (A, B, FN (FN (TV (A), LST (TV (B))),
                                 LST (TV (A)), LST (TV (B))))));
             Ignore := Def_Global
@@ -1020,8 +1020,15 @@ package body AHC.Builtins is
             Ignore := Def_Global
               ("$!", Poly2 (A, B, FN (FN (TV (A), TV (B)),
                                       TV (A), TV (B))));
+            --  M141: the list-monomorphic originals, renamed out of
+            --  the way so the Prelude's Foldable class can own the
+            --  public names. They stay wired because the DESUGARER
+            --  needs a list concatMap for comprehensions (a class
+            --  method there would need a dictionary the desugarer has
+            --  no way to supply), and because the Foldable [] instance
+            --  should cost what the list version always cost.
             Ignore := Def_Global
-              ("foldr", Poly2 (A, B,
+              ("foldrList_", Poly2 (A, B,
                                FN (FN (TV (A), FN (TV (B), TV (B))),
                                    TV (B), FN (LST (TV (A)), TV (B)))));
             Ignore := Def_Global
@@ -1046,7 +1053,7 @@ package body AHC.Builtins is
               ("++", Poly1 (A, FN (LST (TV (A)), LST (TV (A)),
                                    LST (TV (A))))));
             Ignore := Def_Global
-              ("concat", Poly1 (A, FN (LST (LST (TV (A))),
+              ("concatList_", Poly1 (A, FN (LST (LST (TV (A))),
                                        LST (TV (A)))));
             Env.Error_V := Var_Id (Def_Global
               ("error", Poly1 (A, FN (String_T, TV (A)))));
@@ -1060,7 +1067,7 @@ package body AHC.Builtins is
             
             --  quot/rem/div/mod are real Integral methods now.
             Ignore := Def_Global
-              ("length", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
+              ("lengthList_", Poly1 (A, FN (LST (TV (A)), TC (Env.Int_TC))));
          end;
 
          declare
