@@ -1,0 +1,16 @@
+(Green,[True,True,True])
+(Pair 1 True,True)
+Pair 7 False
+Rec {name = "bo", age = 4, tags = []}
+True
+(Node Leaf 5 Leaf,True)
+True
+(True,1 :* False)
+True
+M 0 Nothing (Right 'x') 'q' ""
+(True,"Neg (-1) (-2.5)")
+(Red,Pair 1 True)
+[(Leaf," rest")]
+[(Pair 1 True," and more")]
+[]
+[]

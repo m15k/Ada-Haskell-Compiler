@@ -439,8 +439,14 @@ instance (Show a, Show b) => Show (Either a b) where
 -- The Prelude has no imports, so the three character predicates Read
 -- needs are private ASCII copies of the Data.Char ones.
 
+--  Report 9.1's Read has TWO methods. readList exists so that the
+--  list instance can be specialised at Char: `read "\"ann\""` has to
+--  yield a String, not a list of character literals, and a record
+--  field of type String is the commonest thing derived Read meets.
 class Read a where
   readsPrec :: Int -> String -> [(a, String)]
+  readList :: String -> [([a], String)]
+  readList = readListDefault_ readsPrec
 
 reads :: Read a => String -> [(a, String)]
 reads s = readsPrec 0 s
@@ -472,10 +478,77 @@ skipSpace_ = dropWhile isSpace_
 --  Derived-Read support (bound by the compiler for deriving Read on
 --  enumerations): match one maximal identifier token against the
 --  constructor table.
+--  readParen False, not a bare identifier match: GHC's derived Read
+--  accepts "(Red)" and "((Red))" for a nullary constructor, and so
+--  must this - the non-enumeration path gets the same through the
+--  readParen the compiler generates.
 readsEnum_ :: [(String, a)] -> Int -> String -> [(a, String)]
 readsEnum_ table _ s =
-  case span isIdChar_ (skipSpace_ s) of
-    (tok, rest) -> [ (v, rest) | (nm, v) <- table, nm == tok ]
+  readParen False
+    (\r -> case span isIdChar_ (skipSpace_ r) of
+             (tok, rest) -> [ (v, rest) | (nm, v) <- table, nm == tok ])
+    s
+
+--  Derived-Read support for NON-enumerations (Report 11.4 and
+--  Appendix D). The generated reader is a CHAIN of ReadS steps, so
+--  the compiler composes these combinators instead of building a
+--  parser: one step per expected lexeme and one per field, ending in
+--  retReadS_ applied to the rebuilt constructor. Derived Read must be
+--  the exact inverse of derived Show, so the precedences here mirror
+--  AHC.Prelude_Core's Derive_Show: 11 under a prefix constructor, 10
+--  either side of an infix one, 0 inside record braces.
+
+bindReadS_ :: [(a, String)] -> (a -> String -> [(b, String)])
+           -> [(b, String)]
+bindReadS_ xs k = concatMapList_ (\(v, r) -> k v r) xs
+
+retReadS_ :: a -> String -> [(a, String)]
+retReadS_ v r = [(v, r)]
+
+--  Match ONE expected lexeme after whitespace. Identifier and
+--  operator tokens have to end at a lexeme boundary, or "C" would
+--  match the "C" inside "Cons" and leave "ons" behind.
+lexTok_ :: String -> String -> [((), String)]
+lexTok_ tok s =
+  case stripPre_ tok (skipSpace_ s) of
+    Nothing -> []
+    Just r  -> if boundaryOk_ tok r then [((), r)] else []
+
+stripPre_ :: String -> String -> Maybe String
+stripPre_ [] r = Just r
+stripPre_ _ [] = Nothing
+stripPre_ (c : cs) (d : ds) = if c == d then stripPre_ cs ds else Nothing
+
+boundaryOk_ :: String -> String -> Bool
+boundaryOk_ tok r =
+  case r of
+    [] -> True
+    (c : _) ->
+      let l = lastCh_ tok
+      in if isIdChar_ l then not (isIdChar_ c)
+         else if isSymCh_ l then not (isSymCh_ c)
+         else True
+
+lastCh_ :: String -> Char
+lastCh_ [] = ' '
+lastCh_ [c] = c
+lastCh_ (_ : cs) = lastCh_ cs
+
+isSymCh_ :: Char -> Bool
+isSymCh_ c = elemList_ c "!#$%&*+./<=>?@\\^|-~:"
+
+--  Report 9.1. `readParen True` demands the parentheses, `False`
+--  accepts them or not - which is what makes a nullary constructor
+--  read out of "(C)" as GHC's derived instance does.
+readParen :: Bool -> (String -> [(a, String)]) -> String -> [(a, String)]
+readParen b g = if b then mandatory_ else optional_
+  where
+    optional_ r = g r ++ mandatory_ r
+    mandatory_ r =
+      bindReadS_ (lexTok_ "(" r) (\_ s ->
+      bindReadS_ (readParen False g s) (\x t ->
+      bindReadS_ (lexTok_ ")" t) (\_ u ->
+      retReadS_ x u)))
 
 --  Integers: optional parenthesized negative, per the Report's lex.
 readsInteger_ :: String -> [(Integer, String)]
@@ -518,23 +591,99 @@ instance Read Bool where
       ('F' : 'a' : 'l' : 's' : 'e' : r) -> [(False, r)]
       _ -> []
 
+--  The Report's bracketed-list reader, over an element reader passed
+--  explicitly so the compiler can hand it the readsPrec it just built
+--  for a derived instance.
+readListDefault_ :: (Int -> String -> [(a, String)])
+                 -> String -> [([a], String)]
+readListDefault_ rp s =
+  case skipSpace_ s of
+    ('[' : t) ->
+      case skipSpace_ t of
+        (']' : r) -> [([], r)]
+        _         -> readItems t
+    _ -> []
+  where
+    readItems u =
+      [ (x : xs, r2)
+      | (x, r) <- rp 0 u
+      , (xs, r2) <- readRest (skipSpace_ r)
+      ]
+    readRest (',' : u) = readItems u
+    readRest (']' : u) = [([], u)]
+    readRest _ = []
+
+--  Report 9.1: the list instance IS the element's readList, which is
+--  what makes String read as a quoted literal.
 instance Read a => Read [a] where
+  readsPrec _ s = readList s
+
+instance Read Char where
   readsPrec _ s =
     case skipSpace_ s of
-      ('[' : t) ->
-        case skipSpace_ t of
-          (']' : r) -> [([], r)]
-          _         -> readItems t
-      _ -> []
-    where
-      readItems u =
-        [ (x : xs, r2)
-        | (x, r) <- readsPrec 0 u
-        , (xs, r2) <- readRest (skipSpace_ r)
+      ('\'' : t) ->
+        [ (c, r)
+        | (c, q) <- readCharEsc_ t
+        , ('\'' : r) <- [q]
         ]
-      readRest (',' : u) = readItems u
-      readRest (']' : u) = [([], u)]
-      readRest _ = []
+      _ -> []
+  readList s =
+    case skipSpace_ s of
+      ('"' : t) -> readStrLit_ t
+      _ -> []
+
+--  One character of a literal, escapes included. Derived Show emits
+--  \\ \' \" \n \t \r and a decimal \NNN for anything else
+--  unprintable, so reading those back round-trips show.
+readCharEsc_ :: String -> [(Char, String)]
+readCharEsc_ [] = []
+readCharEsc_ ('\\' : c : r) =
+  case c of
+    'n'  -> [('\n', r)]
+    't'  -> [('\t', r)]
+    'r'  -> [('\r', r)]
+    '\\' -> [('\\', r)]
+    '\'' -> [('\'', r)]
+    '"'  -> [('"', r)]
+    _    -> if isDigit_ c
+            then case span isDigit_ (c : r) of
+                   (ds, r2) ->
+                     [(toEnum (fromInteger
+                        (foldlList_ (\a d -> a * 10 + digitVal_ d)
+                                    0 ds)), r2)]
+            else []
+readCharEsc_ (c : r) = [(c, r)]
+
+readStrLit_ :: String -> [(String, String)]
+readStrLit_ ('"' : r) = [("", r)]
+readStrLit_ s =
+  [ (c : cs, r2)
+  | (c, r) <- readCharEsc_ s
+  , (cs, r2) <- readStrLit_ r
+  ]
+
+--  Written over the derived-Read combinators, in exactly the shape
+--  the compiler generates for a hand-written equivalent.
+instance Read a => Read (Maybe a) where
+  readsPrec d s =
+    readParen False
+      (\r -> bindReadS_ (lexTok_ "Nothing" r)
+               (\_ r1 -> retReadS_ Nothing r1)) s
+    ++ readParen (d > 10)
+         (\r -> bindReadS_ (lexTok_ "Just" r) (\_ r1 ->
+                bindReadS_ (readsPrec 11 r1) (\x r2 ->
+                retReadS_ (Just x) r2))) s
+
+instance (Read a, Read b) => Read (Either a b) where
+  readsPrec d s =
+    readParen (d > 10)
+      (\r -> bindReadS_ (lexTok_ "Left" r) (\_ r1 ->
+             bindReadS_ (readsPrec 11 r1) (\x r2 ->
+             retReadS_ (Left x) r2))) s
+    ++ readParen (d > 10)
+         (\r -> bindReadS_ (lexTok_ "Right" r) (\_ r1 ->
+                bindReadS_ (readsPrec 11 r1) (\x r2 ->
+                retReadS_ (Right x) r2))) s
 
 instance (Read a, Read b) => Read (a, b) where
   readsPrec _ s =

@@ -1205,17 +1205,19 @@ package body AHC.Rename is
                  Env.Classes.Find (DC.Name);
             begin
                if Builtins.Class_Maps.Has_Element (C) then
-                  --  Enum/Bounded/Ix/Read derive only for
-                  --  ENUMERATIONS here; a non-nullary constructor
-                  --  is a compile-time rejection (GHC rejects most
-                  --  of these shapes too; the ones it accepts -
+                  --  Enum/Bounded/Ix derive only for ENUMERATIONS
+                  --  here; a non-nullary constructor is a
+                  --  compile-time rejection (GHC rejects most of
+                  --  these shapes too; the ones it accepts -
                   --  single-constructor Bounded/Ix - are honestly
                   --  unimplemented, and a loud error beats the
-                  --  runtime stub it used to be).
+                  --  runtime stub it used to be). Read is NOT in
+                  --  that list since M141: it derives for every
+                  --  shape, as the inverse of derived Show.
                   declare
                      DN : constant String := Text (DC.Name);
                   begin
-                     if DN in "Enum" | "Bounded" | "Ix" | "Read" then
+                     if DN in "Enum" | "Bounded" | "Ix" then
                         for CI of N.D_Cons loop
                            declare
                               CN : constant Con_Node :=

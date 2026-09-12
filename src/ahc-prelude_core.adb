@@ -1,4 +1,6 @@
 with AHC.Diagnostics;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+with Ada.Containers.Vectors;
 
 package body AHC.Prelude_Core is
 
@@ -607,26 +609,405 @@ package body AHC.Prelude_Core is
          Give_Dict (II, Ms);
       end Derive_Ix;
 
-      procedure Derive_Read (II : Real_Instance_Id) is
-         TC : constant Real_TyCon_Id :=
-           Real_TyCon_Id (M.Info (II).Head);
-         Ms : Expr_Id_Vectors.Vector;
-         Tbl : Real_Expr_Id := Nil;
+      --  Static dictionary for a field type, shared by the derives.
+      --  Tvs is the constructor scheme's quantifier list, whose order
+      --  matches the data declaration's type variables (and therefore
+      --  the derived instance's context parameters); the ids differ,
+      --  so map positionally. A type variable resolves to the
+      --  instance's own context parameter, a constructor to its
+      --  instance dictionary, an application to the head's dictionary
+      --  applied to the arguments'.
+      function Dict_For_Class
+        (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector;
+         Cl : Real_Class_Id; Params : Var_Id_Vectors.Vector)
+         return Expr_Id
+      is
+         N : constant Type_Node := M.Node (T);
+         function Dict_For
+           (T2 : Real_Type_Id; Tvs2 : TyVar_Id_Vectors.Vector)
+            return Expr_Id
+         is (Dict_For_Class (T2, Tvs2, Cl, Params));
       begin
-         for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
+         case N.Kind is
+            when TVar_T =>
+               for I in 1 .. Tvs.Last_Index loop
+                  if Tvs (I) = N.Tv
+                    and then I <= Params.Last_Index
+                  then
+                     return Expr_Id (V (Var_Id (Params.Element (I))));
+                  end if;
+               end loop;
+               return No_Expr;
+            when TCon_T =>
+               for SI of M.Info (Cl).Instances loop
+                  if M.Info (SI).Head = TyCon_Id (N.Con)
+                    and then M.Info (SI).Dict_Global /= No_Var
+                  then
+                     return Expr_Id (V (M.Info (SI).Dict_Global));
+                  end if;
+               end loop;
+               return No_Expr;
+            when TApp_T =>
+               --  Head instance dictionary applied to the
+               --  arguments' dictionaries.
+               declare
+                  Head : Real_Type_Id := T;
+                  Args : Type_Id_Vectors.Vector;
+               begin
+                  while M.Node (Head).Kind = TApp_T loop
+                     Args.Prepend (M.Node (Head).T_Arg);
+                     Head := M.Node (Head).T_Fun;
+                  end loop;
+                  if M.Node (Head).Kind /= TCon_T then
+                     return No_Expr;
+                  end if;
+                  for SI of M.Info (Cl).Instances loop
+                     if M.Info (SI).Head =
+                          TyCon_Id (M.Node (Head).Con)
+                       and then M.Info (SI).Dict_Global /= No_Var
+                     then
+                        declare
+                           Acc : Expr_Id :=
+                             Expr_Id (V (M.Info (SI).Dict_Global));
+                        begin
+                           for A of Args loop
+                              declare
+                                 DA : constant Expr_Id :=
+                                   Dict_For (A, Tvs);
+                              begin
+                                 if DA = No_Expr then
+                                    return No_Expr;
+                                 end if;
+                                 Acc := Expr_Id
+                                   (Ap (Real_Expr_Id (Acc),
+                                        Real_Expr_Id (DA)));
+                              end;
+                           end loop;
+                           return Acc;
+                        end;
+                     end if;
+                  end loop;
+                  return No_Expr;
+               end;
+            when others =>
+               return No_Expr;
+         end case;
+      end Dict_For_Class;
+
+      --  deriving Read (Report 11.4, Appendix D): the exact inverse of
+      --  Derive_Show below. An enumeration still goes through
+      --  readsEnum_ - one identifier against a constructor table, and
+      --  no precedence to track. Every other shape is generated as a
+      --  CHAIN of ReadS steps over the Prelude's bindReadS_ /
+      --  retReadS_ / lexTok_ / readParen:
+      --
+      --    C a b    ->  readParen (d > 10) $ \r0 ->
+      --                   lexTok_ "C" r0 `bind` \_  r1 ->
+      --                   readsPrec 11 r1 `bind` \x1 r2 ->
+      --                   readsPrec 11 r2 `bind` \x2 r3 ->
+      --                   retReadS_ (C x1 x2) r3
+      --    l :* r   ->  readParen (d > 9), fields at 10 either side
+      --    R {f=v}  ->  the brace/label/equals/comma lexemes in
+      --                 order, fields at precedence 0
+      --
+      --  Constructor alternatives are concatenated, so an ambiguous
+      --  parse yields several results exactly as the Report says.
+      procedure Derive_Read (II : Real_Instance_Id) is
+         Inst : constant Instance_Info := M.Info (II);
+         TC : constant Real_TyCon_Id := Real_TyCon_Id (Inst.Head);
+         Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
+         RP_Sel : constant Var_Id := M.Info (Cl).Methods (1).Selector;
+         Params : Var_Id_Vectors.Vector;
+         Ms : Expr_Id_Vectors.Vector;
+
+         function All_Nullary_Here return Boolean is
+         begin
+            for DC of M.Info (TC).Cons loop
+               if M.Info (Real_DataCon_Id (DC)).Arity /= 0 then
+                  return False;
+               end if;
+            end loop;
+            return not M.Info (TC).Cons.Is_Empty;
+         end All_Nullary_Here;
+
+         function Int_Lit (K : Natural) return Real_Expr_Id is
+            Img : constant String := Natural'Image (K);
+         begin
+            return M.Add (Expr_Node'
+              (Kind => Lit_C, Span => Span,
+               Lit => (Kind => L_Int,
+                       Text => Names.Name_Id
+                         (Table.Intern (Img (2 .. Img'Last))))));
+         end Int_Lit;
+
+         --  One step of the chain: an exact lexeme, or a field read.
+         type Step_Kind is (Tok_Step, Field_Step);
+         type Step is record
+            Kind : Step_Kind := Tok_Step;
+            Tok  : Unbounded_String;
+            FT   : Real_Type_Id := Real_Type_Id'First;
+            Prec : Natural := 0;
+            Bndr : Real_Var_Id := Real_Var_Id'First;
+         end record;
+         package Step_Vectors is new Ada.Containers.Vectors
+           (Positive, Step);
+
+         --  Fold the steps into nested bindReadS_, innermost first.
+         function Chain
+           (Steps : Step_Vectors.Vector; Result : Real_Expr_Id;
+            Tvs : TyVar_Id_Vectors.Vector) return Real_Expr_Id
+         is
+            Rs : Var_Id_Vectors.Vector;
+            Acc : Real_Expr_Id;
+         begin
+            for I in 0 .. Steps.Last_Index loop
+               Rs.Append (Var_Id (Fresh ("r")));
+            end loop;
+            Acc := Ap2 (V (Lookup ("retReadS_")), Result,
+                        V (Rs.Element (Rs.Last_Index)));
+            for I in reverse 1 .. Steps.Last_Index loop
+               declare
+                  St : constant Step := Steps (I);
+                  Reader : Real_Expr_Id;
+                  Binder : Real_Var_Id;
+               begin
+                  if St.Kind = Tok_Step then
+                     Reader := Ap2 (V (Lookup ("lexTok_")),
+                                    Str (To_String (St.Tok)),
+                                    V (Rs.Element (I)));
+                     Binder := Fresh ("u");
+                  else
+                     declare
+                        D : constant Expr_Id :=
+                          Dict_For_Class (St.FT, Tvs, Cl, Params);
+                     begin
+                        if D = No_Expr then
+                           return Err ("deriving Read: unsupported"
+                                       & " field type");
+                        end if;
+                        Reader := Ap (Ap2 (V (RP_Sel),
+                                           Real_Expr_Id (D),
+                                           Int_Lit (St.Prec)),
+                                      V (Rs.Element (I)));
+                     end;
+                     Binder := St.Bndr;
+                  end if;
+                  Acc := Ap2 (V (Lookup ("bindReadS_")), Reader,
+                              Lam (Binder, Lam
+                                (Real_Var_Id (Rs.Element (I + 1)),
+                                 Acc)));
+               end;
+            end loop;
+            return Lam (Real_Var_Id (Rs.Element (1)), Acc);
+         end Chain;
+
+         --  One constructor's alternative, as a function of d and s.
+         function Alt_For
+           (DC : Real_DataCon_Id; D_V : Real_Var_Id;
+            S_V : Real_Var_Id) return Real_Expr_Id
+         is
+            DInfo : constant DataCon_Info := M.Info (DC);
+            CName : constant String :=
+              Table.Text (Names.Real_Name_Id (DInfo.Name));
+            Sch : constant Scheme :=
+              M.Node (Real_Scheme_Id (DInfo.Con_Scheme));
+            FTypes : Type_Id_Vectors.Vector;
+            Bs : Var_Id_Vectors.Vector;
+            Steps : Step_Vectors.Vector;
+            Result : Real_Expr_Id;
+            Infix_Con : Boolean;
+            Prec : Natural;
+         begin
             declare
-               DC : constant Real_DataCon_Id :=
-                 Real_DataCon_Id (M.Info (TC).Cons.Element (I));
+               T : Real_Type_Id := Real_Type_Id (Sch.S_Body);
             begin
-               Tbl := Cons
-                 (Ap2 (ConE (Env.Tuple_DCs (2)),
-                       Str (Table.Text (M.Info (DC).Name)),
-                       ConE (DataCon_Id (DC))),
-                  Tbl);
+               while M.Node (T).Kind = TFun_T loop
+                  FTypes.Append (M.Node (T).From);
+                  Bs.Append (Var_Id (Fresh ("x")));
+                  T := M.Node (T).To;
+               end loop;
             end;
+            Infix_Con := CName'Length > 0
+              and then CName (CName'First) = ':'
+              and then FTypes.Last_Index = 2;
+            Prec := (if Infix_Con then 9 else 10);
+
+            if Infix_Con then
+               Steps.Append (Step'(Kind => Field_Step,
+                                   FT => Real_Type_Id (FTypes.Element (1)),
+                                   Prec => 10,
+                                   Bndr => Real_Var_Id (Bs.Element (1)),
+                                   others => <>));
+               Steps.Append (Step'(Kind => Tok_Step,
+                                   Tok => To_Unbounded_String (CName),
+                                   others => <>));
+               Steps.Append (Step'(Kind => Field_Step,
+                                   FT => Real_Type_Id (FTypes.Element (2)),
+                                   Prec => 10,
+                                   Bndr => Real_Var_Id (Bs.Element (2)),
+                                   others => <>));
+            else
+               Steps.Append (Step'(Kind => Tok_Step,
+                                   Tok => To_Unbounded_String (CName),
+                                   others => <>));
+               if DInfo.Field_Names.Is_Empty then
+                  for I in 1 .. FTypes.Last_Index loop
+                     Steps.Append
+                       (Step'(Kind => Field_Step,
+                              FT => Real_Type_Id (FTypes.Element (I)),
+                              Prec => 11,
+                              Bndr => Real_Var_Id (Bs.Element (I)),
+                              others => <>));
+                  end loop;
+               else
+                  Steps.Append (Step'(Kind => Tok_Step,
+                                      Tok => To_Unbounded_String ("{"),
+                                      others => <>));
+                  for I in 1 .. FTypes.Last_Index loop
+                     if I > 1 then
+                        Steps.Append
+                          (Step'(Kind => Tok_Step,
+                                 Tok => To_Unbounded_String (","),
+                                 others => <>));
+                     end if;
+                     Steps.Append
+                       (Step'(Kind => Tok_Step,
+                              Tok => To_Unbounded_String
+                                (Table.Text (Names.Real_Name_Id
+                                   (DInfo.Field_Names.Element (I)))),
+                              others => <>));
+                     Steps.Append
+                       (Step'(Kind => Tok_Step,
+                              Tok => To_Unbounded_String ("="),
+                              others => <>));
+                     Steps.Append
+                       (Step'(Kind => Field_Step,
+                              FT => Real_Type_Id (FTypes.Element (I)),
+                              Prec => 0,
+                              Bndr => Real_Var_Id (Bs.Element (I)),
+                              others => <>));
+                  end loop;
+                  Steps.Append (Step'(Kind => Tok_Step,
+                                      Tok => To_Unbounded_String ("}"),
+                                      others => <>));
+               end if;
+            end if;
+
+            Result := ConE (DataCon_Id (DC));
+            for B of Bs loop
+               Result := Ap (Result, V (B));
+            end loop;
+
+            --  readParen (d > Prec) <chain> s. A nullary constructor
+            --  needs no parentheses of its own, but readParen False
+            --  still accepts them, which is what lets "(C)" read.
+            return Ap
+              (Ap2 (V (Lookup ("readParen")),
+                    (if FTypes.Is_Empty
+                     then ConE (Env.False_DC)
+                     else Ap2 (V (P_GtI), V (Var_Id (D_V)),
+                               Int_Lit (Prec))),
+                    Chain (Steps, Result, Sch.Tvs)),
+               V (Var_Id (S_V)));
+         end Alt_For;
+
+      begin
+         if All_Nullary_Here then
+            declare
+               Tbl : Real_Expr_Id := Nil;
+            begin
+               for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
+                  declare
+                     DC : constant Real_DataCon_Id :=
+                       Real_DataCon_Id (M.Info (TC).Cons.Element (I));
+                  begin
+                     Tbl := Cons
+                       (Ap2 (ConE (Env.Tuple_DCs (2)),
+                             Str (Table.Text (M.Info (DC).Name)),
+                             ConE (DataCon_Id (DC))),
+                        Tbl);
+                  end;
+               end loop;
+               Ms.Append (Ap (V (Lookup ("readsEnum_")), Tbl));
+               --  readList: the Report default over this readsPrec.
+               --  Rebuilt, not shared - Core must stay a tree.
+               declare
+                  Tbl2 : Real_Expr_Id := Nil;
+               begin
+                  for I in reverse 1 .. M.Info (TC).Cons.Last_Index
+                  loop
+                     declare
+                        DC : constant Real_DataCon_Id :=
+                          Real_DataCon_Id
+                            (M.Info (TC).Cons.Element (I));
+                     begin
+                        Tbl2 := Cons
+                          (Ap2 (ConE (Env.Tuple_DCs (2)),
+                                Str (Table.Text (M.Info (DC).Name)),
+                                ConE (DataCon_Id (DC))),
+                           Tbl2);
+                     end;
+                  end loop;
+                  Ms.Append
+                    (Ap (V (Lookup ("readListDefault_")),
+                         Ap (V (Lookup ("readsEnum_")), Tbl2)));
+               end;
+            end;
+            Give_Dict (II, Ms);
+            return;
+         end if;
+
+         for CI in 1 .. Inst.Context.Last_Index loop
+            Params.Append (Var_Id (Fresh ("$d")));
          end loop;
-         Ms.Append (Ap (V (Lookup ("readsEnum_")), Tbl));
-         Give_Dict (II, Ms);
+         declare
+            D_V : constant Real_Var_Id := Fresh ("d");
+            S_V : constant Real_Var_Id := Fresh ("s");
+            Acc : Real_Expr_Id := Nil;
+            Dict : Real_Expr_Id;
+         begin
+            for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
+               declare
+                  A : constant Real_Expr_Id :=
+                    Alt_For (Real_DataCon_Id
+                               (M.Info (TC).Cons.Element (I)),
+                             D_V, S_V);
+               begin
+                  Acc := (if I = M.Info (TC).Cons.Last_Index
+                          then A
+                          else Ap2 (V (Env.Append_V), A, Acc));
+               end;
+            end loop;
+            Ms.Append (Lam (D_V, Lam (S_V, Acc)));
+            --  readList: the Report default over a FRESHLY rebuilt
+            --  readsPrec (Core is a tree, so it cannot be shared).
+            declare
+               D2 : constant Real_Var_Id := Fresh ("d");
+               S2 : constant Real_Var_Id := Fresh ("s");
+               Acc2 : Real_Expr_Id := Nil;
+            begin
+               for I in reverse 1 .. M.Info (TC).Cons.Last_Index loop
+                  declare
+                     A : constant Real_Expr_Id :=
+                       Alt_For (Real_DataCon_Id
+                                  (M.Info (TC).Cons.Element (I)),
+                                D2, S2);
+                  begin
+                     Acc2 := (if I = M.Info (TC).Cons.Last_Index
+                              then A
+                              else Ap2 (V (Env.Append_V), A, Acc2));
+                  end;
+               end loop;
+               Ms.Append (Ap (V (Lookup ("readListDefault_")),
+                              Lam (D2, Lam (S2, Acc2))));
+            end;
+            Dict := Mk_Dict (M, Cl, Expr_Id_Vectors.Empty_Vector, Ms,
+                             Span);
+            for PI in reverse 1 .. Params.Last_Index loop
+               Dict := Lam (Real_Var_Id (Params.Element (PI)), Dict);
+            end loop;
+            Bind (Inst.Dict_Global, Dict);
+         end;
       end Derive_Read;
 
       --  Report 11.4 Show method shapes. Each helper embeds the given
@@ -694,81 +1075,10 @@ package body AHC.Prelude_Core is
          SP_Sel : constant Var_Id := M.Info (Cl).Methods (2).Selector;
          Params : Var_Id_Vectors.Vector;
 
-         --  Tvs is the constructor scheme's quantifier list, whose
-         --  order matches the data declaration's type variables (and
-         --  therefore the derived instance's context parameters); the
-         --  ids themselves differ, so map positionally.
          function Dict_For
            (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector)
             return Expr_Id
-         is
-            N : constant Type_Node := M.Node (T);
-         begin
-            case N.Kind is
-               when TVar_T =>
-                  for I in 1 .. Tvs.Last_Index loop
-                     if Tvs (I) = N.Tv
-                       and then I <= Params.Last_Index
-                     then
-                        return Expr_Id (V (Var_Id (Params.Element (I))));
-                     end if;
-                  end loop;
-                  return No_Expr;
-               when TCon_T =>
-                  for SI of M.Info (Cl).Instances loop
-                     if M.Info (SI).Head = TyCon_Id (N.Con)
-                       and then M.Info (SI).Dict_Global /= No_Var
-                     then
-                        return Expr_Id (V (M.Info (SI).Dict_Global));
-                     end if;
-                  end loop;
-                  return No_Expr;
-               when TApp_T =>
-                  --  Head instance dictionary applied to the
-                  --  arguments' dictionaries.
-                  declare
-                     Head : Real_Type_Id := T;
-                     Args : Type_Id_Vectors.Vector;
-                  begin
-                     while M.Node (Head).Kind = TApp_T loop
-                        Args.Prepend (M.Node (Head).T_Arg);
-                        Head := M.Node (Head).T_Fun;
-                     end loop;
-                     if M.Node (Head).Kind /= TCon_T then
-                        return No_Expr;
-                     end if;
-                     for SI of M.Info (Cl).Instances loop
-                        if M.Info (SI).Head =
-                             TyCon_Id (M.Node (Head).Con)
-                          and then M.Info (SI).Dict_Global /= No_Var
-                        then
-                           declare
-                              Acc : Expr_Id :=
-                                Expr_Id (V (M.Info (SI).Dict_Global));
-                           begin
-                              for A of Args loop
-                                 declare
-                                    DA : constant Expr_Id :=
-                                      Dict_For (A, Tvs);
-                                 begin
-                                    if DA = No_Expr then
-                                       return No_Expr;
-                                    end if;
-                                    Acc := Expr_Id
-                                      (Ap (Real_Expr_Id (Acc),
-                                           Real_Expr_Id (DA)));
-                                 end;
-                              end loop;
-                              return Acc;
-                           end;
-                        end if;
-                     end loop;
-                     return No_Expr;
-                  end;
-               when others =>
-                  return No_Expr;
-            end case;
-         end Dict_For;
+         is (Dict_For_Class (T, Tvs, Cl, Params));
 
          --  showsPrec 11 <field> "" as a string expression, or show
          --  at precedence 0 for record fields.
@@ -1917,8 +2227,11 @@ package body AHC.Prelude_Core is
                      Derive_Ix (Real_Instance_Id (II));
                   elsif Table.Text (M.Info (Cl).Name) = "Read"
                     and then Has_DataCons (Real_TyCon_Id (Inst.Head))
-                    and then All_Nullary (Real_TyCon_Id (Inst.Head))
                   then
+                     --  No All_Nullary guard since M141: Derive_Read
+                     --  handles every constructor shape, and picks
+                     --  the readsEnum_ table itself when the type is
+                     --  in fact an enumeration.
                      Derive_Read (Real_Instance_Id (II));
                   else
                      Give_Dict (Real_Instance_Id (II), Errs (Cl));
