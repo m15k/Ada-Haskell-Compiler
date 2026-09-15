@@ -2229,6 +2229,7 @@ and failed the truth.*
 
 | Harness | Question it answers |
 |---|---|
+| `scripts/check_version.sh` | do the four places AHC states its version agree, and does the BUILT compiler agree with the source? (`src/ahc.ads` is the truth; `alire.toml`, `CHANGES.md`'s newest entry and the README release history follow it, and `bin/ahc --version` proves the constant was rebuilt). Takes a tag to check against: `check_version.sh v1.14`. Release-time only - the touchpoints are hand-maintained, and v1.14 was written up everywhere while `src/ahc.ads` still said 1.13 |
 | `scripts/run_gate.sh` | **the four suites every change has to clear** - unit, conformance, exec under BOTH collectors, golden - each run unpiped with its own exit status, and a `GATE ok` / `GATE FAILED` verdict. Takes suite names to run a subset (`run_gate.sh unit golden`). Use it instead of a line of shell per suite: a suite run through a filter (`run_golden.sh \| tail -3`) reports the FILTER's exit status, which is how a run once looked green while conformance had a `BUILD-FAIL` scrolled past the tail and the Core goldens went two commits stale |
 | `tests/` (329 unit tests) | do individual stages do what their authors think, including *contract-violation tests* that assert bad inputs are rejected? |
 | `scripts/run_golden.sh` | did any stage's output change unexpectedly? (pinned lex/layout/parse/core/check output; regenerate deliberately, review the diff) |

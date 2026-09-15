@@ -512,6 +512,7 @@ The harnesses (`scripts/`):
 
 ```sh
 scripts/run_gate.sh                # THE GATE: unit + conformance + exec (both GCs) + golden
+scripts/check_version.sh           # release-time: the version touchpoints agree
 scripts/run_golden.sh              # golden lex/layout/parse/core/check
 scripts/run_differential.sh        # parse-level GHC agreement
 scripts/run_differential_types.sh  # type-level GHC agreement
@@ -577,6 +578,19 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.14** — the breadth release (M141): a second repo-driven search,
+  where a repository counts only if AHC's binary and GHC 9.4.8's,
+  given the same input, produce byte-identical output and exit status.
+  `docs/repos-to-try.md` lists thirty such projects, none written with
+  AHC in mind. The search paid for itself in gaps: `Foldable` (the
+  Prelude's `elem`/`length`/`sum` over a `Set` or `Map`), `deriving
+  Read` for every constructor shape as the exact inverse of derived
+  `Show`, a kind-checker crash on a forward-referenced data type, the
+  Report 10.3 layout rule for `where`, four module-system defects, and
+  three defaulting bugs — two of which put a `$dMISSING` into a
+  compiled program rather than failing to compile. `run_gate.sh` came
+  out of it too, because two gate runs were read as green when a
+  pipeline's exit status was the filter's, not the suite's.
 - **v1.13** — the sockets release (M140): `Network.Socket` — TCP over
   IPv4 whose constants and `sockaddr` layout live in the runtime, with
   `Text` payloads and would-block parking on the scheduler — and ahttpd
