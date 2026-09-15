@@ -511,6 +511,7 @@ floored-mod overflow.
 The harnesses (`scripts/`):
 
 ```sh
+scripts/run_gate.sh                # THE GATE: unit + conformance + exec (both GCs) + golden
 scripts/run_golden.sh              # golden lex/layout/parse/core/check
 scripts/run_differential.sh        # parse-level GHC agreement
 scripts/run_differential_types.sh  # type-level GHC agreement

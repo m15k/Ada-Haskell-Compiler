@@ -2229,7 +2229,8 @@ and failed the truth.*
 
 | Harness | Question it answers |
 |---|---|
-| `tests/` (219 unit tests) | do individual stages do what their authors think, including *contract-violation tests* that assert bad inputs are rejected? |
+| `scripts/run_gate.sh` | **the four suites every change has to clear** - unit, conformance, exec under BOTH collectors, golden - each run unpiped with its own exit status, and a `GATE ok` / `GATE FAILED` verdict. Takes suite names to run a subset (`run_gate.sh unit golden`). Use it instead of a line of shell per suite: a suite run through a filter (`run_golden.sh \| tail -3`) reports the FILTER's exit status, which is how a run once looked green while conformance had a `BUILD-FAIL` scrolled past the tail and the Core goldens went two commits stale |
+| `tests/` (329 unit tests) | do individual stages do what their authors think, including *contract-violation tests* that assert bad inputs are rejected? |
 | `scripts/run_golden.sh` | did any stage's output change unexpectedly? (pinned lex/layout/parse/core/check output; regenerate deliberately, review the diff) |
 | `scripts/run_differential.sh` / `_types.sh` | do AHC and GHC agree on what *parses* and what *typechecks*? |
 | `scripts/run_exec.sh` | do compiled programs print what they printed yesterday? |
