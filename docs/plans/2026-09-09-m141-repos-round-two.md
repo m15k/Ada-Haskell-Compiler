@@ -52,3 +52,56 @@ program when GHC can run it, an exec test when it is AHC-only).
 "what usually blocks a repo" list re-ordered by what round two saw, and
 the closed gaps struck through; CHANGES; adversarial review if the phase
 touched the compiler; release.
+
+---
+
+## Phase D - adversarial review (2026-09-15)
+
+The milestone touched the kind checker, the renamer, the typechecker's
+defaulting, the Prelude and two derives, so the review targeted what
+each change could plausibly have broken rather than re-running the
+gate (which was green independently).
+
+**Kind pre-pass - does assigning kinds up front MASK kind errors?**
+No. Six programs, AHC and GHC agreeing on accept/reject for all six:
+`data A = A (Int Int)`, `data A = A B` with `data B a = B a` (the
+forward reference to a type of the WRONG kind - the case the pre-pass
+newly makes reachable), `data A = A (B Int)` with nullary `B`, and
+`data A a = A (B a)` are all still rejected with a kind mismatch; the
+two legal higher-kinded programs still compile. The pre-pass assigns
+METAS, which unify and fail exactly as before - it changes when a
+tycon has a kind, not whether the kind is checked.
+
+**Derived Read - the generated parser.** Constructor-name boundaries
+(`C` / `Cons` / `CX` in one type, where a prefix match would silently
+succeed and leave a remainder), `readList` through the list instance,
+nested records, a single-field record, a tuple field, a type mixing
+prefix + infix + record constructors, whitespace and newlines between
+lexemes, and partial input yielding `[]`. All byte-identical to GHC.
+
+**Foldable and defaulting - the string-literal shapes.** Thirteen
+lines covering `length "abc"`, `elem` sections over literals,
+`filter (`elem` lit)`, numeric and stringy defaulting in the same
+expression, `read` at Int and Double, and Foldable over Set and Map.
+All byte-identical to GHC.
+
+**Module system.** `C(..)` re-exported from a module that only
+imported the class, a method imported by name, a class method with a
+default, and `import Prelude hiding (lookup)` beside
+`import qualified Prelude (lookup)` - all agree with GHC. The
+negative cases still fail correctly: importing a name a module does
+not export, and a missing instance. The new Quiet lookup mode did not
+silence either.
+
+**One finding, recorded rather than fixed.** A derived Show or Read
+on a field type with no instance (`data F = F (Int -> Int) deriving
+Read`) compiles and fails at RUN time where GHC rejects it at compile
+time. Derived Show has done this since it was written - the derives
+resolve field dictionaries statically and emit an `error` where one is
+missing - and making Read behave the same way was the consistent
+choice; inventing a second convention for one derive would be worse.
+Now in EXCLUSIONS. Fixing it properly means the derives reporting a
+diagnostic instead of emitting `Err`, which is a change to both and
+belongs in its own milestone.
+
+**Verdict: GO.** No defect found that the milestone introduced.

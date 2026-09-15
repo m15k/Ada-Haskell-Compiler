@@ -1,5 +1,98 @@
 # AHC Changelog
 
+## v1.14 (2026-09-15)
+
+**M141 - repo-driven breadth, round two.** The milestone is a SEARCH,
+and its deliverable is the gap list, not the repositories.
+`scripts/scout_repos.sh` does the mechanical part - find, filter,
+clone, build, RUN, and diff against GHC - so the judgement goes into
+the failures. `docs/repos-to-try.md` now lists thirty repositories,
+none written with AHC in mind, that AHC compiles: twenty-one of them
+verified the way round one's were not, by running AHC's binary and
+GHC 9.4.8's over the same input and comparing every byte of stdout,
+stderr and the exit status. **Sixteen are byte-identical**; the other
+five differ only where AHC's fatal-error banner does.
+
+**Nine compiler and library gaps, each found by a real repository,
+each closed with a regression test oracled against GHC.**
+
+- **A kind-checker crash on a forward-referenced data type.** Report
+  4.2.1 makes a module's type declarations mutually recursive
+  regardless of order, but `Do_Data` assigned a tycon's kind at the
+  top of its own declaration and converted its constructor fields
+  immediately after. A field naming a type declared further down the
+  file reached `Kind_Of_TyCon` with `TC_Kind` still `No_Kind`, and the
+  range conversion raised `CONSTRAINT_ERROR` - the compiler crashed on
+  a legal program. Kinds are now assigned for the whole module before
+  any constructor is converted (magetron/hson).
+- **`Foldable`.** The 2010 Prelude's list functions are list-only;
+  base's are `Foldable t => ...`, so `elem x aSet` is ordinary code in
+  the wild and was a type error here. `foldr`/`foldl`/`null`/`length`/
+  `elem`/`sum`/`product`/`maximum`/`minimum` are class methods now,
+  with instances for `[]`, `Maybe`, `Either a`, `Data.Set` and
+  `Data.Map`; `Data.Foldable` carries `toList`, `foldl'`, `foldr'`,
+  `find` and `forM_`. `toList` is deliberately NOT in the Prelude,
+  exactly as in base: this Prelude has no export list and would
+  otherwise shadow every program's own
+  (thibaudmichaud/lambda-calculus).
+- **`deriving Read` for every constructor shape**, generated as the
+  exact inverse of derived `Show`: prefix constructors at
+  `readParen (d > 10)` with fields at 11, infix at `(d > 9)` with
+  fields at 10, records through their brace/label/equals/comma
+  lexemes with fields at 0, nullary through `readParen False` so
+  `(C)` reads. `Read` gains the Report's `readList` method, without
+  which a record field of type `String` - the commonest thing a
+  derived `Read` meets - could not work; plus `Read` at `Char`,
+  `Maybe` and `Either` (AnotherKamila/lambda).
+- **Report 10.3's parse-error(t) layout rule** for a `where` at the
+  enclosing block's exact indentation (magetron/hson).
+- **Instance methods never got their own context dictionaries** - a
+  method whose signature carries a constraint beyond the class's own
+  was elaborated without the lambda binding it.
+- **`Data.List` did not carry the Prelude's list API**, so
+  `import Data.List as List` then `List.null` failed
+  (renaudpg/sudocurry).
+- **An export of `C(..)` looked its selectors up in the module's OWN
+  values**, so a class it merely imported contributed none:
+  `Control.Applicative` exported `Applicative` but never `<*>` or
+  `pure` (PLUkraine/rpn-calculator).
+- **A module imported twice was visible through only one import** -
+  qualified lookup took the first matching view, so
+  `import Prelude hiding (String)` beside
+  `import qualified Prelude (String)` left `Prelude.String`
+  unresolvable (luigiminardim/JsonParser.hs).
+- **Library surface**, each named by a repo: `Data.Either`,
+  `Data.Set.elemAt`/`findIndex`/`lookupIndex`, and Report 9's
+  `readIO`, `readLn` and `putChar`; `read` at `Double`; `Traversable`.
+
+**Three defaulting bugs, two of which put a `$dMISSING` into a
+compiled program.** Generalising the Prelude's list functions moved
+constraints onto higher-kinded metas and exposed them:
+`elem c "abc"` unifies the literal's type with `t a`, so `IsString`
+lands on an APPLICATION of the meta and the string-defaulting rule -
+which looks for `IsString` on the meta itself - never fired; the scan
+collecting a meta's classes ran forward-only from the current
+constraint, so `filter (`elem` lit) s`, which files its `IsString`
+first, saw a meta with no defaultable class at all; and reporting
+happened in the same sweep that binds, so `print (maximum "abc")`
+reported ambiguity on `Show ?a` before `?t` could be defaulted.
+Fixing the third exposed a fourth layer - the re-solve after binding
+was a single order-dependent pass, so `Show ?a` was attempted before
+`IsString ([] ?a)` had pinned `?a` to `Char`, and elaboration emitted
+`$dMISSING` into the generated code. Defaulting now binds in one pass
+and reports in a second, and re-solves to a fixpoint.
+
+**CI: `scripts/run_gate.sh`, because two gate runs in this milestone
+were read as green when they were not.** Running a suite through a
+filter - `run_golden.sh | tail -3` - reports the FILTER's exit status,
+since that is what a pipeline's exit status is. Conformance had a
+`BUILD-FAIL` scrolled past the tail and the Core goldens went two
+commits stale behind exactly that mistake. The gate runs each suite
+unpiped, captures its rc directly, truncates failure output at 200
+columns so a Core diff cannot bury the next failure, and ends in
+`GATE ok` / `GATE FAILED`. Verified against a deliberately tampered
+golden.
+
 ## v1.13 (2026-09-09)
 
 **M140 - portable sockets.** A `Network.Socket` module - `Socket`
