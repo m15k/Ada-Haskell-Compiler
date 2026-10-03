@@ -578,6 +578,16 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.15** — the namespaces release (M75): every namespace is
+  per-module. Two modules may declare the same type, constructor,
+  class, synonym, record field or function, and a qualified import
+  tells them apart, as in GHC; an unqualified use of two different
+  imported entities, or conflicting exports, are errors at the right
+  place. The milestone came down to one rule — nothing re-finds an
+  entity by name after the renamer decides — and its adversarial
+  review plus fuzz campaign found fifteen defects after a green gate,
+  several of them silent wrong output that predated M75.
+  `PLUkraine/rpn-calculator` builds now.
 - **v1.14** — the breadth release (M141): a second repo-driven search,
   where a repository counts only if AHC's binary and GHC 9.4.8's,
   given the same input, produce byte-identical output and exit status.

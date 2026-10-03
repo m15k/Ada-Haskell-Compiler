@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.15 (unreleased)
+## v1.15 (2026-10-03)
 
 **M75 - per-module namespaces.** Two modules of one program may now
 declare the same type, constructor, class, synonym, record field or
