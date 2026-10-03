@@ -1,0 +1,14 @@
+:l tests/repl/multi/Main.hs
+Repl.main
+area (Sq 2)
+double 3
+U.double 3
+label Green
+Rect 2 3
+:t Sq
+:l tests/repl/multi/Shapes.hs
+area (Rect 2 5)
+Red == Green
+:l tests/repl/nomod.hs
+x
+:q

@@ -1,0 +1,14 @@
+ahc repl - :h for help, :q to quit
+ahc> ahc> loaded: tests/repl/work/Main.hs
+ahc> (9,8,"red")
+ahc> ahc> loaded: tests/repl/work/Main.hs
+ahc> (13,12,"red")
+ahc> ahc> tests/repl/work/Util.hs:3:1: error: couldn't match type 'Bool' with 'Int'
+tests/repl/work/Util.hs:3:1: error: couldn't match type 'Bool' with 'Int'
+tests/repl/work/Util.hs:3:14: error: no instance for 'Num Bool'
+ahc> tests/repl/work/Util.hs:3:1: error: couldn't match type 'Bool' with 'Int'
+tests/repl/work/Util.hs:3:1: error: couldn't match type 'Bool' with 'Int'
+tests/repl/work/Util.hs:3:14: error: no instance for 'Num Bool'
+ahc> ahc> loaded: tests/repl/work/Main.hs
+ahc> (9,8,"red")
+ahc> ahc> 

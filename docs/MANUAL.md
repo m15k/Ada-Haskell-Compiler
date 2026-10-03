@@ -76,6 +76,21 @@ stop the pipeline at any point and look at what it produced - and
 the object cache with no second evaluator
 (`docs/repl-design-note.md`).
 
+**The REPL and multi-module programs (M143).** `:load PATH` works
+on a program whose root file imports sibling modules, as in GHCi:
+the loaded file's directory is searched for its imports (through
+`$AHC_PATH`, below), the file's own imports become session imports
+- so imported names, `Q.qualified` names and a sibling module's
+types and constructors are usable at the prompt - and `:reload`
+re-reads every module from disk, so editing a sibling and typing
+`:r` takes effect. A type error in a sibling is reported with that
+sibling's file name; a missing module is reported by the driver's
+`ahc: cannot find module` line. `:! CMD` runs a shell command.
+`$AHC_PATH` is a colon-separated list of extra module directories
+(GHC's `-i`), searched after the root file's own directory and
+before dependencies and the stdlib; `ahc check`/`ahc build` honour
+it too.
+
 **The decision** to use many small stages instead of a few big ones
 was made at the very start and never regretted. Small stages mean
 each one can state precisely what it guarantees about its output —

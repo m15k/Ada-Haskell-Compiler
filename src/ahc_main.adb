@@ -347,6 +347,33 @@ procedure AHC_Main is
             if Ada.Directories.Exists (Local) then
                return Local;
             end if;
+            --  $AHC_PATH: extra module directories (colon
+            --  separated, GHC's -i), after the root file's own
+            --  directory. The REPL points it at a :load'ed file's
+            --  directory, since it compiles a scratch module.
+            if Ada.Environment_Variables.Exists ("AHC_PATH") then
+               declare
+                  Paths : constant String :=
+                    Ada.Environment_Variables.Value ("AHC_PATH");
+                  Start : Natural := Paths'First;
+               begin
+                  for I in Paths'First .. Paths'Last + 1 loop
+                     if I > Paths'Last or else Paths (I) = ':' then
+                        if I > Start then
+                           declare
+                              Cand : constant String :=
+                                Paths (Start .. I - 1) & "/" & P & ".hs";
+                           begin
+                              if Ada.Directories.Exists (Cand) then
+                                 return Cand;
+                              end if;
+                           end;
+                        end if;
+                        Start := I + 1;
+                     end if;
+                  end loop;
+               end;
+            end if;
             declare
                use Ada.Strings.Unbounded;
                Hit      : Unbounded_String;

@@ -133,6 +133,34 @@ generated Repl.hs, where each accepted entry is one line - so the
 N-th entry is line N plus the import block, close enough to be
 useful and documented in `:help`.
 
+### 5.1 Multi-module programs (M143)
+
+The scratch `Repl.hs` is the root file of every compile, and the
+driver resolves a module's imports beside the ROOT file, so a
+`:load`ed program's `import Shapes` was looked for in the scratch
+directory - and, worse, the failing `check`'s `ahc: cannot find
+module` line was dropped by the diagnostics filter (which keeps
+only `: error:` lines), so the load failed silently. Two changes
+extend the model rather than replace it:
+
+- `:load` points `$AHC_PATH` (new: colon-separated extra module
+  directories, searched after the root file's directory) at the
+  loaded file's directory, restored on a failed load and cleared by
+  `:clear`. The file is still spliced into `Repl.hs`, so its own
+  top level (exported or not) is in scope; its siblings are real
+  modules found on the path, so their errors carry their own file
+  names and `:reload` simply recompiles from disk.
+- The file's top-level `import` lines (with their indented
+  continuation lines) become session imports instead of staying in
+  the spliced body. The expression module `Main` repeats the
+  session imports, so the loaded module's import scope (`*Main>`)
+  is what an expression sees: unqualified and qualified imported
+  names, sibling types and constructors.
+
+`:! CMD` (a shell escape, as in GHCi) exists so a transcript can
+edit a sibling between `:r`s. Not done: diagnostics inside the
+loaded root file itself still cite the generated `Repl.hs`.
+
 ## 6. Testing
 
 The REPL's plumbing is text-in, text-out, so it is tested the way

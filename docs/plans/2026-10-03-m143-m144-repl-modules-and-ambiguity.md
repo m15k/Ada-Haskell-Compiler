@@ -78,3 +78,19 @@ report.
 Gate: `./scripts/run_gate.sh` -> `GATE ok`; run_differential.sh and
 run_differential_types.sh green; `./scripts/run_fuzz_par.sh 300 6 1`
 all ok.
+
+### M143 phase 2 result
+
+Implemented as planned, plus `:! CMD` (GHCi's shell escape) so a
+transcript can edit a sibling between `:r`s. New transcripts:
+tests/repl/multi.in (load Main; `Repl.main`; imported name `double`;
+qualified `U.double`; sibling constructor/type `Rect 2 3`, `:t Sq`,
+`Red == Green`; `:l` of a sibling module; a load whose import is
+missing -> `ahc: cannot find module` shown, session rolled back) and
+tests/repl/multi_reload.in (edit Util.hs, `:r`, new value; introduce a
+type error in Util.hs -> reported as tests/repl/work/Util.hs:3:1;
+repair, `:r`). Fixtures: tests/repl/multi/, tests/repl/nomod.hs.
+load.out re-pinned: the help text gained two lines and the fixture's
+import moved ahead of the body (Probe line 3 -> 4).
+`./scripts/run_repl.sh` rc=0 (5 transcripts ok).
+Known remaining: errors inside the loaded ROOT file cite Repl.hs.

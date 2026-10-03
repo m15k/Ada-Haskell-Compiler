@@ -1,0 +1,14 @@
+:! rm -rf tests/repl/work; cp -r tests/repl/multi tests/repl/work
+:l tests/repl/work/Main.hs
+Repl.main
+:! sed 's/x \* 2/x * 3/' tests/repl/work/Util.hs > tests/repl/work/u.new && mv tests/repl/work/u.new tests/repl/work/Util.hs
+:r
+Repl.main
+:! sed 's/x \* 3/x * True/' tests/repl/work/Util.hs > tests/repl/work/u.new && mv tests/repl/work/u.new tests/repl/work/Util.hs
+:r
+Repl.main
+:! sed 's/x \* True/x * 2/' tests/repl/work/Util.hs > tests/repl/work/u.new && mv tests/repl/work/u.new tests/repl/work/Util.hs
+:r
+Repl.main
+:! rm -rf tests/repl/work
+:q

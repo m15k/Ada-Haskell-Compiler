@@ -26,6 +26,8 @@ package body AHC.Repl is
    Decls       : Line_Vectors.Vector;   --  entered declarations
    Loaded_Body : Line_Vectors.Vector;   --  :load'ed file, verbatim
    Loaded_Path : Unbounded_String;
+   Loaded_Dir  : Unbounded_String;   --  its directory (module search)
+   Orig_Path   : Unbounded_String;   --  $AHC_PATH at startup
 
    Root    : Unbounded_String;   --  compiler tree (bin/..)
    Scratch : Unbounded_String;   --  session working directory
@@ -45,6 +47,22 @@ package body AHC.Repl is
    function Starts (T, Prefix : String) return Boolean
    is (T'Length >= Prefix'Length
        and then T (T'First .. T'First + Prefix'Length - 1) = Prefix);
+
+   --  Point the compiler's module search ($AHC_PATH) at Dir (the
+   --  directory of the loaded file) followed by whatever the user
+   --  had set; "" restores the startup value.
+   procedure Set_Module_Path (Dir : String) is
+      Joined : constant String :=
+        (if Dir = "" then S (Orig_Path)
+         elsif Orig_Path = Null_Unbounded_String then Dir
+         else Dir & ":" & S (Orig_Path));
+   begin
+      if Joined = "" then
+         Ada.Environment_Variables.Clear ("AHC_PATH");
+      else
+         Ada.Environment_Variables.Set ("AHC_PATH", Joined);
+      end if;
+   end Set_Module_Path;
 
    --  First whitespace-delimited token of T.
    function First_Word (T : String) return String is
@@ -110,6 +128,7 @@ package body AHC.Repl is
          begin
             if Ada.Strings.Fixed.Index (L, ": error:") > 0
               or else Ada.Strings.Fixed.Index (L, ": warning:") > 0
+              or else Starts (L, "ahc: ")
             then
                Put_Line (L);
             end if;
@@ -345,14 +364,22 @@ package body AHC.Repl is
       Saved_I : constant Line_Vectors.Vector := Imports;
       Saved_D : constant Line_Vectors.Vector := Decls;
       Saved_B : constant Line_Vectors.Vector := Loaded_Body;
+      Saved_Dir : constant Unbounded_String := Loaded_Dir;
       F       : File_Type;
       In_Header : Boolean := False;
+      In_Import : Boolean := False;
       First     : Boolean := True;
    begin
       Open (F, In_File, Path);
       Imports.Clear;
       Decls.Clear;
       Loaded_Body.Clear;
+      --  Sibling modules resolve from the loaded file's directory,
+      --  as in GHCi (the scratch Repl.hs lives elsewhere).
+      Loaded_Dir := +(if Ada.Strings.Fixed.Index (Path, "/") = 0
+                      then "."
+                      else Ada.Directories.Containing_Directory (Path));
+      Set_Module_Path (S (Loaded_Dir));
       while not End_Of_File (F) loop
          declare
             L : constant String := Get_Line (F);
@@ -365,7 +392,17 @@ package body AHC.Repl is
             elsif In_Header then
                In_Header :=
                  Ada.Strings.Fixed.Index (L, "where") = 0;
+            elsif Starts (L, "import ") then
+               --  The file's imports are session imports, so the
+               --  expression module sees them (GHCi's *Main> scope).
+               In_Import := True;
+               Imports.Append (+L);
+            elsif In_Import and then L'Length > 0
+              and then (L (L'First) = ' ' or else L (L'First) = ASCII.HT)
+            then
+               Imports.Append (+L);   --  continuation of an import
             else
+               In_Import := False;
                Loaded_Body.Append (+L);
             end if;
             First := False;
@@ -380,6 +417,8 @@ package body AHC.Repl is
          Imports := Saved_I;
          Decls := Saved_D;
          Loaded_Body := Saved_B;
+         Loaded_Dir := Saved_Dir;
+         Set_Module_Path (S (Loaded_Dir));
          Write_Repl;
       end if;
    exception
@@ -393,8 +432,10 @@ package body AHC.Repl is
       Put_Line ("  :help :h        this text");
       Put_Line ("  :quit :q        leave the repl");
       Put_Line ("  :type E, :t E   show E's inferred type");
-      Put_Line ("  :load P, :l P   load file P (resets the session)");
+      Put_Line ("  :load P, :l P   load file P (resets the session;");
+      Put_Line ("                  its sibling modules are found beside it)");
       Put_Line ("  :reload :r      reload the last :load");
+      Put_Line ("  :! CMD          run a shell command");
       Put_Line ("  :clear          empty the session");
       Put_Line ("anything else: an import, a declaration, or an");
       Put_Line ("expression. several declarations fit one line with");
@@ -424,11 +465,30 @@ package body AHC.Repl is
          else
             Load (S (Loaded_Path));
          end if;
+      elsif W = ":!" then
+         --  Shell escape, as in GHCi: the way a session edits a
+         --  sibling module between :reloads.
+         if Rest /= "" then
+            declare
+               use GNAT.OS_Lib;
+               A  : Argument_List (1 .. 2) :=
+                 [new String'("-c"), new String'(Rest)];
+               Rc : constant Integer := Spawn ("/bin/sh", A);
+            begin
+               Free (A (1));
+               Free (A (2));
+               if Rc /= 0 then
+                  Put_Line ("*** exit code" & Integer'Image (Rc));
+               end if;
+            end;
+         end if;
       elsif W = ":clear" then
          Imports.Clear;
          Decls.Clear;
          Loaded_Body.Clear;
          Loaded_Path := Null_Unbounded_String;
+         Loaded_Dir := Null_Unbounded_String;
+         Set_Module_Path ("");
          Write_Repl;
       else
          Put_Line ("unknown command " & W & " (:h for help)");
@@ -501,6 +561,9 @@ package body AHC.Repl is
             end loop;
             Scratch := +("/tmp/ahc-repl" & Img);
          end;
+      end if;
+      if Ada.Environment_Variables.Exists ("AHC_PATH") then
+         Orig_Path := +Ada.Environment_Variables.Value ("AHC_PATH");
       end if;
       Ada.Directories.Create_Path (S (Scratch));
       Write_Repl;
