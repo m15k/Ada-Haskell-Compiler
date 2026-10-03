@@ -376,6 +376,39 @@ cannot accidentally shadow the Prelude's `reverse` for *other*
 modules — they resolve against the snapshot, not against a shared
 mutable table.
 
+**Every namespace is per-module (M75).** For a long time only
+*values* worked that way: types, constructors, classes and synonyms
+were also poured into the shared environment, so two modules
+declaring `data Token` was a "defined more than once" error. Since
+M75 the shared environment holds only the built-ins and the Prelude.
+Two modules may declare the same type, constructor, class, synonym,
+record field or function, and `import qualified L` / `R` tells them
+apart: `L.Shape`, `R.Circle`, `L.radius`, `instance R.Named T`. An
+unqualified name that two imports supply as *different* entities is
+an ambiguity at the use site (the same entity re-exported along two
+paths is not), and so is an import that clashes with a Prelude type.
+`Prelude.X` means the Prelude's X and `M.X` inside M means M's own,
+as in GHC. Declaring a name twice *within* one module is still an
+error.
+
+The mechanism is a rule, not a table: **after the renamer decides
+which entity a name means, nothing downstream looks it up by name
+again.** Kinds takes each data type and constructor from the
+renamer's declaration tables; a synonym occurrence carries the
+record it resolved to (its defining module is its identity); a
+record field is identified by its selector variable, so `r { f = e }`
+only considers the constructors of `f`'s own type; contracts bind to
+their declaring module's function. Anything that still reads the
+shared environment by name - desugaring `==` for literal patterns,
+`>>` for `do` - now gets the Prelude's entity, which is what it
+always meant.
+
+One deliberate difference from GHC remains: a module's own
+declaration wins over a same-named import or Prelude entity at an
+unqualified use, where GHC reports "Ambiguous occurrence". Values
+always behaved that way here; types now match them. Qualify the name
+if the code must also build under GHC.
+
 **Restricting the Prelude.** The snapshot fallback is exactly the
 Report's *implicit* `import Prelude` — and Report 5.6.1 says an
 *explicit* `import Prelude ...` replaces it. AHC implements this:
@@ -2336,8 +2369,8 @@ library face of chapter 11's exception machinery: an `IOError` is
 the runtime's opaque value read through `primIoe*` accessors and
 rebuilt whole by the `ioeSet*` functions, `IOErrorType` is a
 newtype over the runtime's table index (so the constructor
-namespace, which is program-global in AHC, never sees `EOF` or
-`UserError`), and `Control.Exception`'s `Exception` class
+namespace never sees `EOF` or `UserError` - a choice made when that
+namespace was program-global, before M75), and `Control.Exception`'s `Exception` class
 dispatches on the runtime's exception KIND — `catch` is
 `primCatch` plus `fromException`, and `bracket`/`finally` are
 `onException` plus a rethrow, all ordinary Haskell; the Prelude's

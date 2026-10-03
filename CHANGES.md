@@ -1,5 +1,76 @@
 # AHC Changelog
 
+## v1.15 (unreleased)
+
+**M75 - per-module namespaces.** Two modules of one program may now
+declare the same type, constructor, class, synonym, record field or
+function, and a qualified import tells them apart - `L.Shape`,
+`R.Circle`, `L.radius`, `instance R.Named T` - as in GHC. Until now
+only values worked that way; the rest lived in one program-global
+table, so two modules declaring `data Token` was "type 'Token' is
+defined more than once" (`PLUkraine/rpn-calculator`, which now builds
+and agrees with GHC).
+
+The work turned out not to be a new namespace mechanism. The renamer
+already resolved every use site per module; the defect was that
+declarations were ALSO poured into the shared environment, and later
+passes re-found entities there BY NAME. The fix is one rule, applied
+everywhere: after the renamer decides which entity a name means,
+nothing downstream looks it up by name again. The shared environment
+now holds only the builtins and the Prelude; identity travels from the
+renamer instead - declaration tables for types and constructors, the
+resolved record (and its defining module) for each synonym occurrence,
+a selector variable for each record field, the declaring module for
+each contract.
+
+- **Use-site ambiguity** (Report 5.5.2): an unqualified name that two
+  imports supply as different entities is an error where it is used;
+  the same entity re-exported along two paths is not. An import that
+  clashes with a Prelude type is ambiguous too.
+- **Qualified constructors and classes** resolve through their
+  qualifier. They did not before M75: with only `import qualified
+  Left as L`, `L.Circle` was "not in scope". `Prelude.X` means the
+  Prelude's X and `M.X` inside M means M's own.
+- **Exports and imports**: conflicting exports are an error (Report
+  5.2); `L.C(..)` exports L's methods; `hiding (T(..))` hides the
+  constructors, fields and methods too; export errors point at the
+  entity, not 1:1.
+- **Declaration order**: class method signatures and superclasses may
+  name a type, synonym or class declared later in the file, and an
+  unknown superclass is an error instead of being dropped.
+- **Type errors** qualify two same-named types by module:
+  `couldn't match type 'Left.Shape' with 'Right.Shape'`.
+- **deriving** accepts only the standard classes, by identity, and
+  rejects a same-named user class the way GHC does (a user `class
+  Read` plus `deriving Read` crashed the compiler).
+
+One deliberate difference from GHC is kept and documented: a module's
+own declaration wins over a same-named import or Prelude entity at an
+unqualified use, where GHC reports an ambiguity. Values always behaved
+that way here; types now match them.
+
+**The adversarial review found fourteen defects after a green gate**
+(three reviewers, the serious findings reproduced independently by two
+or three of them), all fixed in M75 with 32 regression programs
+oracled against GHC 9.4.8. Most were by-name lookups the plan's
+surface table never listed - desugar's `==` and `>>`, elaborate's
+`pure`, contract attachment, record selectors and updates - several of
+them silent wrong output that predates M75 and that same-named
+declarations made reachable. **The 300-seed fuzz campaign then found
+a fifteenth**: the Prelude's `Rational` is a wired placeholder that
+Data.Ratio defines, and an import list naming only `(%)` left it
+opaque on 258 of 300 seeds. Every conformance program imported
+Data.Ratio whole.
+
+Gates: unit, 141 conformance programs, exec in both GC modes, golden
+(no regeneration), both differential suites, own-collector soak with
+`AHC_OWN_VERIFY=1`, fuzz 300/300. Bench delta, interleaved
+A/B best-of-5 against v1.14 (both release builds, identical output):
+every program within -3%..+2% - b_fib 566 -> 558 ms, b_map 4927 ->
+4797 ms, b_sort 1675 -> 1674 ms, b_strings 845 -> 853 ms, b_sumfold
+1679 -> 1717 ms, b_parsort 35.9 -> 36.3 s - noise, as expected of a
+frontend-only milestone.
+
 ## v1.14 (2026-09-15)
 
 **M141 - repo-driven breadth, round two.** The milestone is a SEARCH,

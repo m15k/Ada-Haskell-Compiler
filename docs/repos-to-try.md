@@ -4,8 +4,8 @@ AHC implements Haskell 2010 and ships its own small library set — no
 Hackage, no `cabal`, no GHC extensions. That rules out most of GitHub,
 but not the part of it worth reading: single-file interpreters,
 textbook exercise code, algorithm collections, puzzle solvers. This
-page lists **thirty repositories**, none written with AHC in mind, that
-AHC compiles today — twenty-seven of them run, three typecheck and
+page lists **thirty-one repositories**, none written with AHC in mind, that
+AHC compiles today — twenty-eight of them run, three typecheck and
 generate C — plus seven more it compiles as libraries, with the exact
 commands and the output they produce.
 
@@ -23,7 +23,7 @@ structural (AHC resolves imports beside the root file, so a
 touches a line of Haskell. Command-line arguments and stdin
 transcripts are stated too: they are input, not edits.
 
-## Round two — twenty-one, each diffed against GHC 9.4.8
+## Round two — twenty-two, each diffed against GHC 9.4.8
 
 `AGREES` means every byte of output and the exit status matched.
 
@@ -50,6 +50,7 @@ transcripts are stated too: they are input, not edits.
 | [SimonTeixidor/Euler](https://github.com/SimonTeixidor/Euler) | 1 file, 21 loc | Project Euler 19 | AGREES |
 | [patrickmn/euler-haskell](https://github.com/patrickmn/euler-haskell) | 3 files, 8 loc | Project Euler 1 | AGREES |
 | [nlarosa/HaskellRomanNumerals](https://github.com/nlarosa/HaskellRomanNumerals) | 1 file, 95 loc | Roman numerals, dispatching on `getProgName` | banner + CallStack |
+| [PLUkraine/rpn-calculator](https://github.com/PLUkraine/rpn-calculator) | 5 modules, 310 loc | Shunting-yard calculator; two of its modules each declare a `Token` type (blocked until M75) | banner only |
 
 **Sixteen are byte-identical.** The other five agree on every byte of
 stdout and on the exit status, and differ only where AHC's
@@ -322,11 +323,11 @@ Re-ordered after round two, by how often it actually came up across
   `GeneralizedNewtypeDeriving`. (`OverloadedStrings` is CLOSED —
   AHC's literal overloading is unconditional, so a module carrying
   the pragma just works.)
-- **The flat type and constructor namespace** (the M75 item). Two
-  modules of one program declaring the same type or constructor name
-  is a clean compile error where GHC would accept it —
-  `PLUkraine/rpn-calculator` defines `Token` in two modules. Qualified
-  imports cannot disambiguate; rename the colliding declaration.
+- ~~**The flat type and constructor namespace**~~ CLOSED by M75.
+  Two modules may declare the same type, constructor, class, synonym
+  or record field, and qualified imports disambiguate them —
+  `PLUkraine/rpn-calculator`, which defines `Token` in two modules,
+  now builds and agrees with GHC.
 - ~~**`Control.Applicative` / `Alternative`**~~ CLOSED in round one.
   Every hand-rolled parser reaches for `<|>` and `many`; the chase
   closed six deeper gaps with it, from cross-module fixities to
