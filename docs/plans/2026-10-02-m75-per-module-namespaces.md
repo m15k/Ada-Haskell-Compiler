@@ -630,6 +630,110 @@ runghc tests/corpus/bad_dup_in_module.hs 2>&1 | grep -c error
 **Gate:** review verdict recorded in this plan file, GO or NO-GO stated
 explicitly; every finding has a regression test.
 
+**D1 result (2026-10-03): NO-GO as of 06f5109.** Three reviewers
+(resolution, downstream by-name lookups, claims/contracts) reproduced
+fourteen distinct defects against GHC 9.4.8; the serious ones were
+reproduced independently by two or three reviewers. Scope decision
+(owner): fix ALL of them in M75, including the ones that predate it;
+keep own-declaration-wins as a documented over-acceptance. Phase E is
+that work. Repro cases: `/private/tmp/claude-501/m75review/`.
+
+## Phase E - the review's findings
+
+The root cause shared by most findings: entities are still found by
+NAME after the renamer decided - for values (Env.Values is still
+program-global), for record fields (field names assumed globally
+unique), and for a few wired classes. The fix is Phase C's move,
+applied to the rest: Env holds builtins + Prelude only, and anything
+downstream that needs a USER entity gets its identity from the
+renamer.
+
+### Task E1: values leave Env too
+- Gate every `Env.Values.Include` in `src/ahc-rename.adb` on
+  `Global_Scope`, as C1 did for types.
+- Consequence, fixed by construction: desugar's `==` (literal
+  patterns) and `>>` (do blocks), elaborate's `Global_Named`
+  (`pure`, `not`, `error`, `showsList_`) can no longer capture a user
+  module's same-named value.
+- `main`: the driver takes it from the ROOT module's resolution, not
+  a by-name search of every module (any module's `main` won before).
+- Contracts: `Contract_Decl` carries `Fn_Var`/`Bind_Var`, resolved
+  right after the declaring module's rename from that module's own
+  values (A's PRE no longer attaches to B's `step`).
+- Rec_Con/Rec_Update field names resolve through scope (qualifier
+  honoured), not `Env.Values.Contains`.
+- Regression: `ops`, `contract` (downstream/), a `>>` capture case.
+
+### Task E2: record fields carry identity
+- `Core.DataCon_Info.Field_Sels`, parallel to `Field_Names`, filled
+  by Declare_Data. Selectors are minted per module (a second module's
+  `radius` gets its own selector); a field name declared twice in one
+  module is an error (Report 3.15.1 / 4.2.1).
+- Kinds gives each selector its scheme through `Field_Sels`
+  (selscheme: a field no longer captures another module's unsigned
+  function); desugar builds selector bodies and record updates over
+  the constructors whose `Field_Sels` contain the selector, never by
+  field name across the program.
+- `T(..)` exports/re-exports take the fields from `Field_Sels`
+  (field_reexp, field_reexp2).
+- Regression: multi/fields (two modules, same type, same field;
+  selector, update, construction, pattern), single-module
+  `hiding (length)` field (L6).
+
+### Task E3: synonym identity and the remaining ambiguities
+- `Builtins.Syn_Rec.Owner` (defining module) gives a synonym an
+  identity; Mod_Find_Syn reports two different imported synonyms as
+  ambiguous (syn_amb, alias_amb) and a same-name synonym vs data type
+  from two imports likewise (syn_vs_data). Own still wins (policy).
+- `Prelude.X` under the implicit import resolves in Base only, and
+  `M.X` with M this module resolves in Own only - for types,
+  constructors, classes and synonyms, mirroring Lookup_Value
+  (prelq_*, P1-P3, derive_q).
+- An imported type and the implicit Prelude's are ambiguous
+  (prel_vs_imp); own-vs-Prelude stays own-wins (policy).
+- Regression: multi/ cases with expected.err for each ambiguity, and
+  expected.out for each Prelude-qualified case.
+
+### Task E4: exports and imports
+- Conflicting exports (two entities, one unqualified name, any
+  namespace) are an error (Report 5.2): exp_conflict, modexp, modexp2.
+- `L.C(..)` exports the methods of L's class, resolved through the
+  qualifier (cls_exp_q).
+- `import M hiding (T(..))` / `hiding (C(..))` / `hiding (C(m))` hide
+  the constructors / methods too (hide_con, hide_cls2, hide_cls3).
+- Export diagnostics carry the entity's span, not (1,1).
+
+### Task E5: wired classes by identity
+- Elaborate finds Applicative in Env (Prelude-only now), not by
+  scanning every class for the name (app).
+- `deriving` accepts only stock-derivable classes - the Prelude's
+  (Env) and Data.Ix's Ix - and rejects others the way GHC does
+  ("not a stock derivable class"); prelude_core's dispatch by class
+  name is then safe (readcls, ixcls, showcls).
+- The Rational carve-out: only lib/Data/Ratio.hs's synonym defines the
+  wired placeholder (G, G3, rational).
+
+### Task E6: declaration order and diagnostics
+- Pass A declares every type, synonym and class NAME before any class
+  body is resolved, so method signatures and superclasses may name
+  later declarations (F2, F3, S2).
+- An unresolvable superclass is an error, not silently dropped (S1).
+- Type errors qualify a TyCon by its module when the two sides print
+  the same name (tyerr): `TyCon_Info.Owner`.
+- Contracts proposed by the claims reviewer: Kinds.Check_Module Pre on
+  table sizes and the registry's last entry; Syn_Of Pre; Resolve_Module
+  Post on Syn_Res (Is_Own => in Own_Syns; imported => cached or Bad).
+
+### Task E7: document the policy
+- EXCLUSIONS.md: a module's own top-level declaration wins over a
+  same-named import or Prelude entity at an unqualified use, where GHC
+  reports an ambiguity - for values (long-standing) and now types.
+
+**Gate (each task):** `scripts/run_gate.sh` green; after E6 also both
+differential suites, the claims reviewer's L7/Q/J controls, and every
+reviewer case re-run against runghc with no divergence other than the
+documented own-wins policy.
+
 ### Task D2: docs and release
 
 **Files:**
