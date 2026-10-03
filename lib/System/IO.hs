@@ -104,5 +104,3 @@ writeFile path s = withFile path WriteMode (\h -> hPutStr h s)
 appendFile :: String -> String -> IO ()
 appendFile path s = withFile path AppendMode (\h -> hPutStr h s)
 
-interact :: (String -> String) -> IO ()
-interact f = getContents >>= \s -> putStr (f s)

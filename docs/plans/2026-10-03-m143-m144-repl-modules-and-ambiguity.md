@@ -139,3 +139,21 @@ load.out re-pinned: the help text gained two lines and the fixture's
 import moved ahead of the body (Probe line 3 -> 4).
 `./scripts/run_repl.sh` rc=0 (5 transcripts ok).
 Known remaining: errors inside the loaded ROOT file cite Repl.hs.
+
+### Results
+
+M143: `./scripts/run_gate.sh` -> `GATE ok` (unit, conformance, exec,
+exec-own, golden all rc=0); `./scripts/run_repl.sh` rc=0.
+
+M144 phase 2: lib edits as swept (Data.Set, Data.Map hiding clauses;
+System.IO duplicate `interact` removed); rule in src/ahc-rename.adb
+(Lookup_Value, Mod_Find_G, Mod_Find_Syn, Resolve_Ty; modular path only);
+GHC-Prelude name table src/ahc-report_prelude.{ads,adb}; 13 regression
+cases tests/conformance/multi/m144_*. Gates: `./scripts/run_gate.sh` ->
+`GATE ok` (all five rc=0, both GC modes), run_differential.sh rc=0,
+run_differential_types.sh rc=0, `run_fuzz_par.sh 300 6 1` -> 300 ok rc=0,
+run_repl.sh rc=0.
+
+Known leftovers: instance-head ambiguity is reported at the declaration
+column (GHC: the class name's); import-vs-Prelude for two different
+VALUES still resolves to the import.
