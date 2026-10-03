@@ -141,6 +141,14 @@ package body AHC.Rename is
 
       Modular : constant Boolean := Reg /= null;
 
+      --  Whose declarations are program-global: only a pass without a
+      --  registry - the Prelude (and single-module unit tests), whose
+      --  types, constructors, classes and synonyms join the builtins
+      --  in Env and reach every module through the Base snapshot. A
+      --  user module's declarations live in its own Iface only, so
+      --  two modules may declare the same name (M75).
+      Global_Scope : constant Boolean := not Modular;
+
       --  An explicit `import Prelude ...` suppresses the implicit
       --  whole-Prelude fallback (Report 5.6.1): resolution then goes
       --  through the import's filtered view like any other module.
@@ -205,26 +213,48 @@ package body AHC.Rename is
       end Check_Qualifier;
 
 
-      --  Import-aware resolution for type-level and constructor
-      --  names (own module, then unqualified imports first-hit, then
-      --  Base). Falls back to the flat environment when no registry
-      --  is in play.
-      function Mod_Find_TyCon
-        (Q : Syntax.QName) return Core.TyCon_Id is
+      --  Import-aware resolution for type constructors, data
+      --  constructors and classes - one shape for all three (M75).
+      --  Qualified through an import name or alias: only those
+      --  imports' exports (Report 5.3). Unqualified: this module's
+      --  own declarations, then every unqualified import, then Base.
+      --  Two DIFFERENT entities reached through imports are an
+      --  ambiguity, reported here at the use site (Report 5.5.2);
+      --  one entity re-exported along two paths is not. Amb tells
+      --  the caller not to add a "not in scope" error on top. Without
+      --  a registry (the Prelude pass) the flat Env is the scope.
+      generic
+         type Id is range <>;
+         None : Id;
+         with function In_Iface
+           (I : Modules.Iface; N : Names.Name_Id) return Id;
+         with function In_Env (N : Names.Name_Id) return Id;
+         What : String;
+      function Mod_Find_G
+        (Q : Syntax.QName; Span : Diagnostics.Source_Span;
+         Amb : out Boolean) return Id;
+
+      function Mod_Find_G
+        (Q : Syntax.QName; Span : Diagnostics.Source_Span;
+         Amb : out Boolean) return Id
+      is
+         Found : Id := None;
+
+         procedure Take (X : Id) is
+         begin
+            if X = None then
+               return;
+            elsif Found = None then
+               Found := X;
+            elsif X /= Found then
+               Amb := True;
+            end if;
+         end Take;
       begin
+         Amb := False;
          if not Modular then
-            declare
-               C : constant Builtins.TyCon_Maps.Cursor :=
-                 Env.TyCons.Find (Q.Name);
-            begin
-               return (if Builtins.TyCon_Maps.Has_Element (C)
-                       then Core.TyCon_Id
-                              (Builtins.TyCon_Maps.Element (C))
-                       else Core.No_TyCon);
-            end;
+            return In_Env (Q.Name);
          end if;
-         --  Qualified through an import name or alias: only that
-         --  module's exports (Report 5.3) - mirrors the value path.
          if Q.Qualifier /= Names.No_Name
            and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
                      or else Prelude_Explicit)
@@ -232,131 +262,64 @@ package body AHC.Rename is
          then
             for I in 1 .. Imp_Views.Last_Index loop
                if View_Matches (I, Q.Qualifier) then
-                  declare
-                     C : constant Builtins.TyCon_Maps.Cursor :=
-                       Imp_Views (I).Visible.TyCons.Find (Q.Name);
-                  begin
-                     if Builtins.TyCon_Maps.Has_Element (C) then
-                        return Core.TyCon_Id
-                          (Builtins.TyCon_Maps.Element (C));
-                     end if;
-                  end;
+                  Take (In_Iface (Imp_Views (I).Visible, Q.Name));
                end if;
             end loop;
-            return Core.No_TyCon;
-         end if;
-         declare
-            C : Builtins.TyCon_Maps.Cursor := Own.TyCons.Find (Q.Name);
-         begin
-            if Builtins.TyCon_Maps.Has_Element (C) then
-               return Core.TyCon_Id (Builtins.TyCon_Maps.Element (C));
+         else
+            Found := In_Iface (Own, Q.Name);
+            if Found /= None then
+               return Found;
             end if;
             for V of Imp_Views loop
                if not V.Qualified then
-                  C := V.Visible.TyCons.Find (Q.Name);
-                  if Builtins.TyCon_Maps.Has_Element (C) then
-                     return Core.TyCon_Id
-                       (Builtins.TyCon_Maps.Element (C));
-                  end if;
+                  Take (In_Iface (V.Visible, Q.Name));
                end if;
             end loop;
-            if not Prelude_Explicit
-              or else Is_Builtin_Syntax (Q.Name)
+            if Found = None
+              and then (not Prelude_Explicit
+                        or else Is_Builtin_Syntax (Q.Name))
             then
-               C := Reg.Base.TyCons.Find (Q.Name);
-               if Builtins.TyCon_Maps.Has_Element (C) then
-                  return Core.TyCon_Id
-                    (Builtins.TyCon_Maps.Element (C));
-               end if;
+               Found := In_Iface (Reg.Base, Q.Name);
             end if;
-            return Core.No_TyCon;
-         end;
-      end Mod_Find_TyCon;
-
-      function Mod_Find_DataCon
-        (Name : Names.Name_Id) return Core.DataCon_Id is
-      begin
-         if not Modular then
-            declare
-               C : constant Builtins.DataCon_Maps.Cursor :=
-                 Env.DataCons.Find (Name);
-            begin
-               return (if Builtins.DataCon_Maps.Has_Element (C)
-                       then Core.DataCon_Id
-                              (Builtins.DataCon_Maps.Element (C))
-                       else 0);
-            end;
          end if;
-         declare
-            C : Builtins.DataCon_Maps.Cursor :=
-              Own.DataCons.Find (Name);
-         begin
-            if Builtins.DataCon_Maps.Has_Element (C) then
-               return Core.DataCon_Id
-                 (Builtins.DataCon_Maps.Element (C));
-            end if;
-            for V of Imp_Views loop
-               if not V.Qualified then
-                  C := V.Visible.DataCons.Find (Name);
-                  if Builtins.DataCon_Maps.Has_Element (C) then
-                     return Core.DataCon_Id
-                       (Builtins.DataCon_Maps.Element (C));
-                  end if;
-               end if;
-            end loop;
-            if Prelude_Explicit
-              and then not Is_Builtin_Syntax (Name)
-            then
-               return 0;
-            end if;
-            C := Reg.Base.DataCons.Find (Name);
-            if Builtins.DataCon_Maps.Has_Element (C) then
-               return Core.DataCon_Id
-                 (Builtins.DataCon_Maps.Element (C));
-            end if;
-            return 0;
-         end;
-      end Mod_Find_DataCon;
-
-      function Mod_Find_Class
-        (Name : Names.Name_Id) return Core.Class_Id is
-      begin
-         if not Modular then
-            declare
-               C : constant Builtins.Class_Maps.Cursor :=
-                 Env.Classes.Find (Name);
-            begin
-               return (if Builtins.Class_Maps.Has_Element (C)
-                       then Core.Class_Id
-                              (Builtins.Class_Maps.Element (C))
-                       else Core.No_Class);
-            end;
+         if Amb then
+            Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
+                     Span,
+                     "ambiguous " & What & " '" & Text (Q.Name)
+                     & "' (imported from several modules)");
+            return None;
          end if;
-         declare
-            C : Builtins.Class_Maps.Cursor := Own.Classes.Find (Name);
-         begin
-            if Builtins.Class_Maps.Has_Element (C) then
-               return Core.Class_Id (Builtins.Class_Maps.Element (C));
-            end if;
-            for V of Imp_Views loop
-               if not V.Qualified then
-                  C := V.Visible.Classes.Find (Name);
-                  if Builtins.Class_Maps.Has_Element (C) then
-                     return Core.Class_Id
-                       (Builtins.Class_Maps.Element (C));
-                  end if;
-               end if;
-            end loop;
-            if not Prelude_Explicit then
-               C := Reg.Base.Classes.Find (Name);
-               if Builtins.Class_Maps.Has_Element (C) then
-                  return Core.Class_Id
-                    (Builtins.Class_Maps.Element (C));
-               end if;
-            end if;
-            return Core.No_Class;
-         end;
-      end Mod_Find_Class;
+         return Found;
+      end Mod_Find_G;
+
+      function TyCon_In
+        (I : Modules.Iface; N : Names.Name_Id) return Core.TyCon_Id
+      is (if I.TyCons.Contains (N)
+          then Core.TyCon_Id (I.TyCons.Element (N)) else Core.No_TyCon);
+      function TyCon_Env (N : Names.Name_Id) return Core.TyCon_Id
+      is (if Env.TyCons.Contains (N)
+          then Core.TyCon_Id (Env.TyCons.Element (N)) else Core.No_TyCon);
+      function DataCon_In
+        (I : Modules.Iface; N : Names.Name_Id) return Core.DataCon_Id
+      is (if I.DataCons.Contains (N)
+          then Core.DataCon_Id (I.DataCons.Element (N)) else 0);
+      function DataCon_Env (N : Names.Name_Id) return Core.DataCon_Id
+      is (if Env.DataCons.Contains (N)
+          then Core.DataCon_Id (Env.DataCons.Element (N)) else 0);
+      function Class_In
+        (I : Modules.Iface; N : Names.Name_Id) return Core.Class_Id
+      is (if I.Classes.Contains (N)
+          then Core.Class_Id (I.Classes.Element (N)) else Core.No_Class);
+      function Class_Env (N : Names.Name_Id) return Core.Class_Id
+      is (if Env.Classes.Contains (N)
+          then Core.Class_Id (Env.Classes.Element (N)) else Core.No_Class);
+
+      function Mod_Find_TyCon is new Mod_Find_G
+        (Core.TyCon_Id, Core.No_TyCon, TyCon_In, TyCon_Env, "type");
+      function Mod_Find_DataCon is new Mod_Find_G
+        (Core.DataCon_Id, 0, DataCon_In, DataCon_Env, "constructor");
+      function Mod_Find_Class is new Mod_Find_G
+        (Core.Class_Id, Core.No_Class, Class_In, Class_Env, "class");
 
       --  The synonym a type-constructor name resolves to, by the same
       --  scoping as Mod_Find_TyCon: own module, then imports, then
@@ -607,11 +570,15 @@ package body AHC.Rename is
          end if;
          declare
             use type Core.DataCon_Id;
-            DC : constant Core.DataCon_Id := Mod_Find_DataCon (Q.Name);
+            Amb : Boolean;
+            DC : constant Core.DataCon_Id :=
+              Mod_Find_DataCon (Q, Span, Amb);
          begin
             if DC /= 0 then
                return (Kind => Data_Res,
                        Con => Core.Real_DataCon_Id (DC));
+            elsif Amb then
+               return (Kind => Unresolved);
             end if;
          end;
          Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
@@ -637,13 +604,14 @@ package body AHC.Rename is
          case N.Kind is
             when Con_T =>
                declare
+                  Amb : Boolean;
                   Cl : constant Core.Class_Id :=
-                    Mod_Find_Class (N.Con.Name);
+                    Mod_Find_Class (N.Con, N.Span, Amb);
                begin
                   if Cl /= Core.No_Class then
                      Res.Class_Res.Replace_Element
                        (Positive (Id), Cl);
-                  else
+                  elsif not Amb then
                      Bag.Add (Diagnostics.Error,
                               Diagnostics.Rename_Out_Of_Scope, N.Span,
                               "class not in scope: " & Text (N.Con.Name));
@@ -666,8 +634,9 @@ package body AHC.Rename is
                null;   --  implicitly bound; kinds handled in AHC.Kinds
             when Con_T =>
                declare
+                  Amb : Boolean;
                   TC : constant Core.TyCon_Id :=
-                    Mod_Find_TyCon (N.Con);
+                    Mod_Find_TyCon (N.Con, N.Span, Amb);
                   Syn_Found : Boolean;
                   Syn : Syn_Ref;
                   Use_Syn : Boolean;
@@ -689,7 +658,7 @@ package body AHC.Rename is
                      --  Expanded during conversion, through the
                      --  record resolved here.
                      Res.Syn_Res.Include (Positive (Id), Syn);
-                  else
+                  elsif not Amb then
                      Bag.Add (Diagnostics.Error,
                               Diagnostics.Rename_Out_Of_Scope, N.Span,
                               "type not in scope: " & Text (N.Con.Name));
@@ -1141,22 +1110,16 @@ package body AHC.Rename is
          Is_NT : constant Boolean := N.Kind = Newtype_D;
          TC : Core.Real_TyCon_Id;
       begin
-         --  A duplicate type name is an error - unless the existing
-         --  one is a BUILTIN, which a library or user module may
-         --  shadow (the type-level mirror of shadowing Prelude
-         --  values; Data.Ratio's Rational shadows the wired-in
-         --  abstract one).
+         --  Report 4.2.1: one module may not declare a type name
+         --  twice. ACROSS modules it is legal and qualified imports
+         --  disambiguate, so this asks Own, not Env (M75); a builtin
+         --  is never in Own, so shadowing one stays legal
+         --  (Data.Ratio's Rational shadows the wired-in abstract one).
          declare
-            C : constant Builtins.TyCon_Maps.Cursor :=
-              Env.TyCons.Find (N.D_Name);
-            Clash : Boolean := Env.Synonyms.Contains (N.D_Name);
+            Clash : constant Boolean :=
+              Own.TyCons.Contains (N.D_Name)
+                or else Own.Synonyms.Contains (N.D_Name);
          begin
-            if Builtins.TyCon_Maps.Has_Element (C)
-              and then not M.Info
-                (Builtins.TyCon_Maps.Element (C)).Is_Builtin
-            then
-               Clash := True;
-            end if;
             if Clash then
                Bag.Add (Diagnostics.Error,
                         Diagnostics.Rename_Duplicate,
@@ -1168,7 +1131,9 @@ package body AHC.Rename is
          TC := M.Mint_TyCon
            ((Name => N.D_Name, Arity => Natural (N.D_Vars.Length),
              Is_Newtype => Is_NT, others => <>));
-         Env.TyCons.Include (N.D_Name, TC);
+         if Global_Scope then
+            Env.TyCons.Include (N.D_Name, TC);
+         end if;
          Own.TyCons.Include (N.D_Name, TC);
          Res.Decl_TyCon.Replace_Element (Positive (D), Core.TyCon_Id (TC));
 
@@ -1195,7 +1160,7 @@ package body AHC.Rename is
                         end loop;
                      end loop;
                end case;
-               if Env.DataCons.Contains (Info.Name) then
+               if Own.DataCons.Contains (Info.Name) then
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Rename_Duplicate, CN.Span,
                            "constructor '" & Text (Info.Name)
@@ -1205,7 +1170,9 @@ package body AHC.Rename is
                   DC : constant Core.Real_DataCon_Id :=
                     M.Mint_DataCon (Info);
                begin
-                  Env.DataCons.Include (Info.Name, DC);
+                  if Global_Scope then
+                     Env.DataCons.Include (Info.Name, DC);
+                  end if;
                   Own.DataCons.Include (Info.Name, DC);
                   Res.Decl_Con.Replace_Element
                     (Positive (N.D_Cons.Element (CI)), Core.DataCon_Id (DC));
@@ -1232,10 +1199,11 @@ package body AHC.Rename is
          --  derived classes participate in context reduction.
          for DC of N.D_Deriving loop
             declare
-               C : constant Builtins.Class_Maps.Cursor :=
-                 Env.Classes.Find (DC.Name);
+               Amb : Boolean;
+               C : constant Core.Class_Id :=
+                 Mod_Find_Class (DC, N.Span, Amb);
             begin
-               if Builtins.Class_Maps.Has_Element (C) then
+               if C /= Core.No_Class then
                   --  Enum/Bounded/Ix derive only for ENUMERATIONS
                   --  here; a non-nullary constructor is a
                   --  compile-time rejection (GHC rejects most of
@@ -1278,7 +1246,7 @@ package body AHC.Rename is
                   end;
                   declare
                      Cl : constant Core.Real_Class_Id :=
-                       Builtins.Class_Maps.Element (C);
+                       Core.Real_Class_Id (C);
                      Ctx : Core.Constraint_Vectors.Vector;
                      Vars : Core.TyVar_Id_Vectors.Vector;
                      Dict : Core.Real_Var_Id;
@@ -1320,7 +1288,7 @@ package body AHC.Rename is
                          Span => N.Span));
                      pragma Unreferenced (Ignore);
                   end;
-               else
+               elsif not Amb then
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Rename_Out_Of_Scope, N.Span,
                            "cannot derive unknown class '"
@@ -1336,7 +1304,7 @@ package body AHC.Rename is
          Dict_TC : Core.Real_TyCon_Id;
          Cl : Core.Real_Class_Id;
       begin
-         if Env.Classes.Contains (N.C_Name) then
+         if Own.Classes.Contains (N.C_Name) then
             Bag.Add (Diagnostics.Error, Diagnostics.Rename_Duplicate,
                      N.Span,
                      "class '" & Text (N.C_Name)
@@ -1353,7 +1321,9 @@ package body AHC.Rename is
               ((Name => Table.Intern ("MkDict$" & Text (N.C_Name)),
                 TyCon => Core.TyCon_Id (Dict_TC), Tag => 1,
                 others => <>)));
-         Env.Classes.Include (N.C_Name, Cl);
+         if Global_Scope then
+            Env.Classes.Include (N.C_Name, Cl);
+         end if;
          Own.Classes.Include (N.C_Name, Cl);
          Res.Decl_Class.Replace_Element
            (Positive (D), Core.Class_Id (Cl));
@@ -1367,9 +1337,10 @@ package body AHC.Rename is
                  and then Arena.Node (AN.Fun).Kind = Con_T
                then
                   declare
+                     Amb : Boolean;
                      SC : constant Core.Class_Id :=
                        Mod_Find_Class
-                         (Arena.Node (AN.Fun).Con.Name);
+                         (Arena.Node (AN.Fun).Con, N.Span, Amb);
                   begin
                      if SC /= Core.No_Class then
                         M.Classes (Cl).Supers.Append
@@ -1451,10 +1422,11 @@ package body AHC.Rename is
          case N.Kind is
             when Con_T =>
                declare
+                  Amb : Boolean;
                   TC2 : constant Core.TyCon_Id :=
-                    Mod_Find_TyCon (N.Con);
+                    Mod_Find_TyCon (N.Con, Span, Amb);
                begin
-                  if TC2 /= Core.No_TyCon then
+                  if TC2 /= Core.No_TyCon or else Amb then
                      return TC2;
                   end if;
                end;
@@ -1482,11 +1454,14 @@ package body AHC.Rename is
       end Instance_Head;
 
       procedure Declare_Instance (D : Real_Decl_Id; N : Decl_Node) is
-         ClC : constant Builtins.Class_Maps.Cursor :=
-           Env.Classes.Find (N.I_Class.Name);
+         Amb : Boolean;
+         ClC : constant Core.Class_Id :=
+           Mod_Find_Class (N.I_Class, N.Span, Amb);
          Head : Core.TyCon_Id;
       begin
-         if not Builtins.Class_Maps.Has_Element (ClC) then
+         if Amb then
+            return;
+         elsif ClC = Core.No_Class then
             Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
                      N.Span,
                      "class not in scope: " & Text (N.I_Class.Name));
@@ -1498,7 +1473,7 @@ package body AHC.Rename is
          end if;
          declare
             Cl : constant Core.Real_Class_Id :=
-              Builtins.Class_Maps.Element (ClC);
+              Core.Real_Class_Id (ClC);
          begin
             Res.Decl_Class.Replace_Element
               (Positive (D), Core.Class_Id (Cl));
@@ -1820,22 +1795,15 @@ package body AHC.Rename is
                when Data_D | Newtype_D =>
                   Declare_Data (D, N);
                when Type_Syn_D =>
-                  --  Like data declarations, a synonym may shadow a
-                  --  BUILTIN TyCon (how `type Rational = Ratio
-                  --  Integer` takes its name over the wired
-                  --  placeholder); user-vs-user still clashes.
+                  --  Like data declarations: a duplicate only within
+                  --  this module (Report 4.2.1), so a builtin TyCon
+                  --  may be shadowed (`type Rational = Ratio
+                  --  Integer`) and another module's name is legal.
                   declare
-                     C : constant Builtins.TyCon_Maps.Cursor :=
-                       Env.TyCons.Find (N.S_Name);
-                     Clash : Boolean :=
-                       Env.Synonyms.Contains (N.S_Name);
+                     Clash : constant Boolean :=
+                       Own.TyCons.Contains (N.S_Name)
+                         or else Own.Synonyms.Contains (N.S_Name);
                   begin
-                     if Builtins.TyCon_Maps.Has_Element (C)
-                       and then not M.Info
-                         (Builtins.TyCon_Maps.Element (C)).Is_Builtin
-                     then
-                        Clash := True;
-                     end if;
                      if Clash then
                         Bag.Add (Diagnostics.Error,
                                  Diagnostics.Rename_Duplicate, N.Span,
@@ -1852,7 +1820,9 @@ package body AHC.Rename is
                         others => <>);
                   begin
                      Own.Synonyms.Include (N.S_Name, Syn);
-                     Env.Synonyms.Include (N.S_Name, Syn);
+                     if Global_Scope then
+                        Env.Synonyms.Include (N.S_Name, Syn);
+                     end if;
                   end;
                when Class_D =>
                   Declare_Class (D, N);
@@ -2124,10 +2094,11 @@ package body AHC.Rename is
                         end;
                      when Type_Ent =>
                         declare
+                           Amb_T, Amb_C : Boolean;
                            TC : constant Core.TyCon_Id :=
-                             Mod_Find_TyCon (E.Name);
+                             Mod_Find_TyCon (E.Name, (1, 1), Amb_T);
                            Cl : constant Core.Class_Id :=
-                             Mod_Find_Class (E.Name.Name);
+                             Mod_Find_Class (E.Name, (1, 1), Amb_C);
                            Exported_Syn_Found : Boolean;
                            Exported_Syn : Syn_Ref;
                         begin
@@ -2230,7 +2201,7 @@ package body AHC.Rename is
                               --  AHC.Kinds after renaming.
                               Ent.Exports.Synonyms.Include
                                 (E.Name.Name, Exported_Syn.Rec);
-                           else
+                           elsif not (Amb_T or Amb_C) then
                               Bag.Add
                                 (Diagnostics.Error,
                                  Diagnostics.Rename_Out_Of_Scope,

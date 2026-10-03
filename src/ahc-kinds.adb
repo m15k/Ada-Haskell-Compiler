@@ -1225,7 +1225,17 @@ package body AHC.Kinds is
          Syn.Core_Rhs := R;
          Syn.Bad := Core."=" (R, Core.No_Type);
          Own_Syns.Include (N.S_Name, Syn);
-         Env.Synonyms.Include (N.S_Name, Syn);
+         --  Env holds the program-global synonyms only: the Prelude
+         --  pass's (no registry), plus a library synonym that DEFINES
+         --  a wired-in placeholder TyCon - Data.Ratio's `type Rational
+         --  = Ratio Integer` - which the typechecker's fromRational
+         --  hook must find program-wide (M75).
+         if Reg = null
+           or else (Env.TyCons.Contains (N.S_Name)
+                    and then M.Info (Env.TyCons (N.S_Name)).Is_Builtin)
+         then
+            Env.Synonyms.Include (N.S_Name, Syn);
+         end if;
       end Do_Synonym;
 
       Method_Selectors : Sig_Maps.Map;   --  selector set (value unused)

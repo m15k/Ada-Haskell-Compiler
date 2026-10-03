@@ -53,12 +53,41 @@ for hs in tests/conformance/*.hs; do
 done
 
 # Multi-module cases: tests/conformance/multi/<case>/Main.hs plus its
-# modules; the golden lives beside Main.hs.
+# modules; the golden lives beside Main.hs. A case with expected.err
+# instead is one GHC REJECTS (a scope error only a module graph can
+# produce, e.g. an ambiguous import - Report 5.5.2): AHC must refuse
+# to build it too, with every line of expected.err in its stderr.
 for main in tests/conformance/multi/*/Main.hs; do
   dir=$(dirname "$main")
   base=$(basename "$dir")
   exp="$dir/expected.out"
   n=$((n+1))
+  if [ -f "$dir/expected.err" ]; then
+    if [ "$mode" = "--oracle" ]; then
+      if (cd "$dir" && "$GHC" Main.hs) >/dev/null 2>&1; then
+        echo "ORACLE-ACCEPTS $main (expected.err says GHC rejects)"; fail=1
+      else
+        echo "oracle rejects $main"
+      fi
+      continue
+    fi
+    if scripts/ahc-build.sh "$main" "$tmp/mm_$base" >/dev/null 2>"$tmp/err"
+    then
+      echo "OVER-ACCEPT $main (GHC rejects)"; fail=1; continue
+    fi
+    missing=0
+    while IFS= read -r want; do
+      [ -z "$want" ] && continue
+      grep -Fq -- "$want" "$tmp/err" || { echo "  missing: $want"; missing=1; }
+    done < "$dir/expected.err"
+    if [ $missing -ne 0 ]; then
+      echo "FAIL $main (wrong rejection)"; sed 's/^/  /' "$tmp/err" | head -5
+      fail=1
+    else
+      echo "ok   $main (rejected)"
+    fi
+    continue
+  fi
   if [ "$mode" = "--oracle" ]; then
     if (cd "$dir" && "$GHC" Main.hs) > "$tmp/oracle" 2>/dev/null; then
       mv "$tmp/oracle" "$exp"; echo "oracle $exp"
