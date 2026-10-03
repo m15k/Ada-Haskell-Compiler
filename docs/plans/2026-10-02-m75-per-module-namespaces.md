@@ -734,6 +734,15 @@ differential suites, the claims reviewer's L7/Q/J controls, and every
 reviewer case re-run against runghc with no divergence other than the
 documented own-wins policy.
 
+**D1 final verdict (2026-10-03): GO as of 671fbd8.** Phase E landed
+as d85f36b (all fourteen findings, 32 regression programs). The
+milestone gate then found a fifteenth - the fuzz campaign rejected
+258/300 seeds on `Rational` behind an only-list import - fixed in
+671fbd8. Final gate: unit, 141 conformance, exec both GC modes, golden
+unchanged, both differentials, own soak (AHC_OWN_VERIFY=1) PASS, fuzz
+300/300, bench within -3%..+2% of v1.14. Every reviewer case agrees
+with GHC except the documented own-wins policy cases.
+
 ### Task D2: docs and release
 
 **Files:**
