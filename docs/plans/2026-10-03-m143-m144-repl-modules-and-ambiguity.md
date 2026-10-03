@@ -71,7 +71,52 @@ Gate: `./scripts/run_gate.sh` -> `GATE ok`; `./scripts/run_repl.sh` green.
 Gate: the sweep list committed here; if more than 20 sites, STOP and
 report.
 
-(sweep results appended below)
+#### Method
+
+The rule was implemented in a scratch copy of the tree (own declaration
+vs an unqualified import, or vs the implicit Prelude; modular path only)
+and `ahc check` was run with the OLD and the NEW binary over EVERY .hs
+file under lib/, tests/ (conformance, exec, golden, corpus, bench,
+build, examples/, ...) and examples/; any difference in outcome or
+message is a site. Because a failing library module stops the check
+before its importers, the sweep was iterated: fix a module, re-run.
+
+#### A finding that shapes the rule: AHC's Prelude is wider than GHC's
+
+`prelude/Prelude.hs` has no export list, so the implicit-Prelude
+snapshot (`Reg.Base`) holds `fromMaybe`, `isJust`, `isNothing`, `swap`
+and ~75 internal helpers that GHC's Prelude does not export. A naive
+"own vs Prelude" ambiguity would REJECT programs GHC accepts (any
+program defining its own `swap` or `fromMaybe`). So the own-vs-Prelude
+arm of the rule fires only for names GHC 9.4.8's Prelude exports: a
+generated table (scripts/gen_report_prelude.py -> src/ahc-report_prelude.adb,
+256 names from `ghc -e ':browse Prelude'`). Own-vs-import needs no table
+(module facades have export lists).
+
+#### The sweep (own declaration used unqualified/exported while an
+unqualified import or the Prelude supplies the same name)
+
+lib/ (3 modules, 15 use sites):
+- lib/Data/Set.hs: own `null` (line 33), `filter` (222), `map` (229) vs
+  the Prelude - flagged at the export-list entries, 2:28, 6:5, 6:13
+  (3 sites). Fix: `import Prelude hiding (null, filter, map)`.
+- lib/Data/Map.hs: own `null`, `lookup`, `map`, `filter` vs the Prelude -
+  2:28, 3:5, 6:5, 6:10, 53:11, 54:11, 59:8, 68:8, 187:12, 221:40, 221:50
+  (11 sites). Fix: `import Prelude hiding (filter, lookup, map, null)`.
+- lib/System/IO.hs: own `interact` (107) vs the Prelude's (which exists
+  since M141) - export entry 3:37 (1 site). Fix: delete the duplicate
+  definition so the export re-exports the Prelude's entity (GHC's shape).
+Because own already won everywhere, adding a `hiding` clause cannot
+change what any use inside these modules means.
+
+tests/, examples/: 0 sites (the only file whose outcome differs is
+prelude/Prelude.hs itself when mis-fed to `check` as a user module, which
+is not a gate input; the Prelude is compiled by the non-modular pass).
+tests/conformance/ch05_wired_shadowing.hs defines its own `filter` but
+only ever uses `Prelude.filter`/qualified names, which GHC accepts.
+
+Total 15 sites (<= 20) in 3 library modules -> proceed to Phase 2.
+Unit tests (330) pass against the experimental binary.
 
 ### Phase 2 - implement (only if the sweep is <= 20 sites)
 
