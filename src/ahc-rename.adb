@@ -483,6 +483,24 @@ package body AHC.Rename is
             Choice := (if SF then Take_Syn else Neither);
          elsif not SF then
             Choice := Take_TyCon;
+            --  The wired placeholder a library DEFINES: the Prelude's
+            --  Rational means Data.Ratio's `Ratio Integer` once that
+            --  module is in the program, whether or not this import
+            --  list names its synonym (GHC: Rational is a Prelude
+            --  export). Env.Synonyms holds that one library synonym
+            --  and the Prelude's own, nothing else (M75).
+            if TyCon_Wired (TC) then
+               declare
+                  PN : constant Names.Name_Id :=
+                    M.Info (Core.Real_TyCon_Id (TC)).Name;
+               begin
+                  if Env.Synonyms.Contains (PN) then
+                     Syn := (Is_Own => False, Name => PN,
+                             Rec => Env.Synonyms.Element (PN));
+                     Choice := Take_Syn;
+                  end if;
+               end;
+            end if;
          elsif M.Info (Core.Real_TyCon_Id (TC)).Is_Builtin then
             Choice := Take_Syn;
          else
