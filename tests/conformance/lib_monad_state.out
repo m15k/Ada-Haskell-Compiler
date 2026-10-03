@@ -1,0 +1,13 @@
+(100,50)
+[Just 3,Just 2,Just 1,Nothing]
+[(100,"a"),(101,"b"),(102,"c")]
+55
+(16,6)
+(21,("'x'",'x'))
+tick 0
+tick 1
+tick 2
+3
+lifted
+3
+(Identity 3,2)
