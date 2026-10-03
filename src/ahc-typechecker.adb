@@ -523,6 +523,26 @@ package body AHC.Typechecker is
          case N.Kind is
             when TCon_T =>
                Head := TyCon_Id (N.Con);
+               --  The wired Rational placeholder IS Data.Ratio's
+               --  `Ratio Integer` once that module is in the program
+               --  (the unifier's hook above says so for equations);
+               --  a constraint on it - Show (toRational x) - is solved
+               --  at the definition (M142).
+               if Head = Env.Rational_TC then
+                  declare
+                     C : constant Builtins.Syn_Maps.Cursor :=
+                       Env.Synonyms.Find (Table.Intern ("Rational"));
+                  begin
+                     if Builtins.Syn_Maps.Has_Element (C)
+                       and then Builtins.Syn_Maps.Element (C).Core_Rhs
+                                /= Core.No_Type
+                     then
+                        Head_Of (Real_Type_Id
+                                   (Builtins.Syn_Maps.Element (C).Core_Rhs),
+                                 Head, Args);
+                     end if;
+                  end;
+               end if;
             when TApp_T =>
                Head_Of (N.T_Fun, Head, Args);
                Args.Append (N.T_Arg);

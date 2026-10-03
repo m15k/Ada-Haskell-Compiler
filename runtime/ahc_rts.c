@@ -1692,6 +1692,74 @@ static AhcNode *p_from_rational_d(AhcNode *a) {
   }
 }
 
+/* toRational (M142) ------------------------------------------------
+   A Rational is Data.Ratio's `n :% d` node: two fields, numerator
+   then denominator, reduced, denominator positive. Without Data.Ratio
+   in the program (ahc_ratio_tag < 0) it can only flow into
+   fromRational, which reads the two fields whatever the tag. */
+int ahc_ratio_tag = -1;
+
+static AhcNode *mk_rational(AhcNode *n, AhcNode *d) {
+  AhcNode *r = ahc_mk_con(ahc_ratio_tag >= 0 ? ahc_ratio_tag : 1, 2);
+  r->u.con.fields[0] = n;
+  r->u.con.fields[1] = d;
+  return r;
+}
+
+/* Int and Integer: n :% 1. */
+static AhcNode *p_to_rational_i(AhcNode *a) {
+  return mk_rational(ahc_eval(a), ahc_mk_int(1));
+}
+
+/* m * 2^e, exactly and reduced: GHC's toRational is
+   `m % 2^-e` / `(m * 2^e) :% 1` over decodeFloat's (m, e). */
+static AhcNode *rational_of_decoded(long m, long e) {
+  if (m == 0) return mk_rational(ahc_mk_int(0), ahc_mk_int(1));
+  while (e < 0 && (m & 1L) == 0) { m >>= 1; e++; }   /* m != 0 */
+  if (e >= 0)
+    return mk_rational(node_shl(ahc_mk_int(m), (int)e), ahc_mk_int(1));
+  return mk_rational(ahc_mk_int(m), node_shl(ahc_mk_int(1), (int)-e));
+}
+
+/* decodeFloat at Double, from the IEEE bits exactly as GHC decodes
+   them - infinities and NaNs included (exponent field 2047 is read
+   like any other: +Inf is 2^52 * 2^972). */
+static AhcNode *p_to_rational_d(AhcNode *a) {
+  double x = ahc_eval(a)->u.d;
+  unsigned long bits;
+  long ef, m, e;
+  memcpy(&bits, &x, sizeof bits);
+  ef = (long)((bits >> 52) & 0x7FFUL);
+  m = (long)(bits & 0xFFFFFFFFFFFFFUL);
+  if (ef == 0) {
+    e = -1074;                          /* subnormal (or zero) */
+  } else {
+    m |= 1L << 52;
+    e = ef - 1075;
+  }
+  if (bits >> 63) m = -m;
+  return rational_of_decoded(m, e);
+}
+
+/* decodeFloat at Float: the value is held as a double, but GHC
+   decodes the 32-bit float's own bits (+Inf is 2^23 * 2^105). */
+static AhcNode *p_to_rational_f(AhcNode *a) {
+  float x = (float)ahc_eval(a)->u.d;
+  unsigned int bits;
+  long ef, m, e;
+  memcpy(&bits, &x, sizeof bits);
+  ef = (long)((bits >> 23) & 0xFFU);
+  m = (long)(bits & 0x7FFFFFU);
+  if (ef == 0) {
+    e = -149;
+  } else {
+    m |= 1L << 23;
+    e = ef - 150;
+  }
+  if (bits >> 31) m = -m;
+  return rational_of_decoded(m, e);
+}
+
 /* Report 6.4.2: div/mod floor toward negative infinity. */
 static void big_divmod_fl(AhcNode *a, AhcNode *b,
                           AhcNode **q_node, AhcNode **r_node) {
@@ -6624,6 +6692,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_seq, *ahc_prim_from_rational_d,
+  *ahc_prim_to_rational_i, *ahc_prim_to_rational_d,
+  *ahc_prim_to_rational_f,
   *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
   *ahc_prim_chan_new, *ahc_prim_chan_send, *ahc_prim_chan_recv,
   *ahc_prim_task_yield,
@@ -6804,6 +6874,9 @@ void ahc_rts_init(void) {
   if (getenv("AHC_OWN_STATS")) atexit(own_stats);
 #endif
   ahc_prim_from_rational_d = mk_prim1(p_from_rational_d);
+  ahc_prim_to_rational_i = mk_prim1(p_to_rational_i);
+  ahc_prim_to_rational_d = mk_prim1(p_to_rational_d);
+  ahc_prim_to_rational_f = mk_prim1(p_to_rational_f);
   ahc_prim_ord = mk_prim1(p_ord);
   ahc_prim_chr = mk_prim1(p_chr);
   ahc_prim_check_range = mk_prim3(p_check_range);

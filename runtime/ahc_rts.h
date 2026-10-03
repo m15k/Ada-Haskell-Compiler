@@ -56,6 +56,9 @@ AhcNode *ahc_mk_fun(AhcFn fn, AhcNode **env);
 AhcNode *ahc_mk_int(long v);
 AhcNode *ahc_mk_ulong(unsigned long v);        /* bignum > LONG_MAX */
 AhcNode *ahc_mk_big_str(const char *lexeme);   /* literal > long */
+/* Data.Ratio's :% constructor tag, set by the root unit when the
+   program contains Data.Ratio (M142); -1 otherwise. */
+extern int ahc_ratio_tag;
 AhcNode *ahc_mk_ratlit(long contag, const char *n, const char *d);
 void ahc_set_args(int argc, char **argv);      /* called by main() */
 AhcNode *ahc_mk_double(double v);
@@ -125,6 +128,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
   *ahc_prim_error, *ahc_prim_seq, *ahc_prim_from_rational_d,
+  *ahc_prim_to_rational_i, *ahc_prim_to_rational_d,
+  *ahc_prim_to_rational_f,
   *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
   *ahc_prim_chan_new, *ahc_prim_chan_send, *ahc_prim_chan_recv,
   *ahc_prim_task_yield,

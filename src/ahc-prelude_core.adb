@@ -282,6 +282,14 @@ package body AHC.Prelude_Core is
         Prim ("primseq", "ahc_prim_seq");
       P_FromRatD : constant Real_Var_Id :=
         Prim ("primfromRationalD", "ahc_prim_from_rational_d");
+      --  toRational (M142): exact, as GHC's - Int/Integer are n :% 1,
+      --  Double and Float decode their own IEEE bits.
+      P_ToRatI : constant Real_Var_Id :=
+        Prim ("primtoRationalI", "ahc_prim_to_rational_i");
+      P_ToRatD : constant Real_Var_Id :=
+        Prim ("primtoRationalD", "ahc_prim_to_rational_d");
+      P_ToRatF : constant Real_Var_Id :=
+        Prim ("primtoRationalF", "ahc_prim_to_rational_f");
 
       ------------------------------------------------------------------
       --  Method-set builders for instance dictionaries
@@ -1828,6 +1836,15 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_IsNegZD));
                      Ms.Append (V (P_Atan2D));
                      Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Real_Cl then
+                     --  toRational (M142): was "no runtime yet" at
+                     --  every wired head; the fixed-width types'
+                     --  source instances go through Integer's.
+                     Give_Dict
+                       (Real_Instance_Id (II),
+                        [V (if Inst.Head = Env.Double_TC then P_ToRatD
+                            elsif Inst.Head = Env.Float_TC then P_ToRatF
+                            else P_ToRatI)]);
                   elsif Cl_Id = Env.Fractional_Cl
                     and then (Inst.Head = Env.Double_TC
                               or else Inst.Head = Env.Float_TC)

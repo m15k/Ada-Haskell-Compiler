@@ -1737,10 +1737,20 @@ package body AHC.CodeGen is
             Append (F.Text, "}" & ASCII.LF);
 
             if UI = Units.Last_Index then
+               declare
+               --  toRational's runtime builds Data.Ratio's :% node
+               --  (M142): tell it the constructor's tag.
+               Ratio_Init : constant String :=
+                 (if Ratio_Tag >= 0
+                  then "  ahc_ratio_tag = " & Img (Ratio_Tag) & ";"
+                       & ASCII.LF
+                  else "");
+               begin
                if Lib_Mode then
                   Append (F.Text, ASCII.LF
                           & "void ahc_lib_init(void) {" & ASCII.LF
-                          & "  ahc_rts_init();" & ASCII.LF);
+                          & "  ahc_rts_init();" & ASCII.LF
+                          & Ratio_Init);
                   for U2 of Units loop
                      Append (F.Text, "  ahc_init_"
                              & Mangle (To_String (U2)) & "();"
@@ -1752,7 +1762,8 @@ package body AHC.CodeGen is
                           & "int main(int argc, char **argv) {"
                           & ASCII.LF
                           & "  ahc_set_args(argc, argv);" & ASCII.LF
-                          & "  ahc_rts_init();" & ASCII.LF);
+                          & "  ahc_rts_init();" & ASCII.LF
+                          & Ratio_Init);
                   for U2 of Units loop
                      Append (F.Text, "  ahc_init_"
                              & Mangle (To_String (U2)) & "();"
@@ -1773,6 +1784,7 @@ package body AHC.CodeGen is
                   Append (F.Text, "  return 0;" & ASCII.LF & "}"
                           & ASCII.LF);
                end if;
+               end;
             end if;
 
             Files.Append (F);
