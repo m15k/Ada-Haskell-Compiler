@@ -1,0 +1,4 @@
+Shape {radius = 4.0}
+Shape {radius = 5, name = "x"}
+2.0
+Shape {radius = 3.0}

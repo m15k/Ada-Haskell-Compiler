@@ -37,6 +37,9 @@ package body AHC.Kinds is
         (Res.Syn_Res.Contains (Positive (T)));
 
       function Syn_Of (T : Syntax.Real_Type_Id) return Builtins.Syn_Rec
+        with Pre => Syn_At (T);
+
+      function Syn_Of (T : Syntax.Real_Type_Id) return Builtins.Syn_Rec
       is
          R : constant Rename.Syn_Ref := Res.Syn_Res (Positive (T));
       begin
@@ -1047,13 +1050,13 @@ package body AHC.Kinds is
                begin
                   for I in 1 .. FNames.Last_Index loop
                      declare
-                        Sel_C : constant Builtins.Var_Maps.Cursor :=
-                          Env.Values.Find (FNames (I));
+                        --  The constructor's own selector, by identity
+                        --  (M75): a by-name lookup gave another
+                        --  module's unsigned function this scheme.
+                        Sel : constant Core.Real_Var_Id :=
+                          M.Info (DC).Field_Sels (I);
                      begin
-                        if Builtins.Var_Maps.Has_Element (Sel_C)
-                          and then M.Info (Builtins.Var_Maps.Element
-                                             (Sel_C)).Var_Scheme
-                                   = Core.No_Scheme
+                        if M.Info (Sel).Var_Scheme = Core.No_Scheme
                         then
                            declare
                               Sel_T : constant Core.Real_Type_Id :=
@@ -1063,7 +1066,7 @@ package body AHC.Kinds is
                                      Core.Real_Type_Id (Result_T),
                                    To => Field_Types (I)));
                            begin
-                              M.Vars (Builtins.Var_Maps.Element (Sel_C))
+                              M.Vars (Sel)
                                 .Var_Scheme := Core.Scheme_Id
                                   (M.Add (Core.Scheme'
                                      (Tvs => Tvs,
@@ -1226,13 +1229,16 @@ package body AHC.Kinds is
          Syn.Bad := Core."=" (R, Core.No_Type);
          Own_Syns.Include (N.S_Name, Syn);
          --  Env holds the program-global synonyms only: the Prelude
-         --  pass's (no registry), plus a library synonym that DEFINES
-         --  a wired-in placeholder TyCon - Data.Ratio's `type Rational
-         --  = Ratio Integer` - which the typechecker's fromRational
-         --  hook must find program-wide (M75).
+         --  pass's (no registry), plus the one library synonym that
+         --  DEFINES a wired placeholder - lib/Data/Ratio.hs's `type
+         --  Rational = Ratio Integer`, which the typechecker's
+         --  fromRational hook finds by name. Only that module's: any
+         --  other module's Rational is its own business (M75 review:
+         --  a user `type Rational = Double` hijacked the hook).
          if Reg = null
-           or else (Env.TyCons.Contains (N.S_Name)
-                    and then M.Info (Env.TyCons (N.S_Name)).Is_Builtin)
+           or else (Table.Text (N.S_Name) = "Rational"
+                    and then Arena.Module_Name /= Names.No_Name
+                    and then Table.Text (Arena.Module_Name) = "Data.Ratio")
          then
             Env.Synonyms.Include (N.S_Name, Syn);
          end if;

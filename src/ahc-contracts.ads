@@ -33,6 +33,12 @@ package AHC.Contracts is
       Fn_Name   : Names.Name_Id := Names.No_Name;
       Bind_Name : Names.Name_Id := Names.No_Name;  --  $pre$f / $post$f
       Span      : Diagnostics.Source_Span;
+      --  The declaring module, and the two binders resolved in IT
+      --  once it is renamed: a contract attaches to its own module's
+      --  function, never to a same-named one elsewhere (M75).
+      Owner     : Names.Name_Id := Names.No_Name;
+      Fn_Var    : Core.Var_Id := Core.No_Var;
+      Bind_Var  : Core.Var_Id := Core.No_Var;
    end record;
 
    package Contract_Vectors is new Ada.Containers.Vectors

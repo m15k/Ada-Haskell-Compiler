@@ -1360,29 +1360,26 @@ package body AHC.Desugar is
 
             when Rec_Update_E =>
                --  r { f = e }: one alternative per constructor that
-               --  has every updated field.
+               --  has every updated field - by SELECTOR identity, as
+               --  the renamer resolved them, so a same-named field of
+               --  another module's type never joins the case (M75).
                declare
                   R_V : constant Core.Real_Var_Id := Fresh ("$r", Span);
                   Alts : Core.Alt_Id_Vectors.Vector;
+                  Sels : constant Core.Var_Id_Vectors.Vector :=
+                    (if Res.Field_Res.Contains (Positive (E))
+                     then Res.Field_Res (Positive (E))
+                     else Core.Var_Id_Vectors.Empty_Vector);
 
                   function Has_All_Fields
                     (Info : Core.DataCon_Info) return Boolean is
                   begin
-                     for F of N.Rec_Fields loop
-                        declare
-                           Found : Boolean := False;
-                        begin
-                           for FN of Info.Field_Names loop
-                              if FN = F.Field.Name then
-                                 Found := True;
-                              end if;
-                           end loop;
-                           if not Found then
-                              return False;
-                           end if;
-                        end;
+                     for S of Sels loop
+                        if not Info.Field_Sels.Contains (S) then
+                           return False;
+                        end if;
                      end loop;
-                     return not Info.Field_Names.Is_Empty;
+                     return not Info.Field_Sels.Is_Empty;
                   end Has_All_Fields;
                begin
                   for DC in 1 .. M.Last_DataCon loop
@@ -1408,11 +1405,12 @@ package body AHC.Desugar is
                                     Arg : Core.Real_Expr_Id :=
                                       VarE (Binders (FI), Span);
                                  begin
-                                    for F of N.Rec_Fields loop
-                                       if F.Field.Name =
-                                          Info.Field_Names.Element (FI)
+                                    for K in 1 .. Sels.Last_Index loop
+                                       if Sels (K) =
+                                          Info.Field_Sels.Element (FI)
                                        then
-                                          Arg := Ds_Expr (F.Value);
+                                          Arg := Ds_Expr
+                                            (N.Rec_Fields (K).Value);
                                        end if;
                                     end loop;
                                     Rebuild := App1 (Rebuild, Arg,
@@ -2158,28 +2156,24 @@ package body AHC.Desugar is
                Info : constant Core.DataCon_Info :=
                  M.Info (Core.Real_DataCon_Id (DC));
             begin
-               for FI in 1 .. Info.Field_Names.Last_Index loop
+               for FI in 1 .. Info.Field_Sels.Last_Index loop
                   declare
-                     Sel_C : constant Builtins.Var_Maps.Cursor :=
-                       Env.Values.Find (Info.Field_Names.Element (FI));
                      Span : constant Diagnostics.Source_Span :=
                        (Start => 1, Stop => 1);
                   begin
-                     if Builtins.Var_Maps.Has_Element (Sel_C)
-                       and then not Done.Contains
-                         (Builtins.Var_Maps.Element (Sel_C))
-                     then
+                     if not Done.Contains (Info.Field_Sels (FI)) then
                         declare
                            Sel : constant Core.Real_Var_Id :=
-                             Builtins.Var_Maps.Element (Sel_C);
+                             Info.Field_Sels (FI);
                            R_V : constant Core.Real_Var_Id :=
                              Fresh ("$r", Span);
                            Alts : Core.Alt_Id_Vectors.Vector;
                            G : Core.Top_Bind;
                         begin
                            --  One alternative per constructor that
-                           --  has this field (any TyCon; field names
-                           --  are globally unique).
+                           --  carries this SELECTOR - its own type's
+                           --  constructors, never a same-named field
+                           --  of another module's type (M75).
                            for DC2 in 1 .. M.Last_DataCon loop
                               declare
                                  I2 : constant Core.DataCon_Info :=
@@ -2187,11 +2181,9 @@ package body AHC.Desugar is
                                      (Core.Real_DataCon_Id (DC2));
                               begin
                                  for FJ in
-                                   1 .. I2.Field_Names.Last_Index
+                                   1 .. I2.Field_Sels.Last_Index
                                  loop
-                                    if I2.Field_Names (FJ) =
-                                       Info.Field_Names.Element (FI)
-                                    then
+                                    if I2.Field_Sels (FJ) = Sel then
                                        declare
                                           Bs : Core.Var_Id_Vectors
                                                  .Vector;

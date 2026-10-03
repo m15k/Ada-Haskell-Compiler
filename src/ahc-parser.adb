@@ -2177,6 +2177,7 @@ package body AHC.Parser is
 
       function Parse_Entity (Allow_Module : Boolean) return Entity is
          E : Entity;
+         Sp : constant Diagnostics.Source_Span := Tok.Span;
       begin
          if Allow_Module and then At_K (Kw_Module) then
             Advance;
@@ -2185,27 +2186,27 @@ package body AHC.Parser is
             end if;
             E := (Kind => Module_Ent,
                   Name => (Module_Name_Of (Tok), Names.No_Name),
-                  others => <>);
+                  Span => Sp, others => <>);
             Advance;
             return E;
          end if;
 
          if At_K (Varid) then
-            E := (Kind => Var_Ent, Name => Tok_QName, others => <>);
+            E := (Kind => Var_Ent, Name => Tok_QName, Span => Sp, others => <>);
             Advance;
             return E;
          end if;
 
          if At_Paren_Op then
             Advance;
-            E := (Kind => Var_Ent, Name => Tok_QName, others => <>);
+            E := (Kind => Var_Ent, Name => Tok_QName, Span => Sp, others => <>);
             Advance;
             Advance;
             return E;
          end if;
 
          if Tok.Kind in Conid | Qconid then
-            E := (Kind => Type_Ent, Name => Tok_QName, others => <>);
+            E := (Kind => Type_Ent, Name => Tok_QName, Span => Sp, others => <>);
             Advance;
             if At_K (Left_Paren) then
                Advance;

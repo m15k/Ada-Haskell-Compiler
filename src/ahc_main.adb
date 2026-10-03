@@ -619,6 +619,8 @@ procedure AHC_Main is
                L : Loaded renames Order (LI);
                Is_Root : constant Boolean :=
                  LI = Order.Last_Index;
+               Main_Name : constant AHC.Names.Name_Id :=
+                 AHC.Names.Name_Id (Table.Intern ("main"));
                G0 : constant Natural :=
                  Natural (M.Top_Binds.Length);
                I0 : constant Natural :=
@@ -673,6 +675,30 @@ procedure AHC_Main is
                   AHC.Rename.Resolve_Module
                     (L.Ref.all, Table, Bag, M, Env, L_Res,
                      Reg'Unchecked_Access, Tops);
+               end if;
+               if not Bag.Has_Errors then
+                  --  User values are not program-global (M75): bind
+                  --  this module's contracts to ITS functions, and
+                  --  hand codegen the ROOT module's main - the one
+                  --  user value Env still names, for that reason.
+                  for C of All_Contracts loop
+                     if C.Owner = L.Ref.Module_Name then
+                        if L_Res.Own_Values.Contains (C.Fn_Name) then
+                           C.Fn_Var := AHC.Core.Var_Id
+                             (L_Res.Own_Values.Element (C.Fn_Name));
+                        end if;
+                        if L_Res.Own_Values.Contains (C.Bind_Name) then
+                           C.Bind_Var := AHC.Core.Var_Id
+                             (L_Res.Own_Values.Element (C.Bind_Name));
+                        end if;
+                     end if;
+                  end loop;
+                  if Is_Root
+                    and then L_Res.Own_Values.Contains (Main_Name)
+                  then
+                     Env.Values.Include
+                       (Main_Name, L_Res.Own_Values (Main_Name));
+                  end if;
                end if;
                if not Bag.Has_Errors then
                   AHC.Kinds.Check_Module
@@ -751,25 +777,22 @@ procedure AHC_Main is
                use type AHC.Core.Scheme_Id;
                use type AHC.Core.Type_Kind;
                use AHC.Contracts;
-               Fn_C : constant AHC.Builtins.Var_Maps.Cursor :=
-                 Env.Values.Find (C.Fn_Name);
-               Bd_C : constant AHC.Builtins.Var_Maps.Cursor :=
-                 Env.Values.Find (C.Bind_Name);
+
                Fn_Text : constant String :=
                  Table.Text (AHC.Names.Real_Name_Id (C.Fn_Name));
             begin
-               if not AHC.Builtins.Var_Maps.Has_Element (Fn_C) then
+               if AHC.Core."=" (C.Fn_Var, AHC.Core.No_Var) then
                   Bag.Add (AHC.Diagnostics.Error,
                            AHC.Diagnostics.Rename_Out_Of_Scope,
                            C.Span,
                            "contract for unknown function '"
                            & Fn_Text & "'");
-               elsif AHC.Builtins.Var_Maps.Has_Element (Bd_C) then
+               elsif AHC.Core."/=" (C.Bind_Var, AHC.Core.No_Var) then
                   declare
                      FnV : constant AHC.Core.Real_Var_Id :=
-                       AHC.Builtins.Var_Maps.Element (Fn_C);
+                       AHC.Core.Real_Var_Id (C.Fn_Var);
                      BdV : constant AHC.Core.Real_Var_Id :=
-                       AHC.Builtins.Var_Maps.Element (Bd_C);
+                       AHC.Core.Real_Var_Id (C.Bind_Var);
                      Sig_C : constant AHC.Kinds.Sig_Maps.Cursor :=
                        Sigs.Find (FnV);
                   begin

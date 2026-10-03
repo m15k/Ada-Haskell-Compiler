@@ -131,7 +131,9 @@ package body AHC.Contracts is
                   Out_C.Append
                     (Contract_Decl'
                        (Kind => Kind, Fn_Name => Fn,
-                        Bind_Name => Bind, Span => Sp));
+                        Bind_Name => Bind, Span => Sp,
+                        Owner => Arena.Module_Name,
+                        others => <>));
                end;
             end;
          end;

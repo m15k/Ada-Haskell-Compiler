@@ -69,6 +69,12 @@ package AHC.Kinds is
       --  export entry to it: the synonym records cached here are
       --  published into that entry, so importers expand from Core
       --  and never from this module's arena (M75).
-      Reg   : access Modules.Registry := null);
+      Reg   : access Modules.Registry := null)
+     --  The renamer's declaration tables cover this arena exactly:
+     --  Kinds takes every data type and constructor from them, never
+     --  by name (M75).
+     with Pre =>
+       Natural (Res.Decl_TyCon.Length) = Natural (Arena.Last_Decl)
+       and then Natural (Res.Decl_Con.Length) = Natural (Arena.Last_Con);
 
 end AHC.Kinds;

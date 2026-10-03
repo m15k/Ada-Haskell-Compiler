@@ -226,13 +226,15 @@ package body AHC.Typechecker is
       --  Unification
       ------------------------------------------------------------------
 
-      function Type_Str (T : Real_Type_Id) return String is
+      function Type_Str
+        (T : Real_Type_Id; Qualify : Boolean := False) return String
+      is
          Sch : Scheme;
          Id : Real_Scheme_Id;
       begin
          Sch.S_Body := Type_Id (Zonk_With (T, Meta_Type_Maps.Empty_Map));
          Id := M.Add (Sch);
-         return Core.Printer.Pretty_Scheme (M, Table, Id);
+         return Core.Printer.Pretty_Scheme (M, Table, Id, Qualify);
       end Type_Str;
 
       procedure Unify
@@ -243,11 +245,18 @@ package body AHC.Typechecker is
          NA : constant Type_Node := M.Node (ZA);
          NB : constant Type_Node := M.Node (ZB);
 
+         --  Two different types that print alike (two modules' Shape,
+         --  M75) are told apart by their modules, as GHC does.
          procedure Mismatch is
+            SA : constant String := Type_Str (ZA);
+            SB : constant String := Type_Str (ZB);
+            Q  : constant Boolean := SA = SB;
          begin
             Bag.Add (Diagnostics.Error, Diagnostics.Type_Mismatch, Span,
-                     "couldn't match type '" & Type_Str (ZA)
-                     & "' with '" & Type_Str (ZB) & "'");
+                     "couldn't match type '"
+                     & (if Q then Type_Str (ZA, True) else SA)
+                     & "' with '"
+                     & (if Q then Type_Str (ZB, True) else SB) & "'");
          end Mismatch;
       begin
          if ZA = ZB then

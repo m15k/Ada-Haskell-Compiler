@@ -412,6 +412,7 @@ package AHC.Syntax is
       Sub_All  : Boolean := False;           --  T(..)
       Subs     : QName_Vectors.Vector;       --  T(a, B)
       Has_Subs : Boolean := False;           --  distinguishes T from T()
+      Span     : Diagnostics.Source_Span;    --  for export/import errors
    end record;
 
    package Entity_Vectors is new Ada.Containers.Vectors (Positive, Entity);

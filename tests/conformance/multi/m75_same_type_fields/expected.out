@@ -1,0 +1,6 @@
+(A 1,A 2,(B {fld = 3},Z),(B {fld = 4},Z))
+Left:A 1Right:B {fld = 5}
+Left-E:[X,Y]Right-E:[X,Y,Z]
+(B {fld = 99},B {fld = 99})
+(LT,True,[X,Y,Z])
+(N 3,N 4)

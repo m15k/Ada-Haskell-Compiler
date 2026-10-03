@@ -160,6 +160,7 @@ package body AHC.Rename is
       --  names keep the Base fallback even under an explicit
       --  Prelude import. Lists and tuples mostly resolve through
       --  dedicated paths; these are the names that reach the maps.
+      Main_Name : constant Names.Real_Name_Id := Table.Intern ("Main");
       Unit_Name : constant Names.Real_Name_Id := Table.Intern ("()");
       Nil_Name  : constant Names.Real_Name_Id := Table.Intern ("[]");
       Cons_Name : constant Names.Real_Name_Id := Table.Intern (":");
@@ -213,6 +214,23 @@ package body AHC.Rename is
       end Check_Qualifier;
 
 
+      --  How a qualifier scopes a type-level or constructor name
+      --  (Report 5.3, 5.5.1): through import names/aliases; the
+      --  implicitly imported Prelude (only its own entities); this
+      --  module's own name (only its own top level); or none.
+      type Qual_Scope is
+        (Unqualified, Through_Import, Implicit_Prelude, This_Module);
+
+      function Qual_Kind (Q : Names.Name_Id) return Qual_Scope is
+        (if Q = Names.No_Name then Unqualified
+         elsif Q = Arena.Module_Name
+           or else (Arena.Module_Name = Names.No_Name
+                    and then Q = Names.Name_Id (Main_Name))
+         then This_Module
+         elsif Q = Names.Name_Id (Prelude_Name)
+           and then not Prelude_Explicit then Implicit_Prelude
+         else Through_Import);
+
       --  Import-aware resolution for type constructors, data
       --  constructors and classes - one shape for all three (M75).
       --  Qualified through an import name or alias: only those
@@ -229,10 +247,14 @@ package body AHC.Rename is
          with function In_Iface
            (I : Modules.Iface; N : Names.Name_Id) return Id;
          with function In_Env (N : Names.Name_Id) return Id;
+         --  A wired placeholder a module may shadow (the builtin
+         --  Rational, Text, ...): an import beats it, no ambiguity.
+         with function Shadowable (X : Id) return Boolean;
          What : String;
       function Mod_Find_G
         (Q : Syntax.QName; Span : Diagnostics.Source_Span;
-         Amb : out Boolean) return Id;
+         Amb : out Boolean) return Id
+        with Post => (if Amb then Mod_Find_G'Result = None);
 
       function Mod_Find_G
         (Q : Syntax.QName; Span : Diagnostics.Source_Span;
@@ -255,33 +277,50 @@ package body AHC.Rename is
          if not Modular then
             return In_Env (Q.Name);
          end if;
-         if Q.Qualifier /= Names.No_Name
-           and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
-                     or else Prelude_Explicit)
-           and then Q.Qualifier /= Arena.Module_Name
-         then
-            for I in 1 .. Imp_Views.Last_Index loop
-               if View_Matches (I, Q.Qualifier) then
-                  Take (In_Iface (Imp_Views (I).Visible, Q.Name));
-               end if;
-            end loop;
-         else
-            Found := In_Iface (Own, Q.Name);
-            if Found /= None then
-               return Found;
-            end if;
-            for V of Imp_Views loop
-               if not V.Qualified then
-                  Take (In_Iface (V.Visible, Q.Name));
-               end if;
-            end loop;
-            if Found = None
-              and then (not Prelude_Explicit
-                        or else Is_Builtin_Syntax (Q.Name))
-            then
+         case Qual_Kind (Q.Qualifier) is
+            when Through_Import =>
+               for I in 1 .. Imp_Views.Last_Index loop
+                  if View_Matches (I, Q.Qualifier) then
+                     Take (In_Iface (Imp_Views (I).Visible, Q.Name));
+                  end if;
+               end loop;
+            when Implicit_Prelude =>
+               --  Prelude.T: only the Prelude, never this module's
+               --  or an import's T (mirrors Lookup_Value).
                Found := In_Iface (Reg.Base, Q.Name);
-            end if;
-         end if;
+            when This_Module =>
+               --  M.T inside M: only M's own declarations.
+               Found := In_Iface (Own, Q.Name);
+            when Unqualified =>
+               --  Own wins over imports and the Prelude: a
+               --  documented over-acceptance (EXCLUSIONS.md).
+               Found := In_Iface (Own, Q.Name);
+               if Found /= None then
+                  return Found;
+               end if;
+               for V of Imp_Views loop
+                  if not V.Qualified then
+                     Take (In_Iface (V.Visible, Q.Name));
+                  end if;
+               end loop;
+               if not Prelude_Explicit
+                 or else Is_Builtin_Syntax (Q.Name)
+               then
+                  declare
+                     B : constant Id := In_Iface (Reg.Base, Q.Name);
+                  begin
+                     --  An import and the implicit Prelude naming two
+                     --  different entities are ambiguous (Report
+                     --  5.5.2) - unless the Prelude's is a wired
+                     --  placeholder the import defines.
+                     if Found = None then
+                        Found := B;
+                     elsif B /= None and then not Shadowable (B) then
+                        Take (B);
+                     end if;
+                  end;
+               end if;
+         end case;
          if Amb then
             Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
                      Span,
@@ -314,72 +353,159 @@ package body AHC.Rename is
       is (if Env.Classes.Contains (N)
           then Core.Class_Id (Env.Classes.Element (N)) else Core.No_Class);
 
-      function Mod_Find_TyCon is new Mod_Find_G
-        (Core.TyCon_Id, Core.No_TyCon, TyCon_In, TyCon_Env, "type");
-      function Mod_Find_DataCon is new Mod_Find_G
-        (Core.DataCon_Id, 0, DataCon_In, DataCon_Env, "constructor");
-      function Mod_Find_Class is new Mod_Find_G
-        (Core.Class_Id, Core.No_Class, Class_In, Class_Env, "class");
-
-      --  The synonym a type-constructor name resolves to, by the same
-      --  scoping as Mod_Find_TyCon: own module, then imports, then
-      --  Base. Found is False when no synonym of that name is in
-      --  scope. The record, not the name, is what Kinds expands
-      --  (M75): two modules may declare the same synonym name.
-      procedure Mod_Find_Syn
-        (Q : Syntax.QName; Found : out Boolean; Ref : out Syn_Ref)
-      is
-         function Imported (S : Builtins.Syn_Rec) return Syn_Ref is
-           ((Is_Own => False, Name => Q.Name, Rec => S));
+      --  A wired PLACEHOLDER: a builtin TyCon with no constructors
+      --  (the abstract Rational, Text, IORef, ...) that a library may
+      --  define or re-export. Wired types with constructors - Maybe,
+      --  Bool, Ordering - are real Prelude types, and an import of a
+      --  different Maybe is ambiguous with them (Report 5.5.2).
+      function TyCon_Wired (X : Core.TyCon_Id) return Boolean
+      is (M.Info (Core.Real_TyCon_Id (X)).Is_Builtin
+          and then M.Info (Core.Real_TyCon_Id (X)).Cons.Is_Empty);
+      function DataCon_Wired (X : Core.DataCon_Id) return Boolean is
+         pragma Unreferenced (X);
       begin
-         Found := True;
+         return False;   --  a constructor's type is never a placeholder
+      end DataCon_Wired;
+      function Class_Wired (X : Core.Class_Id) return Boolean is
+         pragma Unreferenced (X);
+      begin
+         return False;   --  every Prelude class is a source class
+      end Class_Wired;
+
+      function Mod_Find_TyCon is new Mod_Find_G
+        (Core.TyCon_Id, Core.No_TyCon, TyCon_In, TyCon_Env,
+         TyCon_Wired, "type");
+      function Mod_Find_DataCon is new Mod_Find_G
+        (Core.DataCon_Id, 0, DataCon_In, DataCon_Env,
+         DataCon_Wired, "constructor");
+      function Mod_Find_Class is new Mod_Find_G
+        (Core.Class_Id, Core.No_Class, Class_In, Class_Env,
+         Class_Wired, "class");
+
+      --  The synonym a type-constructor name resolves to, scoped
+      --  exactly as Mod_Find_G scopes a TyCon. Found is False when no
+      --  synonym of that name is in scope. The record, not the name,
+      --  is what Kinds expands (M75); its Owner is its identity, so
+      --  two DIFFERENT imported synonyms are ambiguous (reported here,
+      --  Amb set) while one re-exported along two paths is not.
+      procedure Mod_Find_Syn
+        (Q     : Syntax.QName;
+         Span  : Diagnostics.Source_Span;
+         Found : out Boolean;
+         Ref   : out Syn_Ref;
+         Amb   : out Boolean)
+      is
+         procedure Take (Syns : Builtins.Syn_Maps.Map) is
+         begin
+            if not Syns.Contains (Q.Name) then
+               return;
+            end if;
+            declare
+               S : constant Builtins.Syn_Rec := Syns (Q.Name);
+            begin
+               if not Found then
+                  Found := True;
+                  Ref := (Is_Own => False, Name => Q.Name, Rec => S);
+               elsif Ref.Rec.Owner /= S.Owner then
+                  Amb := True;
+               end if;
+            end;
+         end Take;
+      begin
+         Found := False;
+         Amb := False;
          Ref := (Is_Own => True, Name => Q.Name, others => <>);
          if not Modular then
             if Own.Synonyms.Contains (Q.Name) then
-               return;
-            elsif Env.Synonyms.Contains (Q.Name) then
-               Ref := Imported (Env.Synonyms (Q.Name));
-               return;
+               Found := True;
+            else
+               Take (Env.Synonyms);
             end if;
-            Found := False;
             return;
          end if;
-         if Q.Qualifier /= Names.No_Name
-           and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
-                     or else Prelude_Explicit)
-           and then Q.Qualifier /= Arena.Module_Name
-         then
-            for I in 1 .. Imp_Views.Last_Index loop
-               if View_Matches (I, Q.Qualifier)
-                 and then Imp_Views (I).Visible.Synonyms.Contains
-                            (Q.Name)
-               then
-                  Ref := Imported (Imp_Views (I).Visible.Synonyms (Q.Name));
+         case Qual_Kind (Q.Qualifier) is
+            when Through_Import =>
+               for I in 1 .. Imp_Views.Last_Index loop
+                  if View_Matches (I, Q.Qualifier) then
+                     Take (Imp_Views (I).Visible.Synonyms);
+                  end if;
+               end loop;
+            when Implicit_Prelude =>
+               Take (Reg.Base.Synonyms);
+            when This_Module =>
+               Found := Own.Synonyms.Contains (Q.Name);
+               return;
+            when Unqualified =>
+               if Own.Synonyms.Contains (Q.Name) then
+                  Found := True;
                   return;
                end if;
-            end loop;
+               for V of Imp_Views loop
+                  if not V.Qualified then
+                     Take (V.Visible.Synonyms);
+                  end if;
+               end loop;
+               if not Prelude_Explicit then
+                  Take (Reg.Base.Synonyms);
+               end if;
+         end case;
+         if Amb then
             Found := False;
-            return;
+            Bag.Add (Diagnostics.Error, Diagnostics.Rename_Out_Of_Scope,
+                     Span,
+                     "ambiguous type '" & Text (Q.Name)
+                     & "' (imported from several modules)");
          end if;
-         if Own.Synonyms.Contains (Q.Name) then
-            return;
-         end if;
-         for V of Imp_Views loop
-            if not V.Qualified
-              and then V.Visible.Synonyms.Contains (Q.Name)
-            then
-               Ref := Imported (V.Visible.Synonyms (Q.Name));
-               return;
-            end if;
-         end loop;
-         if not Prelude_Explicit
-           and then Reg.Base.Synonyms.Contains (Q.Name)
-         then
-            Ref := Imported (Reg.Base.Synonyms (Q.Name));
-            return;
-         end if;
-         Found := False;
       end Mod_Find_Syn;
+
+      --  A type-level name may be visible as a TyCon AND as a synonym
+      --  (M75). A synonym beats a wired placeholder it shadows (`type
+      --  Rational = Ratio Integer`); otherwise this module's own
+      --  declaration beats an imported one (the documented own-wins
+      --  policy), and two imported entities are ambiguous (Report
+      --  5.5.2). Ambiguity is reported here; Neither is not.
+      type Ty_Choice is (Neither, Take_TyCon, Take_Syn, Ambiguous);
+
+      procedure Resolve_Ty
+        (Q      : Syntax.QName;
+         Span   : Diagnostics.Source_Span;
+         TC     : out Core.TyCon_Id;
+         Syn    : out Syn_Ref;
+         Choice : out Ty_Choice)
+      is
+         Amb_T, Amb_S, SF : Boolean;
+      begin
+         TC := Mod_Find_TyCon (Q, Span, Amb_T);
+         Mod_Find_Syn (Q, Span, SF, Syn, Amb_S);
+         if Amb_T or else Amb_S then
+            Choice := Ambiguous;
+         elsif TC = Core.No_TyCon then
+            Choice := (if SF then Take_Syn else Neither);
+         elsif not SF then
+            Choice := Take_TyCon;
+         elsif M.Info (Core.Real_TyCon_Id (TC)).Is_Builtin then
+            Choice := Take_Syn;
+         else
+            declare
+               TC_Own : constant Boolean :=
+                 Own.TyCons.Contains (Q.Name)
+                 and then Core.TyCon_Id (Own.TyCons.Element (Q.Name))
+                          = TC;
+            begin
+               if Syn.Is_Own and then not TC_Own then
+                  Choice := Take_Syn;
+               elsif TC_Own and then not Syn.Is_Own then
+                  Choice := Take_TyCon;
+               else
+                  Choice := Ambiguous;
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Out_Of_Scope, Span,
+                           "ambiguous type '" & Text (Q.Name)
+                           & "' (imported from several modules)");
+               end if;
+            end;
+         end if;
+      end Resolve_Ty;
 
       function Mint_Local
         (Name : Names.Name_Id; Span : Diagnostics.Source_Span)
@@ -634,35 +760,26 @@ package body AHC.Rename is
                null;   --  implicitly bound; kinds handled in AHC.Kinds
             when Con_T =>
                declare
-                  Amb : Boolean;
-                  TC : constant Core.TyCon_Id :=
-                    Mod_Find_TyCon (N.Con, N.Span, Amb);
-                  Syn_Found : Boolean;
+                  TC : Core.TyCon_Id;
                   Syn : Syn_Ref;
-                  Use_Syn : Boolean;
+                  Choice : Ty_Choice;
                begin
-                  Mod_Find_Syn (N.Con, Syn_Found, Syn);
-                  --  A visible synonym takes precedence over a
-                  --  BUILTIN TyCon it shadows (`type Rational =
-                  --  Ratio Integer` vs the wired placeholder); a
-                  --  user data type still wins over any synonym
-                  --  from another module.
-                  Use_Syn := Syn_Found
-                    and then (TC = Core.No_TyCon
-                              or else M.Info
-                                (Core.Real_TyCon_Id (TC)).Is_Builtin);
-                  if TC /= Core.No_TyCon and then not Use_Syn then
-                     Res.Ty_Res.Replace_Element
-                       (Positive (Id), TC);
-                  elsif Use_Syn then
-                     --  Expanded during conversion, through the
-                     --  record resolved here.
-                     Res.Syn_Res.Include (Positive (Id), Syn);
-                  elsif not Amb then
-                     Bag.Add (Diagnostics.Error,
-                              Diagnostics.Rename_Out_Of_Scope, N.Span,
-                              "type not in scope: " & Text (N.Con.Name));
-                  end if;
+                  Resolve_Ty (N.Con, N.Span, TC, Syn, Choice);
+                  case Choice is
+                     when Take_TyCon =>
+                        Res.Ty_Res.Replace_Element (Positive (Id), TC);
+                     when Take_Syn =>
+                        --  Expanded during conversion, through the
+                        --  record resolved here.
+                        Res.Syn_Res.Include (Positive (Id), Syn);
+                     when Neither =>
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Out_Of_Scope, N.Span,
+                                 "type not in scope: "
+                                 & Text (N.Con.Name));
+                     when Ambiguous =>
+                        null;   --  reported by Resolve_Ty
+                  end case;
                end;
             when App_T =>
                Rename_Type (N.Fun);
@@ -716,7 +833,9 @@ package body AHC.Rename is
                               & "' is defined more than once");
                   end if;
                   Top_Names.Include (Name, V);
-                  Env.Values.Include (Name, V);
+                  if Global_Scope then
+                     Env.Values.Include (Name, V);
+                  end if;
                   Own.Values.Include (Name, V);
                   Set_Pat (Id, (Kind => Var_Res, Var => V));
                end;
@@ -947,16 +1066,37 @@ package body AHC.Rename is
                Rename_Expr (N.Sig_Expr);
                Rename_Type (N.Sig_Type);
             when Rec_Con_E | Rec_Update_E =>
+               --  Each field resolves through scope like any value
+               --  (its qualifier honoured) and must be a selector.
+               --  Construction then matches by name WITHIN its one
+               --  constructor; an update keeps the selectors, which
+               --  identify the fields program-wide (M75).
                Rename_Expr (N.Rec_Base);
-               for F of N.Rec_Fields loop
-                  if not Env.Values.Contains (F.Field.Name) then
-                     Bag.Add (Diagnostics.Error,
-                              Diagnostics.Rename_Field_Error, N.Span,
-                              "unknown field '" & Text (F.Field.Name)
-                              & "'");
+               declare
+                  Sels : Core.Var_Id_Vectors.Vector;
+               begin
+                  for F of N.Rec_Fields loop
+                     declare
+                        R : constant Resolution :=
+                          Lookup_Value (F.Field, N.Span, Quiet => True);
+                     begin
+                        if R.Kind = Var_Res and then M.Info (R.Var).Is_Field
+                        then
+                           Sels.Append (R.Var);
+                        else
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Rename_Field_Error,
+                                    N.Span,
+                                    "unknown field '"
+                                    & Text (F.Field.Name) & "'");
+                        end if;
+                     end;
+                     Rename_Expr (F.Value);
+                  end loop;
+                  if N.Kind = Rec_Update_E then
+                     Res.Field_Res.Include (Positive (Id), Sels);
                   end if;
-                  Rename_Expr (F.Value);
-               end loop;
+               end;
          end case;
       end Rename_Expr;
 
@@ -1000,7 +1140,9 @@ package body AHC.Rename is
                                     & "' is defined more than once");
                         end if;
                         Top_Names.Include (U.Name, V);
-                        Env.Values.Include (U.Name, V);
+                        if Global_Scope then
+                           Env.Values.Include (U.Name, V);
+                        end if;
                         Own.Values.Include (U.Name, V);
                      else
                         V := Mint_Local (U.Name, Span);
@@ -1106,9 +1248,35 @@ package body AHC.Rename is
       --  Pass A: declare module-level entities
       ------------------------------------------------------------------
 
+      --  A derivable class (Report 4.3.3, 10): the Prelude's Eq, Ord,
+      --  Enum, Bounded, Show or Read - Env holds only builtin and
+      --  Prelude classes - or Data.Ix's Ix, by identity.
+      function Stock_Derivable
+        (C : Core.Class_Id; Name : Names.Name_Id) return Boolean
+      is
+         T : constant String := Text (Name);
+      begin
+         if T in "Eq" | "Ord" | "Enum" | "Bounded" | "Show" | "Read" then
+            return Env.Classes.Contains (Name)
+              and then Core.Class_Id (Env.Classes.Element (Name)) = C;
+         elsif T = "Ix" and then Modular then
+            declare
+               MI : constant Natural :=
+                 Modules.Find (Reg.all, Table.Intern ("Data.Ix"));
+            begin
+               return MI /= 0
+                 and then Reg.Mods (MI).Exports.Classes.Contains (Name)
+                 and then Core.Class_Id
+                   (Reg.Mods (MI).Exports.Classes.Element (Name)) = C;
+            end;
+         end if;
+         return False;
+      end Stock_Derivable;
+
       procedure Declare_Data (D : Real_Decl_Id; N : Decl_Node) is
          Is_NT : constant Boolean := N.Kind = Newtype_D;
          TC : Core.Real_TyCon_Id;
+         Type_Fields : Scope_Maps.Map;   --  field -> this type's selector
       begin
          --  Report 4.2.1: one module may not declare a type name
          --  twice. ACROSS modules it is legal and qualified imports
@@ -1130,7 +1298,8 @@ package body AHC.Rename is
          end;
          TC := M.Mint_TyCon
            ((Name => N.D_Name, Arity => Natural (N.D_Vars.Length),
-             Is_Newtype => Is_NT, others => <>));
+             Is_Newtype => Is_NT, Owner => Arena.Module_Name,
+             others => <>));
          if Global_Scope then
             Env.TyCons.Include (N.D_Name, TC);
          end if;
@@ -1160,6 +1329,40 @@ package body AHC.Rename is
                         end loop;
                      end loop;
                end case;
+               --  Field selector globals (schemes come from
+               --  AHC.Kinds; bodies from the desugarer), minted per
+               --  module: constructors of THIS type share one
+               --  selector per field; any other top-level binding of
+               --  the name in this module is a duplicate (Report
+               --  3.15.1), and another module's is unrelated (M75).
+               for FN of Info.Field_Names loop
+                  if Type_Fields.Contains (FN) then
+                     Info.Field_Sels.Append (Type_Fields (FN));
+                  else
+                     declare
+                        Sel : constant Core.Real_Var_Id :=
+                          M.Mint_Var ((Name => FN, Span => CN.Span,
+                                       Is_Global => True,
+                                       Is_Field => True,
+                                       others => <>));
+                     begin
+                        if Top_Names.Contains (FN) then
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Rename_Duplicate,
+                                    CN.Span,
+                                    "'" & Text (FN)
+                                    & "' is defined more than once");
+                        end if;
+                        Top_Names.Include (FN, Sel);
+                        Type_Fields.Include (FN, Sel);
+                        if Global_Scope then
+                           Env.Values.Include (FN, Sel);
+                        end if;
+                        Own.Values.Include (FN, Sel);
+                        Info.Field_Sels.Append (Sel);
+                     end;
+                  end if;
+               end loop;
                if Own.DataCons.Contains (Info.Name) then
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Rename_Duplicate, CN.Span,
@@ -1176,21 +1379,6 @@ package body AHC.Rename is
                   Own.DataCons.Include (Info.Name, DC);
                   Res.Decl_Con.Replace_Element
                     (Positive (N.D_Cons.Element (CI)), Core.DataCon_Id (DC));
-                  --  Field selector globals (schemes come from
-                  --  AHC.Kinds; bodies from the desugarer).
-                  for FN of Info.Field_Names loop
-                     if not Env.Values.Contains (FN) then
-                        declare
-                           Sel : constant Core.Real_Var_Id :=
-                             M.Mint_Var ((Name => FN, Span => CN.Span,
-                                          Is_Global => True,
-                                          others => <>));
-                        begin
-                           Env.Values.Include (FN, Sel);
-                           Own.Values.Include (FN, Sel);
-                        end;
-                     end if;
-                  end loop;
                end;
             end;
          end loop;
@@ -1203,7 +1391,19 @@ package body AHC.Rename is
                C : constant Core.Class_Id :=
                  Mod_Find_Class (DC, N.Span, Amb);
             begin
-               if C /= Core.No_Class then
+               if C /= Core.No_Class
+                 and then not Stock_Derivable (C, DC.Name)
+               then
+                  --  Report 4.3.3: only the standard classes derive.
+                  --  A same-named user class must not reach the
+                  --  deriving machinery, which dispatches on the
+                  --  class's name (M75 review: a user `class Read`
+                  --  crashed it).
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Unsupported, N.Span,
+                           "cannot derive '" & Text (DC.Name)
+                           & "': not a stock derivable class");
+               elsif C /= Core.No_Class then
                   --  Enum/Bounded/Ix derive only for ENUMERATIONS
                   --  here; a non-nullary constructor is a
                   --  compile-time rejection (GHC rejects most of
@@ -1327,7 +1527,17 @@ package body AHC.Rename is
          Own.Classes.Include (N.C_Name, Cl);
          Res.Decl_Class.Replace_Element
            (Positive (D), Core.Class_Id (Cl));
+      end Declare_Class;
 
+      --  A class's superclasses and methods, resolved only after
+      --  every type, synonym and class NAME of the module is declared:
+      --  a method signature or a superclass may name a declaration
+      --  further down the file (M75 review: they were "not in scope",
+      --  or silently bound to a same-named import).
+      procedure Fill_Class (D : Real_Decl_Id; N : Decl_Node) is
+         Cl : constant Core.Real_Class_Id :=
+           Core.Real_Class_Id (Res.Decl_Class.Element (Positive (D)));
+      begin
          --  Superclasses from the context.
          for A of N.C_Context loop
             declare
@@ -1337,14 +1547,20 @@ package body AHC.Rename is
                  and then Arena.Node (AN.Fun).Kind = Con_T
                then
                   declare
+                     FN : constant Type_Node := Arena.Node (AN.Fun);
                      Amb : Boolean;
                      SC : constant Core.Class_Id :=
-                       Mod_Find_Class
-                         (Arena.Node (AN.Fun).Con, N.Span, Amb);
+                       Mod_Find_Class (FN.Con, FN.Span, Amb);
                   begin
                      if SC /= Core.No_Class then
                         M.Classes (Cl).Supers.Append
                           (Core.Real_Class_Id (SC));
+                     elsif not Amb then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Out_Of_Scope,
+                                 FN.Span,
+                                 "class not in scope: "
+                                 & Text (FN.Con.Name));
                      end if;
                   end;
                end if;
@@ -1378,7 +1594,9 @@ package body AHC.Rename is
                         Sel := M.Mint_Var
                           ((Name => Q.Name, Span => CN.Span,
                             Is_Global => True, others => <>));
-                        Env.Values.Include (Q.Name, Sel);
+                        if Global_Scope then
+                           Env.Values.Include (Q.Name, Sel);
+                        end if;
                         Own.Values.Include (Q.Name, Sel);
                         M.Classes (Cl).Methods.Append
                           (Core.Method_Info'
@@ -1410,7 +1628,7 @@ package body AHC.Rename is
                M.Classes (Cl).Super_Sels.Append (Sel);
             end;
          end loop;
-      end Declare_Class;
+      end Fill_Class;
 
       --  Head TyCon of an instance type.
       function Instance_Head
@@ -1632,6 +1850,72 @@ package body AHC.Rename is
                   if Imp.Hiding then
                      View.Visible := Source;
                      for E of Imp.Spec loop
+                        --  Report 5.3.1: T(..) / C(..) hide the
+                        --  constructors and fields / methods too, and
+                        --  T(a, B) the ones listed (M75 review).
+                        if E.Kind = Type_Ent
+                          and then (E.Sub_All or else E.Has_Subs)
+                        then
+                           declare
+                              function Listed
+                                (N : Names.Name_Id) return Boolean is
+                              begin
+                                 if E.Sub_All then
+                                    return True;
+                                 end if;
+                                 for Q of E.Subs loop
+                                    if Q.Name = N then
+                                       return True;
+                                    end if;
+                                 end loop;
+                                 return False;
+                              end Listed;
+
+                              --  Hide N only where it names THIS
+                              --  entity, not a same-named other one.
+                              procedure Hide_Value
+                                (N : Names.Name_Id; V : Core.Var_Id) is
+                              begin
+                                 if Listed (N)
+                                   and then View.Visible.Values.Contains (N)
+                                   and then Core.Var_Id
+                                     (View.Visible.Values.Element (N)) = V
+                                 then
+                                    View.Visible.Values.Exclude (N);
+                                 end if;
+                              end Hide_Value;
+                           begin
+                              if Source.TyCons.Contains (E.Name.Name) then
+                                 for DCI of M.Info
+                                   (Source.TyCons.Element (E.Name.Name)).Cons
+                                 loop
+                                    declare
+                                       DI : constant Core.DataCon_Info :=
+                                         M.Info (DCI);
+                                    begin
+                                       if Listed (DI.Name) then
+                                          View.Visible.DataCons.Exclude
+                                            (DI.Name);
+                                       end if;
+                                       for FI in 1 .. DI.Field_Sels.Last_Index
+                                       loop
+                                          Hide_Value
+                                            (DI.Field_Names (FI),
+                                             Core.Var_Id (DI.Field_Sels.Element (FI)));
+                                       end loop;
+                                    end;
+                                 end loop;
+                              end if;
+                              if Source.Classes.Contains (E.Name.Name) then
+                                 for Mth of M.Info
+                                   (Source.Classes.Element (E.Name.Name))
+                                   .Methods
+                                 loop
+                                    Hide_Value (Mth.Name, Mth.Selector);
+                                 end loop;
+                              end if;
+                           end;
+                        end if;
                         View.Visible.Values.Exclude (E.Name.Name);
                         View.Visible.TyCons.Exclude (E.Name.Name);
                         View.Visible.DataCons.Exclude (E.Name.Name);
@@ -1692,16 +1976,27 @@ package body AHC.Rename is
                                                  Builtins.DataCon_Maps
                                                    .Element (DCC));
                                           end if;
-                                          for FN of DI.Field_Names
+                                          for FI in
+                                            1 .. DI.Field_Sels.Last_Index
                                           loop
                                              declare
+                                                FN : constant Names
+                                                  .Name_Id :=
+                                                    DI.Field_Names (FI);
                                                 FC : constant Builtins
                                                   .Var_Maps.Cursor :=
                                                     Source.Values.Find
                                                       (FN);
                                              begin
+                                                --  This type's own
+                                                --  selector, by
+                                                --  identity (M75).
                                                 if Builtins.Var_Maps
                                                   .Has_Element (FC)
+                                                  and then Builtins
+                                                    .Var_Maps.Element
+                                                      (FC)
+                                                    = DI.Field_Sels (FI)
                                                 then
                                                    View.Visible.Values
                                                      .Include (FN,
@@ -1817,6 +2112,7 @@ package body AHC.Rename is
                         Vars => N.S_Vars,
                         Syntax_Rhs => Syntax.Type_Id (N.S_Rhs),
                         Core_Rhs => Core.No_Type,
+                        Owner => Arena.Module_Name,
                         others => <>);
                   begin
                      Own.Synonyms.Include (N.S_Name, Syn);
@@ -1829,6 +2125,17 @@ package body AHC.Rename is
                when others =>
                   null;
             end case;
+         end;
+      end loop;
+
+      --  Class bodies once every type-level name is declared.
+      for D of Arena.Top_Decls loop
+         declare
+            N : constant Decl_Node := Arena.Node (D);
+         begin
+            if N.Kind = Class_D then
+               Fill_Class (D, N);
+            end if;
          end;
       end loop;
 
@@ -1863,7 +2170,9 @@ package body AHC.Rename is
                               & "' is defined more than once");
                   end if;
                   Top_Names.Include (N.F_Name, V);
-                  Env.Values.Include (N.F_Name, V);
+                  if Global_Scope then
+                     Env.Values.Include (N.F_Name, V);
+                  end if;
                   Own.Values.Include (N.F_Name, V);
                   Res.Decl_Var.Replace_Element
                     (Positive (D), Core.Var_Id (V));
@@ -1986,8 +2295,78 @@ package body AHC.Rename is
             end Export_All;
 
             procedure Export_Listed is
+               Cur_Span : Diagnostics.Source_Span;
+
+               --  Report 5.2: an export list may not name two
+               --  DIFFERENT entities by one unqualified name - reachable
+               --  since two modules may declare the same name (M75).
+               procedure Conflict (N : Names.Name_Id) is
+               begin
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Rename_Duplicate, Cur_Span,
+                           "conflicting exports for '" & Text (N) & "'");
+               end Conflict;
+
+               procedure Exp_Value
+                 (N : Names.Name_Id; X : Core.Real_Var_Id) is
+               begin
+                  if Ent.Exports.Values.Contains (N)
+                    and then Ent.Exports.Values.Element (N) /= X
+                  then
+                     Conflict (N);
+                  end if;
+                  Ent.Exports.Values.Include (N, X);
+               end Exp_Value;
+
+               procedure Exp_TyCon
+                 (N : Names.Name_Id; X : Core.Real_TyCon_Id) is
+               begin
+                  if (Ent.Exports.TyCons.Contains (N)
+                      and then Core."/=" (Ent.Exports.TyCons.Element (N), X))
+                    or else Ent.Exports.Synonyms.Contains (N)
+                  then
+                     Conflict (N);
+                  end if;
+                  Ent.Exports.TyCons.Include (N, X);
+               end Exp_TyCon;
+
+               procedure Exp_DataCon
+                 (N : Names.Name_Id; X : Core.Real_DataCon_Id) is
+               begin
+                  if Ent.Exports.DataCons.Contains (N)
+                    and then Core."/=" (Ent.Exports.DataCons.Element (N), X)
+                  then
+                     Conflict (N);
+                  end if;
+                  Ent.Exports.DataCons.Include (N, X);
+               end Exp_DataCon;
+
+               procedure Exp_Class
+                 (N : Names.Name_Id; X : Core.Real_Class_Id) is
+               begin
+                  if Ent.Exports.Classes.Contains (N)
+                    and then Core."/=" (Ent.Exports.Classes.Element (N), X)
+                  then
+                     Conflict (N);
+                  end if;
+                  Ent.Exports.Classes.Include (N, X);
+               end Exp_Class;
+
+               procedure Exp_Syn
+                 (N : Names.Name_Id; X : Builtins.Syn_Rec) is
+               begin
+                  if (Ent.Exports.Synonyms.Contains (N)
+                      and then Ent.Exports.Synonyms.Element (N).Owner
+                               /= X.Owner)
+                    or else Ent.Exports.TyCons.Contains (N)
+                  then
+                     Conflict (N);
+                  end if;
+                  Ent.Exports.Synonyms.Include (N, X);
+               end Exp_Syn;
             begin
                for E of Arena.Exports loop
+                  Cur_Span := E.Span;
                   case E.Kind is
                      when Module_Ent =>
                         --  Report 5.2: `module M` exports what is in
@@ -2001,14 +2380,14 @@ package body AHC.Rename is
                               procedure MV
                                 (C : Builtins.Var_Maps.Cursor) is
                               begin
-                                 Ent.Exports.Values.Include
+                                 Exp_Value
                                    (Builtins.Var_Maps.Key (C),
                                     Builtins.Var_Maps.Element (C));
                               end MV;
                               procedure MT
                                 (C : Builtins.TyCon_Maps.Cursor) is
                               begin
-                                 Ent.Exports.TyCons.Include
+                                 Exp_TyCon
                                    (Builtins.TyCon_Maps.Key (C),
                                     Builtins.TyCon_Maps.Element
                                       (C));
@@ -2017,7 +2396,7 @@ package body AHC.Rename is
                                 (C : Builtins.DataCon_Maps.Cursor)
                               is
                               begin
-                                 Ent.Exports.DataCons.Include
+                                 Exp_DataCon
                                    (Builtins.DataCon_Maps.Key (C),
                                     Builtins.DataCon_Maps.Element
                                       (C));
@@ -2025,7 +2404,7 @@ package body AHC.Rename is
                               procedure MC
                                 (C : Builtins.Class_Maps.Cursor) is
                               begin
-                                 Ent.Exports.Classes.Include
+                                 Exp_Class
                                    (Builtins.Class_Maps.Key (C),
                                     Builtins.Class_Maps.Element
                                       (C));
@@ -2033,7 +2412,7 @@ package body AHC.Rename is
                               procedure MS
                                 (C : Builtins.Syn_Maps.Cursor) is
                               begin
-                                 Ent.Exports.Synonyms.Include
+                                 Exp_Syn
                                    (Builtins.Syn_Maps.Key (C),
                                     Builtins.Syn_Maps.Element (C));
                               end MS;
@@ -2075,7 +2454,7 @@ package body AHC.Rename is
                               Bag.Add
                                 (Diagnostics.Error,
                                  Diagnostics.Rename_Out_Of_Scope,
-                                 (Start => 1, Stop => 1),
+                                 E.Span,
                                  "'module "
                                  & Text (E.Name.Name)
                                  & "' export: no such unqualified"
@@ -2085,43 +2464,39 @@ package body AHC.Rename is
                      when Var_Ent =>
                         declare
                            R : constant Resolution :=
-                             Lookup_Value (E.Name, (1, 1));
+                             Lookup_Value (E.Name, E.Span);
                         begin
                            if R.Kind = Var_Res then
-                              Ent.Exports.Values.Include
+                              Exp_Value
                                 (E.Name.Name, R.Var);
                            end if;
                         end;
                      when Type_Ent =>
                         declare
-                           Amb_T, Amb_C : Boolean;
-                           TC : constant Core.TyCon_Id :=
-                             Mod_Find_TyCon (E.Name, (1, 1), Amb_T);
-                           Cl : constant Core.Class_Id :=
-                             Mod_Find_Class (E.Name, (1, 1), Amb_C);
-                           Exported_Syn_Found : Boolean;
+                           Amb_C : Boolean := False;
+                           TC : Core.TyCon_Id;
+                           Cl : Core.Class_Id := Core.No_Class;
                            Exported_Syn : Syn_Ref;
+                           Ty_Ch : Ty_Choice;
                         begin
-                           Mod_Find_Syn
-                             (E.Name, Exported_Syn_Found, Exported_Syn);
-                           if Exported_Syn_Found
-                             and then Exported_Syn.Is_Own
+                           --  Exactly as at a use site (M75): a
+                           --  synonym wins over the wired placeholder
+                           --  it shadows, or Data.Ratio would export
+                           --  the abstract Rational, not its `Ratio
+                           --  Integer`; own beats imported; two
+                           --  imported entities are ambiguous.
+                           Resolve_Ty (E.Name, E.Span, TC, Exported_Syn,
+                                       Ty_Ch);
+                           if Ty_Ch = Neither then
+                              Cl := Mod_Find_Class (E.Name, E.Span, Amb_C);
+                           end if;
+                           if Ty_Ch = Take_Syn and then Exported_Syn.Is_Own
                            then
                               Exported_Syn.Rec :=
                                 Own.Synonyms (E.Name.Name);
                            end if;
-                           --  As at a use site: a synonym in scope wins
-                           --  over the BUILTIN placeholder it shadows,
-                           --  or Data.Ratio's `Rational` would export
-                           --  the wired abstract TyCon instead of its
-                           --  `Ratio Integer` (M75).
-                           if TC /= Core.No_TyCon
-                             and then not (Exported_Syn_Found
-                                           and then M.Info
-                                             (Core.Real_TyCon_Id (TC))
-                                               .Is_Builtin)
-                           then
-                              Ent.Exports.TyCons.Include
+                           if Ty_Ch = Take_TyCon then
+                              Exp_TyCon
                                 (E.Name.Name,
                                  Core.Real_TyCon_Id (TC));
                               if E.Sub_All or else E.Has_Subs then
@@ -2135,32 +2510,26 @@ package body AHC.Rename is
                                              (Core.Real_DataCon_Id
                                                 (DCI));
                                     begin
-                                       Ent.Exports.DataCons.Include
+                                       Exp_DataCon
                                          (DI.Name,
                                           Core.Real_DataCon_Id
                                             (DCI));
-                                       for FN of DI.Field_Names loop
-                                          declare
-                                             C : constant Builtins
-                                               .Var_Maps.Cursor :=
-                                                 Own.Values.Find
-                                                   (FN);
-                                          begin
-                                             if Builtins.Var_Maps
-                                               .Has_Element (C)
-                                             then
-                                                Ent.Exports.Values
-                                                  .Include (FN,
-                                                    Builtins.Var_Maps
-                                                      .Element (C));
-                                             end if;
-                                          end;
+                                       --  The type's own field
+                                       --  selectors - not whatever
+                                       --  this module calls by that
+                                       --  name (M75).
+                                       for FI in
+                                         1 .. DI.Field_Sels.Last_Index
+                                       loop
+                                          Exp_Value
+                                            (DI.Field_Names (FI),
+                                             DI.Field_Sels (FI));
                                        end loop;
                                     end;
                                  end loop;
                               end if;
                            elsif Cl /= Core.No_Class then
-                              Ent.Exports.Classes.Include
+                              Exp_Class
                                 (E.Name.Name,
                                  Core.Real_Class_Id (Cl));
                               if E.Sub_All then
@@ -2174,38 +2543,36 @@ package body AHC.Rename is
                                  --  Control.Applicative ((<*>))` was
                                  --  refused because no selector ever
                                  --  reached the iface.
+                                 --  The class's own selectors, by
+                                 --  identity: an unqualified lookup
+                                 --  missed L.C(..)'s methods and could
+                                 --  export an unrelated same-named
+                                 --  value instead (M75).
                                  for Mth of M.Info
                                    (Core.Real_Class_Id (Cl)).Methods
                                  loop
-                                    declare
-                                       R : constant Resolution :=
-                                         Lookup_Value
-                                           ((Qualifier =>
-                                               Names.No_Name,
-                                             Name => Mth.Name),
-                                            (1, 1), Quiet => True);
-                                    begin
-                                       if R.Kind = Var_Res then
-                                          Ent.Exports.Values.Include
-                                            (Mth.Name, R.Var);
-                                       end if;
-                                    end;
+                                    if Core."/=" (Mth.Selector, Core.No_Var)
+                                    then
+                                       Exp_Value
+                                         (Mth.Name,
+                                          Core.Real_Var_Id (Mth.Selector));
+                                    end if;
                                  end loop;
                               end if;
-                           elsif Exported_Syn_Found then
+                           elsif Ty_Ch = Take_Syn then
                               --  A synonym in scope may be RE-exported
                               --  (Report 5.2): System.IO.Error exports
                               --  the Prelude's IOError. The record
                               --  travels, Own first (M75); this
                               --  module's own is cached into it by
                               --  AHC.Kinds after renaming.
-                              Ent.Exports.Synonyms.Include
+                              Exp_Syn
                                 (E.Name.Name, Exported_Syn.Rec);
-                           elsif not (Amb_T or Amb_C) then
+                           elsif Ty_Ch = Neither and then not Amb_C then
                               Bag.Add
                                 (Diagnostics.Error,
                                  Diagnostics.Rename_Out_Of_Scope,
-                                 (Start => 1, Stop => 1),
+                                 E.Span,
                                  "exported type '"
                                  & Text (E.Name.Name)
                                  & "' is not defined");
@@ -2236,6 +2603,7 @@ package body AHC.Rename is
       --  Kinds caches these and publishes the cached records into
       --  the export entry just appended (M75).
       Res.Own_Syns := Own.Synonyms;
+      Res.Own_Values := Own.Values;
    end Resolve_Module;
 
 end AHC.Rename;

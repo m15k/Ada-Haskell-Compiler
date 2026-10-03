@@ -562,24 +562,24 @@ package body AHC.Elaborate is
                                     --  solve Applicative at this
                                     --  instance's head right here.
                                     --  (Applicative is a Prelude
-                                    --  SOURCE class, so it is found
-                                    --  by name, not an Env id.)
+                                    --  SOURCE class: Env holds only
+                                    --  builtin and Prelude entities,
+                                    --  so a user class of that name
+                                    --  can no longer stand in - a
+                                    --  scan of every class by name
+                                    --  let it, M75 review.)
                                     declare
-                                       App_Cl : Class_Id := No_Class;
+                                       App_N : constant Names
+                                         .Real_Name_Id :=
+                                           Table.Intern ("Applicative");
+                                       App_Cl : constant Class_Id :=
+                                         (if Env.Classes.Contains (App_N)
+                                          then Class_Id
+                                            (Env.Classes.Element (App_N))
+                                          else No_Class);
                                        PureF : constant Expr_Id :=
                                          Global_Named ("pure");
                                     begin
-                                       for CI2 in 1 .. M.Last_Class
-                                       loop
-                                          if Table.Text
-                                            (M.Info
-                                               (Real_Class_Id (CI2))
-                                               .Name) = "Applicative"
-                                          then
-                                             App_Cl :=
-                                               Class_Id (CI2);
-                                          end if;
-                                       end loop;
                                        if App_Cl = No_Class
                                          or else PureF = No_Expr
                                        then

@@ -129,11 +129,18 @@ package body AHC.Core.Printer is
    ---------------------------------------------------------------------
 
    function Pretty_Scheme
-     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id)
+     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id;
+      Qualify : Boolean := False)
       return String
    is
       use Ada.Strings.Unbounded;
       Sch : constant Scheme := M.Node (S);
+
+      function TC_Name (TC : Real_TyCon_Id) return String is
+        (if Qualify and then M.Info (TC).Owner /= Names.No_Name
+         then NM (Table, M.Info (TC).Owner) & "."
+              & NM (Table, M.Info (TC).Name)
+         else NM (Table, M.Info (TC).Name));
 
       --  Rename tyvars a, b, .., z, t1, t2, .. by first occurrence.
       Seen  : TyVar_Id_Vectors.Vector;
@@ -169,14 +176,14 @@ package body AHC.Core.Printer is
                if N.Refine /= No_Refinement then
                   declare
                      Inner : constant String :=
-                       NM (Table, M.Info (N.Con).Name)
+                       TC_Name (N.Con)
                        & Refine_Suffix (M, Table, N.Refine);
                   begin
                      return (if Prec > 0 then "(" & Inner & ")"
                              else Inner);
                   end;
                end if;
-               return NM (Table, M.Info (N.Con).Name);
+               return TC_Name (N.Con);
             when TFun_T =>
                declare
                   Inner : constant String :=
@@ -198,7 +205,7 @@ package body AHC.Core.Printer is
                   if M.Node (Head).Kind = TCon_T then
                      declare
                         Name : constant String :=
-                          NM (Table, M.Info (M.Node (Head).Con).Name);
+                          TC_Name (M.Node (Head).Con);
                      begin
                         if Name = "[]"
                           and then Natural (Args.Length) = 1

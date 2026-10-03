@@ -46,6 +46,10 @@ package AHC.Builtins is
       --  Caching failed (e.g. a cyclic synonym): the error is
       --  already reported; expansion yields No_Type silently.
       Bad        : Boolean := False;
+      --  The declaring module (No_Name for wired synonyms): with the
+      --  name, a synonym's identity, so one re-exported along two
+      --  paths is not ambiguous and two different ones are (M75).
+      Owner      : Names.Name_Id := Names.No_Name;
    end record;
 
    package Syn_Maps is new Ada.Containers.Hashed_Maps

@@ -209,6 +209,10 @@ package AHC.Core is
       --  Binder came from a surface pattern binding (Report 4.5.5:
       --  the monomorphism restriction applies to its group).
       From_Pattern_Binding : Boolean := False;
+      --  A record field selector (minted by the renamer beside its
+      --  DataCon's Field_Sels): what a record update's field must
+      --  resolve to (M75).
+      Is_Field  : Boolean := False;
    end record;
 
    type TyVar_Info is record
@@ -223,6 +227,10 @@ package AHC.Core is
       Cons       : DataCon_Id_Vectors.Vector;
       Is_Newtype : Boolean := False;
       Is_Builtin : Boolean := False;
+      --  The declaring module (No_Name for builtins and a headerless
+      --  Main): diagnostics qualify by it when two same-named types
+      --  meet in one message (M75).
+      Owner      : Names.Name_Id := Names.No_Name;
    end record;
 
    type DataCon_Info is record
@@ -231,6 +239,10 @@ package AHC.Core is
       Tag         : Positive := 1;         --  1-based within the TyCon
       Arity       : Natural := 0;
       Field_Names : Name_Id_Vectors.Vector;  --  empty if positional
+      --  The selector variable of each field, parallel to
+      --  Field_Names. A field is identified by its selector, never by
+      --  its name: two modules may declare the same field name (M75).
+      Field_Sels  : Var_Id_Vectors.Vector;
       Stricts     : Boolean_Vectors.Vector;
       Con_Scheme  : Scheme_Id := No_Scheme;
    end record;

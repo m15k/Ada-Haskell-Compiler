@@ -25,9 +25,12 @@ package AHC.Core.Printer is
    --  Human-readable Haskell form for `ahc check`:
    --  "(Eq a, Num b) => [a] -> b -> Bool" - tyvars renamed a, b, c...
    --  in order of first occurrence, lists/tuples/arrows in standard
-   --  notation, forall-free.
+   --  notation, forall-free. Qualify prefixes each user TyCon with
+   --  its declaring module (L.Shape), for messages where two
+   --  same-named types would otherwise read identically.
    function Pretty_Scheme
-     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id)
+     (M : Core_Module; Table : Names.Name_Table; S : Real_Scheme_Id;
+      Qualify : Boolean := False)
       return String
      with Pre => S <= M.Last_Scheme;
 

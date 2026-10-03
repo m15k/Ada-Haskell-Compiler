@@ -1,0 +1,1 @@
+Main.hs:7:15: error: couldn't match type 'Left.Shape' with 'Right.Shape'

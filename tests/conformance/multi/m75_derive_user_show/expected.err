@@ -1,0 +1,1 @@
+Main.hs:5:1: error: cannot derive 'Show': not a stock derivable class

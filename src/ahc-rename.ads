@@ -72,6 +72,12 @@ package AHC.Rename is
    package Syn_Res_Maps is new Ada.Containers.Ordered_Maps
      (Positive, Syn_Ref);
 
+   --  Rec_Update_E -> the selector each assigned field resolved to,
+   --  in Rec_Fields order (M75: fields are found through scope, by
+   --  identity, never by name across the program).
+   package Field_Res_Maps is new Ada.Containers.Ordered_Maps
+     (Positive, Core.Var_Id_Vectors.Vector, "=" => Core.Var_Id_Vectors."=");
+
    function Var_Hash (V : Core.Real_Var_Id) return Ada.Containers.Hash_Type
    is (Ada.Containers.Hash_Type (V));
 
@@ -119,7 +125,9 @@ package AHC.Rename is
       Decl_TyCon : TyCon_Res_Vectors.Vector;   --  Data_D/Newtype_D
       Decl_Con   : DataCon_Res_Vectors.Vector; --  Con_Node id
       Syn_Res    : Syn_Res_Maps.Map;          --  Con_T -> synonym
+      Field_Res  : Field_Res_Maps.Map;        --  Rec_Update_E fields
       Own_Syns   : Builtins.Syn_Maps.Map;     --  this module's, uncached
+      Own_Values : Builtins.Var_Maps.Map;     --  this module's top level
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type
    end record;
 
@@ -136,6 +144,14 @@ package AHC.Rename is
       Res   : in out Resolutions;
       Reg   : access Modules.Registry := null;
       Fixities : Fixity.Fixity_Maps.Map :=
-        Fixity.Fixity_Maps.Empty_Map);
+        Fixity.Fixity_Maps.Empty_Map)
+     --  Every synonym occurrence resolves either to this module's own
+     --  declaration, or to a record already CACHED in Core (or marked
+     --  Bad): an imported Syntax_Rhs indexes another module's arena,
+     --  and expanding it here would read the wrong nodes (M75).
+     with Post =>
+       (for all R of Res.Syn_Res =>
+          (if R.Is_Own then Res.Own_Syns.Contains (R.Name)
+           else R.Rec.Bad or else Core."/=" (R.Rec.Core_Rhs, Core.No_Type)));
 
 end AHC.Rename;
