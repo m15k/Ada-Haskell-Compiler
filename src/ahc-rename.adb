@@ -1142,6 +1142,7 @@ package body AHC.Rename is
              Is_Newtype => Is_NT, others => <>));
          Env.TyCons.Include (N.D_Name, TC);
          Own.TyCons.Include (N.D_Name, TC);
+         Res.Decl_TyCon.Replace_Element (Positive (D), Core.TyCon_Id (TC));
 
          for CI in 1 .. N.D_Cons.Last_Index loop
             declare
@@ -1178,6 +1179,8 @@ package body AHC.Rename is
                begin
                   Env.DataCons.Include (Info.Name, DC);
                   Own.DataCons.Include (Info.Name, DC);
+                  Res.Decl_Con.Replace_Element
+                    (Positive (N.D_Cons.Element (CI)), Core.DataCon_Id (DC));
                   --  Field selector globals (schemes come from
                   --  AHC.Kinds; bodies from the desugarer).
                   for FN of Info.Field_Names loop
@@ -1298,7 +1301,6 @@ package body AHC.Rename is
             end;
             <<Next_Derive>>
          end loop;
-         pragma Unreferenced (D);
       end Declare_Data;
 
       procedure Declare_Class (D : Real_Decl_Id; N : Decl_Node) is
@@ -1599,7 +1601,11 @@ package body AHC.Rename is
       end loop;
       for I in 1 .. Natural (Arena.Last_Decl) loop
          Res.Decl_Var.Append (Core.No_Var);
+         Res.Decl_TyCon.Append (Core.No_TyCon);
          Res.Decl_Class.Append (Core.No_Class);
+      end loop;
+      for I in 1 .. Natural (Arena.Last_Con) loop
+         Res.Decl_Con.Append (0);
       end loop;
 
       Push_Scope;   --  a scratch scope so Scopes is never empty

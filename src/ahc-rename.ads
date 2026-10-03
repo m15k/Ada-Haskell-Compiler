@@ -54,6 +54,8 @@ package AHC.Rename is
      (Positive, Core.Class_Id, Core."=");
    package Var_Res_Vectors is new Ada.Containers.Vectors
      (Positive, Core.Var_Id, Core."=");
+   package DataCon_Res_Vectors is new Ada.Containers.Vectors
+     (Positive, Core.DataCon_Id, Core."=");
 
    function Var_Hash (V : Core.Real_Var_Id) return Ada.Containers.Hash_Type
    is (Ada.Containers.Hash_Type (V));
@@ -95,6 +97,12 @@ package AHC.Rename is
       Class_Res : Class_Res_Vectors.Vector;   --  Con_T in class position
       Decl_Var  : Var_Res_Vectors.Vector;     --  Fun_D/Pat_D -> binder
       Decl_Class : Class_Res_Vectors.Vector;  --  Class_D/Instance_D
+      --  Declaration -> entity. Later phases must NEVER re-find an
+      --  entity by name: two modules may declare the same type or
+      --  constructor, and only the renamer knows which one a given
+      --  declaration minted (M75).
+      Decl_TyCon : TyCon_Res_Vectors.Vector;   --  Data_D/Newtype_D
+      Decl_Con   : DataCon_Res_Vectors.Vector; --  Con_Node id
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type
    end record;
 

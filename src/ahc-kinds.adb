@@ -894,9 +894,9 @@ package body AHC.Kinds is
       --  recursive regardless of order, so every tycon must carry a
       --  kind before ANY constructor field is converted - a field of
       --  the first declaration may name the last one.
-      procedure Pre_Data (N : Decl_Node) is
+      procedure Pre_Data (D : Real_Decl_Id; N : Decl_Node) is
          TC : constant Core.Real_TyCon_Id :=
-           Builtins.TyCon_Maps.Element (Env.TyCons.Find (N.D_Name));
+           Core.Real_TyCon_Id (Res.Decl_TyCon.Element (Positive (D)));
          K : Core.Real_Kind_Id := Star_K;
          Metas : array (1 .. Natural (N.D_Vars.Length)) of
            Core.Real_Kind_Id;
@@ -916,9 +916,9 @@ package body AHC.Kinds is
       --  fields, build Con_Schemes and field selectors. The tycon's
       --  kind is already in place (Pre_Data); its argument metas are
       --  read back off the spine so the tyvars share them.
-      procedure Do_Data (N : Decl_Node) is
+      procedure Do_Data (D : Real_Decl_Id; N : Decl_Node) is
          TC : constant Core.Real_TyCon_Id :=
-           Builtins.TyCon_Maps.Element (Env.TyCons.Find (N.D_Name));
+           Core.Real_TyCon_Id (Res.Decl_TyCon.Element (Positive (D)));
          TvEnv : Tv_Maps.Map;
          Tvs   : TyVar_Vectors.Vector;
          Result_T : Core.Type_Id;
@@ -974,8 +974,7 @@ package body AHC.Kinds is
             declare
                CN : constant Con_Node := Arena.Node (CI);
                DC : constant Core.Real_DataCon_Id :=
-                 Builtins.DataCon_Maps.Element
-                   (Env.DataCons.Find (CN.Name.Name));
+                 Core.Real_DataCon_Id (Res.Decl_Con.Element (Positive (CI)));
                Field_Types : Core.Type_Id_Vectors.Vector;
 
                procedure Add_Field (T : Real_Type_Id) is
@@ -1222,7 +1221,7 @@ package body AHC.Kinds is
             N : constant Decl_Node := Arena.Node (D);
          begin
             if N.Kind in Data_D | Newtype_D then
-               Pre_Data (N);
+               Pre_Data (D, N);
             end if;
          end;
       end loop;
@@ -1233,7 +1232,7 @@ package body AHC.Kinds is
             N : constant Decl_Node := Arena.Node (D);
          begin
             if N.Kind in Data_D | Newtype_D then
-               Do_Data (N);
+               Do_Data (D, N);
             end if;
          end;
       end loop;

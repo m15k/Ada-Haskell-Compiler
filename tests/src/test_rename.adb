@@ -25,8 +25,11 @@ package body Test_Rename is
    --  vars render "name:k" where k is the serial of that var's first
    --  occurrence in the dump, so alpha-identity is visible without
    --  depending on absolute ids. Constructors render "Name!".
-   --  "!errors:N" appended on errors.
-   function R (S : String) return String is
+   --  "!errors:N" appended on errors. With Decls, the
+   --  declaration->entity tables follow as T[...]: each data
+   --  declaration's TyCon, then "Con>TyCon" for each constructor it
+   --  minted, read back through the entity's own Info (M75).
+   function R (S : String; Decls : Boolean := False) return String is
       use Ada.Strings.Unbounded;
       use AHC.Rename;
 
@@ -128,6 +131,40 @@ package body Test_Rename is
          end;
       end loop;
       Append (Out_Buf, "]");
+
+      if Decls then
+         Append (Out_Buf, " T[");
+         for I in 1 .. Res.Decl_TyCon.Last_Index loop
+            declare
+               use type AHC.Core.TyCon_Id;
+               TC : constant AHC.Core.TyCon_Id := Res.Decl_TyCon (I);
+            begin
+               if TC /= AHC.Core.No_TyCon then
+                  Append (Out_Buf, " " & Table.Text
+                    (M.Info (AHC.Core.Real_TyCon_Id (TC)).Name));
+               end if;
+            end;
+         end loop;
+         for I in 1 .. Res.Decl_Con.Last_Index loop
+            declare
+               use type AHC.Core.DataCon_Id;
+               DC : constant AHC.Core.DataCon_Id := Res.Decl_Con (I);
+            begin
+               if DC /= 0 then
+                  declare
+                     Info : constant AHC.Core.DataCon_Info :=
+                       M.Info (AHC.Core.Real_DataCon_Id (DC));
+                  begin
+                     Append (Out_Buf, " " & Table.Text (Info.Name)
+                       & ">" & Table.Text
+                         (M.Info (AHC.Core.Real_TyCon_Id
+                            (Info.TyCon)).Name));
+                  end;
+               end if;
+            end;
+         end loop;
+         Append (Out_Buf, "]");
+      end if;
 
       if Bag.Has_Errors then
          Append (Out_Buf, "!errors:" & Bag.Error_Count'Image);
@@ -238,6 +275,14 @@ package body Test_Rename is
         (R ("f = M.x"),
          "D[] P[ f:1] E[ ?]!errors: 1",
          "unknown module qualifier");
+
+      --  M75: the renamer records which entity each declaration
+      --  minted, so Kinds never has to look one up by name.
+      Check_Equal
+        (R ("data T = C Int | E" & ASCII.LF & "newtype U = D Bool",
+            Decls => True),
+         "D[] P[] E[] T[ T U C>T E>T D>U]",
+         "each data declaration records its own TyCon and DataCons");
    end Run;
 
 end Test_Rename;
