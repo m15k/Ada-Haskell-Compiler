@@ -1550,6 +1550,7 @@ package body AHC.Prelude_Core is
          BP ("primHOpen", "ahc_prim_h_open");
          BP ("primHClose", "ahc_prim_h_close");
          BP ("primHPutStr", "ahc_prim_h_put_str");
+         BP ("primTraceStr", "ahc_prim_trace_str");
          BP ("primHGetLine", "ahc_prim_h_get_line");
          BP ("primHGetChar", "ahc_prim_h_get_char");
          BP ("primHGetContents", "ahc_prim_h_get_contents");

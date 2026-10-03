@@ -5909,6 +5909,14 @@ static AhcNode *io_h_put_str(AhcNode **env, AhcNode *w) {
   put_list(env[1], f);
   return ahc_mk_con(UNIT_TAG, 0);
 }
+/* Debug.Trace (M142): print a String and a newline to stderr when
+   forced; pure - the trace happens at evaluation, as GHC's does. */
+static AhcNode *p_trace_str(AhcNode *s) {
+  put_list(s, stderr);
+  fputc('\n', stderr);
+  fflush(stderr);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
 static AhcNode *p_h_put_str(AhcNode *h, AhcNode *s) {
   AhcNode **e = ahc_env(2);
   e[0] = h; e[1] = s;
@@ -6630,6 +6638,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_popcount,
   *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
   *ahc_prim_h_open, *ahc_prim_h_close, *ahc_prim_h_put_str,
+  *ahc_prim_trace_str,
   *ahc_prim_h_get_line, *ahc_prim_h_get_char,
   *ahc_prim_h_get_contents, *ahc_prim_h_is_eof, *ahc_prim_h_flush,
   *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
@@ -6814,6 +6823,7 @@ void ahc_rts_init(void) {
   ahc_prim_h_open = mk_prim2(p_h_open);
   ahc_prim_h_close = mk_prim1(p_h_close);
   ahc_prim_h_put_str = mk_prim2(p_h_put_str);
+  ahc_prim_trace_str = mk_prim1(p_trace_str);
   ahc_prim_h_get_line = mk_prim1(p_h_get_line);
   ahc_prim_h_get_char = mk_prim1(p_h_get_char);
   ahc_prim_h_get_contents = mk_prim1(p_h_get_contents);

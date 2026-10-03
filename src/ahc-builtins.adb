@@ -1177,6 +1177,11 @@ package body AHC.Builtins is
               ("primHPutStr",
                Mono (FN (TC (Env.Int_TC), String_T2,
                          IO_T (TC (Env.Unit_TC)))));
+            --  Debug.Trace (M142): forcing the result writes the
+            --  string and a newline to C stderr, unbuffered - pure,
+            --  like GHC's trace.
+            Ignore := Def_Global
+              ("primTraceStr", Mono (FN (String_T2, TC (Env.Unit_TC))));
             Ignore := Def_Global
               ("primHGetLine",
                Mono (FN (TC (Env.Int_TC), IO_T (String_T2))));

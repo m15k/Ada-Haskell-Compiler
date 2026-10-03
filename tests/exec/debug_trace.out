@@ -1,0 +1,14 @@
+start
+fact 4
+fact 3
+fact 2
+fact 1
+24
+x = 24
+in IO
+[1,2,3]
+traceIO
+returned
+returned
+42
+True
