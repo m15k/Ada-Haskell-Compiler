@@ -22,9 +22,26 @@ package body AHC.Kinds is
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Sig_Maps.Map;
       Annos : in out Anno_Maps.Map;
-      Preds : in out Pred_Vectors.Vector)
+      Preds : in out Pred_Vectors.Vector;
+      Reg   : access Modules.Registry := null)
    is
       Star_K : constant Core.Real_Kind_Id := M.Star;
+
+      --  This module's own synonyms, cached in place by Do_Synonym.
+      --  Every other synonym arrives as a cached record on its
+      --  resolution (Res.Syn_Res); none is found by name (M75).
+      Own_Syns : Builtins.Syn_Maps.Map := Res.Own_Syns;
+
+      --  The synonym a Con_T occurrence resolved to, if any.
+      function Syn_At (T : Syntax.Real_Type_Id) return Boolean is
+        (Res.Syn_Res.Contains (Positive (T)));
+
+      function Syn_Of (T : Syntax.Real_Type_Id) return Builtins.Syn_Rec
+      is
+         R : constant Rename.Syn_Ref := Res.Syn_Res (Positive (T));
+      begin
+         return (if R.Is_Own then Own_Syns (R.Name) else R.Rec);
+      end Syn_Of;
 
       ------------------------------------------------------------------
       --  Kind metas (pass-local union-find cells)
@@ -281,6 +298,7 @@ package body AHC.Kinds is
       --  Expand synonym Name applied to Args (already converted).
       procedure Expand_Synonym
         (Name  : Names.Name_Id;
+         Syn   : Builtins.Syn_Rec;
          Args  : Core.Type_Id_Vectors.Vector;
          Kinds : Core.Kind_Id;   --  unused marker
          Span  : Diagnostics.Source_Span;
@@ -289,7 +307,6 @@ package body AHC.Kinds is
          Out_Kind : out Core.Kind_Id)
       is
          pragma Unreferenced (Kinds);
-         Syn : constant Builtins.Syn_Rec := Env.Synonyms (Name);
       begin
          Result := Core.No_Type;
          Out_Kind := Core.Kind_Id (Star_K);
@@ -430,9 +447,10 @@ package body AHC.Kinds is
                end;
 
             when Con_T =>
-               if Env.Synonyms.Contains (N.Con.Name) then
+               if Syn_At (T) then
                   Expand_Synonym
-                    (N.Con.Name, Core.Type_Id_Vectors.Empty_Vector,
+                    (N.Con.Name, Syn_Of (T),
+                     Core.Type_Id_Vectors.Empty_Vector,
                      Core.No_Kind, N.Span, Depth, Result, Kind);
                else
                   declare
@@ -463,8 +481,7 @@ package body AHC.Kinds is
                      Head := Arena.Node (Head).Fun;
                   end loop;
                   if Arena.Node (Head).Kind = Con_T
-                    and then Env.Synonyms.Contains
-                               (Arena.Node (Head).Con.Name)
+                    and then Syn_At (Head)
                   then
                      declare
                         Args : Core.Type_Id_Vectors.Vector;
@@ -478,7 +495,8 @@ package body AHC.Kinds is
                            Args.Append (Core.Real_Type_Id (R));
                         end loop;
                         Expand_Synonym
-                          (Arena.Node (Head).Con.Name, Args,
+                          (Arena.Node (Head).Con.Name, Syn_Of (Head),
+                           Args,
                            Core.No_Kind, N.Span, Depth, Result, Kind);
                         return;
                      end;
@@ -1176,7 +1194,7 @@ package body AHC.Kinds is
       --  point: importing modules cannot read it (Syntax_Rhs ids
       --  are private to the defining module's arena).
       procedure Do_Synonym (N : Decl_Node) is
-         Syn   : Builtins.Syn_Rec := Env.Synonyms (N.S_Name);
+         Syn   : Builtins.Syn_Rec := Own_Syns (N.S_Name);
          TvEnv : Tv_Maps.Map;
          Order : TyVar_Vectors.Vector;
          R     : Core.Type_Id;
@@ -1206,6 +1224,7 @@ package body AHC.Kinds is
                   Result => R, Kind => K);
          Syn.Core_Rhs := R;
          Syn.Bad := Core."=" (R, Core.No_Type);
+         Own_Syns.Include (N.S_Name, Syn);
          Env.Synonyms.Include (N.S_Name, Syn);
       end Do_Synonym;
 
@@ -1250,6 +1269,28 @@ package body AHC.Kinds is
             end if;
          end;
       end loop;
+
+      --  Publish the cached records into this module's export entry
+      --  (the renamer appended it with the uncached ones), so an
+      --  importer expands from Core_Rhs and never reads this arena.
+      --  The entry's synonyms resolved Own-first, so a name this
+      --  module declares is always its own record there.
+      if Reg /= null and then not Reg.Mods.Is_Empty then
+         declare
+            Exports : Builtins.Syn_Maps.Map renames
+              Reg.Mods.Reference (Reg.Mods.Last_Index).Exports.Synonyms;
+            C : Builtins.Syn_Maps.Cursor := Own_Syns.First;
+         begin
+            while Builtins.Syn_Maps.Has_Element (C) loop
+               if Exports.Contains (Builtins.Syn_Maps.Key (C)) then
+                  Exports.Replace
+                    (Builtins.Syn_Maps.Key (C),
+                     Builtins.Syn_Maps.Element (C));
+               end if;
+               Builtins.Syn_Maps.Next (C);
+            end loop;
+         end;
+      end if;
 
       for D of Arena.Top_Decls loop
          declare

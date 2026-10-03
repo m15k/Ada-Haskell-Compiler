@@ -22,9 +22,11 @@ package AHC.Modules is
       TyCons   : Builtins.TyCon_Maps.Map;
       DataCons : Builtins.DataCon_Maps.Map;
       Classes  : Builtins.Class_Maps.Map;
-      --  Synonyms expand by name from the flat environment; the
-      --  iface records which names are visible.
-      Synonyms : Fixity.Fixity_Maps.Map;   --  used as a name set
+      --  The synonym TABLE, not a name set (M75): expansion follows
+      --  the module the name resolved in, because two modules may
+      --  declare the same synonym name. An exporting module's own
+      --  records are cached (Core_Rhs) by AHC.Kinds after renaming.
+      Synonyms : Builtins.Syn_Maps.Map;
       Fixities : Fixity.Fixity_Maps.Map;
    end record;
 

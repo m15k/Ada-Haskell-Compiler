@@ -21,6 +21,7 @@
 --  special method case.
 
 with Ada.Containers.Hashed_Maps;
+with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Vectors;
 
 with AHC.Builtins;
@@ -56,6 +57,20 @@ package AHC.Rename is
      (Positive, Core.Var_Id, Core."=");
    package DataCon_Res_Vectors is new Ada.Containers.Vectors
      (Positive, Core.DataCon_Id, Core."=");
+
+   --  A Con_T occurrence that resolved to a type synonym (M75):
+   --  either one this module declares - Kinds expands it from its
+   --  own table, which it caches as it goes - or an imported or
+   --  Prelude one, whose already-cached record travels with the
+   --  resolution. Kinds never looks a synonym up by name.
+   type Syn_Ref is record
+      Is_Own : Boolean := False;
+      Name   : Names.Name_Id := Names.No_Name;
+      Rec    : Builtins.Syn_Rec;   --  meaningful when not Is_Own
+   end record;
+
+   package Syn_Res_Maps is new Ada.Containers.Ordered_Maps
+     (Positive, Syn_Ref);
 
    function Var_Hash (V : Core.Real_Var_Id) return Ada.Containers.Hash_Type
    is (Ada.Containers.Hash_Type (V));
@@ -103,6 +118,8 @@ package AHC.Rename is
       --  declaration minted (M75).
       Decl_TyCon : TyCon_Res_Vectors.Vector;   --  Data_D/Newtype_D
       Decl_Con   : DataCon_Res_Vectors.Vector; --  Con_Node id
+      Syn_Res    : Syn_Res_Maps.Map;          --  Con_T -> synonym
+      Own_Syns   : Builtins.Syn_Maps.Map;     --  this module's, uncached
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type
    end record;
 

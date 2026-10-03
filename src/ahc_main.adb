@@ -489,17 +489,7 @@ procedure AHC_Main is
          Reg.Base.TyCons := Env.TyCons;
          Reg.Base.DataCons := Env.DataCons;
          Reg.Base.Classes := Env.Classes;
-         Reg.Base.Synonyms.Clear;
-         declare
-            C : AHC.Builtins.Syn_Maps.Cursor := Env.Synonyms.First;
-         begin
-            while AHC.Builtins.Syn_Maps.Has_Element (C) loop
-               Reg.Base.Synonyms.Include
-                 (AHC.Builtins.Syn_Maps.Key (C),
-                  AHC.Fixity.Fixity_Info'(others => <>));
-               AHC.Builtins.Syn_Maps.Next (C);
-            end loop;
-         end;
+         Reg.Base.Synonyms := Env.Synonyms;
       end Snapshot_Base;
    begin
       if not Deps_Ok then
@@ -687,7 +677,7 @@ procedure AHC_Main is
                if not Bag.Has_Errors then
                   AHC.Kinds.Check_Module
                     (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
-                     L_Annos, L_Preds);
+                     L_Annos, L_Preds, Reg'Unchecked_Access);
                end if;
                if not Bag.Has_Errors then
                   AHC.Desugar.Desugar_Module

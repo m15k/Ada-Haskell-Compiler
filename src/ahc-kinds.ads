@@ -19,6 +19,7 @@ with Ada.Containers.Vectors;
 with AHC.Builtins;
 with AHC.Core;
 with AHC.Diagnostics;
+with AHC.Modules;
 with AHC.Names;
 with AHC.Rename;
 with AHC.Syntax;
@@ -63,6 +64,11 @@ package AHC.Kinds is
       Env   : in out Builtins.Global_Env;
       Sigs  : in out Sig_Maps.Map;
       Annos : in out Anno_Maps.Map;
-      Preds : in out Pred_Vectors.Vector);
+      Preds : in out Pred_Vectors.Vector;
+      --  The module registry, when renaming appended this module's
+      --  export entry to it: the synonym records cached here are
+      --  published into that entry, so importers expand from Core
+      --  and never from this module's arena (M75).
+      Reg   : access Modules.Registry := null);
 
 end AHC.Kinds;

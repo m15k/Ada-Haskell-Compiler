@@ -358,11 +358,28 @@ package body AHC.Rename is
          end;
       end Mod_Find_Class;
 
-      function Mod_Syn_Visible
-        (Q : Syntax.QName) return Boolean is
+      --  The synonym a type-constructor name resolves to, by the same
+      --  scoping as Mod_Find_TyCon: own module, then imports, then
+      --  Base. Found is False when no synonym of that name is in
+      --  scope. The record, not the name, is what Kinds expands
+      --  (M75): two modules may declare the same synonym name.
+      procedure Mod_Find_Syn
+        (Q : Syntax.QName; Found : out Boolean; Ref : out Syn_Ref)
+      is
+         function Imported (S : Builtins.Syn_Rec) return Syn_Ref is
+           ((Is_Own => False, Name => Q.Name, Rec => S));
       begin
+         Found := True;
+         Ref := (Is_Own => True, Name => Q.Name, others => <>);
          if not Modular then
-            return Env.Synonyms.Contains (Q.Name);
+            if Own.Synonyms.Contains (Q.Name) then
+               return;
+            elsif Env.Synonyms.Contains (Q.Name) then
+               Ref := Imported (Env.Synonyms (Q.Name));
+               return;
+            end if;
+            Found := False;
+            return;
          end if;
          if Q.Qualifier /= Names.No_Name
            and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
@@ -374,26 +391,32 @@ package body AHC.Rename is
                  and then Imp_Views (I).Visible.Synonyms.Contains
                             (Q.Name)
                then
-                  return True;
+                  Ref := Imported (Imp_Views (I).Visible.Synonyms (Q.Name));
+                  return;
                end if;
             end loop;
-            return False;
+            Found := False;
+            return;
          end if;
-         if Own.Synonyms.Contains (Q.Name)
-           or else (not Prelude_Explicit
-                    and then Reg.Base.Synonyms.Contains (Q.Name))
-         then
-            return True;
+         if Own.Synonyms.Contains (Q.Name) then
+            return;
          end if;
          for V of Imp_Views loop
             if not V.Qualified
               and then V.Visible.Synonyms.Contains (Q.Name)
             then
-               return True;
+               Ref := Imported (V.Visible.Synonyms (Q.Name));
+               return;
             end if;
          end loop;
-         return False;
-      end Mod_Syn_Visible;
+         if not Prelude_Explicit
+           and then Reg.Base.Synonyms.Contains (Q.Name)
+         then
+            Ref := Imported (Reg.Base.Synonyms (Q.Name));
+            return;
+         end if;
+         Found := False;
+      end Mod_Find_Syn;
 
       function Mint_Local
         (Name : Names.Name_Id; Span : Diagnostics.Source_Span)
@@ -645,22 +668,27 @@ package body AHC.Rename is
                declare
                   TC : constant Core.TyCon_Id :=
                     Mod_Find_TyCon (N.Con);
+                  Syn_Found : Boolean;
+                  Syn : Syn_Ref;
+                  Use_Syn : Boolean;
+               begin
+                  Mod_Find_Syn (N.Con, Syn_Found, Syn);
                   --  A visible synonym takes precedence over a
                   --  BUILTIN TyCon it shadows (`type Rational =
                   --  Ratio Integer` vs the wired placeholder); a
                   --  user data type still wins over any synonym
                   --  from another module.
-                  Use_Syn : constant Boolean :=
-                    Mod_Syn_Visible (N.Con)
+                  Use_Syn := Syn_Found
                     and then (TC = Core.No_TyCon
                               or else M.Info
                                 (Core.Real_TyCon_Id (TC)).Is_Builtin);
-               begin
                   if TC /= Core.No_TyCon and then not Use_Syn then
                      Res.Ty_Res.Replace_Element
                        (Positive (Id), TC);
                   elsif Use_Syn then
-                     null;   --  expanded during conversion, by name
+                     --  Expanded during conversion, through the
+                     --  record resolved here.
+                     Res.Syn_Res.Include (Positive (Id), Syn);
                   else
                      Bag.Add (Diagnostics.Error,
                               Diagnostics.Rename_Out_Of_Scope, N.Span,
@@ -1749,7 +1777,7 @@ package body AHC.Rename is
                         then
                            View.Visible.Synonyms.Include
                              (E.Name.Name,
-                              Fixity.Fixity_Info'(others => <>));
+                              Source.Synonyms (E.Name.Name));
                            Hit := True;
                         end if;
                         if not Hit then
@@ -1815,15 +1843,17 @@ package body AHC.Rename is
                                  & "' is defined more than once");
                      end if;
                   end;
-                  Own.Synonyms.Include
-                    (N.S_Name, Fixity.Fixity_Info'(others => <>));
-                  Env.Synonyms.Include
-                    (N.S_Name,
-                     (Arity => Natural (N.S_Vars.Length),
-                      Vars => N.S_Vars,
-                      Syntax_Rhs => Syntax.Type_Id (N.S_Rhs),
-                      Core_Rhs => Core.No_Type,
-                      others => <>));
+                  declare
+                     Syn : constant Builtins.Syn_Rec :=
+                       (Arity => Natural (N.S_Vars.Length),
+                        Vars => N.S_Vars,
+                        Syntax_Rhs => Syntax.Type_Id (N.S_Rhs),
+                        Core_Rhs => Core.No_Type,
+                        others => <>);
+                  begin
+                     Own.Synonyms.Include (N.S_Name, Syn);
+                     Env.Synonyms.Include (N.S_Name, Syn);
+                  end;
                when Class_D =>
                   Declare_Class (D, N);
                when others =>
@@ -2031,11 +2061,11 @@ package body AHC.Rename is
                                       (C));
                               end MC;
                               procedure MS
-                                (C : Fixity.Fixity_Maps.Cursor) is
+                                (C : Builtins.Syn_Maps.Cursor) is
                               begin
                                  Ent.Exports.Synonyms.Include
-                                   (Fixity.Fixity_Maps.Key (C),
-                                    Fixity.Fixity_Maps.Element (C));
+                                   (Builtins.Syn_Maps.Key (C),
+                                    Builtins.Syn_Maps.Element (C));
                               end MS;
                            begin
                               Src.Values.Iterate (MV'Access);
@@ -2098,8 +2128,28 @@ package body AHC.Rename is
                              Mod_Find_TyCon (E.Name);
                            Cl : constant Core.Class_Id :=
                              Mod_Find_Class (E.Name.Name);
+                           Exported_Syn_Found : Boolean;
+                           Exported_Syn : Syn_Ref;
                         begin
-                           if TC /= Core.No_TyCon then
+                           Mod_Find_Syn
+                             (E.Name, Exported_Syn_Found, Exported_Syn);
+                           if Exported_Syn_Found
+                             and then Exported_Syn.Is_Own
+                           then
+                              Exported_Syn.Rec :=
+                                Own.Synonyms (E.Name.Name);
+                           end if;
+                           --  As at a use site: a synonym in scope wins
+                           --  over the BUILTIN placeholder it shadows,
+                           --  or Data.Ratio's `Rational` would export
+                           --  the wired abstract TyCon instead of its
+                           --  `Ratio Integer` (M75).
+                           if TC /= Core.No_TyCon
+                             and then not (Exported_Syn_Found
+                                           and then M.Info
+                                             (Core.Real_TyCon_Id (TC))
+                                               .Is_Builtin)
+                           then
                               Ent.Exports.TyCons.Include
                                 (E.Name.Name,
                                  Core.Real_TyCon_Id (TC));
@@ -2171,15 +2221,15 @@ package body AHC.Rename is
                                     end;
                                  end loop;
                               end if;
-                           elsif Own.Synonyms.Contains (E.Name.Name)
-                             or else Env.Synonyms.Contains (E.Name.Name)
-                           then
+                           elsif Exported_Syn_Found then
                               --  A synonym in scope may be RE-exported
                               --  (Report 5.2): System.IO.Error exports
-                              --  the Prelude's IOError.
+                              --  the Prelude's IOError. The record
+                              --  travels, Own first (M75); this
+                              --  module's own is cached into it by
+                              --  AHC.Kinds after renaming.
                               Ent.Exports.Synonyms.Include
-                                (E.Name.Name,
-                                 Fixity.Fixity_Info'(others => <>));
+                                (E.Name.Name, Exported_Syn.Rec);
                            else
                               Bag.Add
                                 (Diagnostics.Error,
@@ -2204,7 +2254,7 @@ package body AHC.Rename is
                Export_All;
             end if;
             --  Synonyms always ride along unless an export list is
-            --  present (they are name-only visibility).
+            --  present.
             if not Arena.Has_Export_List then
                Ent.Exports.Synonyms := Own.Synonyms;
             end if;
@@ -2212,6 +2262,9 @@ package body AHC.Rename is
             Reg.Mods.Append (Ent);
          end;
       end if;
+      --  Kinds caches these and publishes the cached records into
+      --  the export entry just appended (M75).
+      Res.Own_Syns := Own.Synonyms;
    end Resolve_Module;
 
 end AHC.Rename;
