@@ -4,6 +4,9 @@ module Data.Map
   , union, unionWith, fromList, fromDistinctAscList
   , toList, toAscList, keys, elems
   , map, filter, foldrWithKey, foldlWithKey, keysSet
+  , insertWithKey, adjustWithKey, alter, update
+  , fromListWith, fromListWithKey, mapWithKey, unionsWith
+  , foldr', foldl'
   ) where
 
 import Prelude hiding (filter, lookup, map, null)
@@ -263,3 +266,45 @@ instance (Show k, Show a) => Show (Map k a) where
 
 instance (Eq k, Eq a) => Eq (Map k a) where
   m1 == m2 = toList m1 == toList m2
+
+-- The rest of containers' everyday API (M142).
+
+insertWithKey :: Ord k => (k -> a -> a -> a) -> k -> a -> Map k a -> Map k a
+insertWithKey f k = insertWith (f k) k
+
+adjustWithKey :: Ord k => (k -> a -> a) -> k -> Map k a -> Map k a
+adjustWithKey f k = adjust (f k) k
+
+alter :: Ord k => (Maybe a -> Maybe a) -> k -> Map k a -> Map k a
+alter f k m = case f (lookup k m) of
+  Nothing -> delete k m
+  Just v  -> insert k v m
+
+update :: Ord k => (a -> Maybe a) -> k -> Map k a -> Map k a
+update f k m = case lookup k m of
+  Nothing -> m
+  Just v  -> case f v of
+    Nothing -> delete k m
+    Just v' -> insert k v' m
+
+fromListWith :: Ord k => (a -> a -> a) -> [(k, a)] -> Map k a
+fromListWith f = foldl (\m (k, v) -> insertWith f k v m) empty
+
+fromListWithKey :: Ord k => (k -> a -> a -> a) -> [(k, a)] -> Map k a
+fromListWithKey f = foldl (\m (k, v) -> insertWith (f k) k v m) empty
+
+mapWithKey :: (k -> a -> b) -> Map k a -> Map k b
+mapWithKey _ Tip = Tip
+mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
+
+unionsWith :: Ord k => (a -> a -> a) -> [Map k a] -> Map k a
+unionsWith f = foldl (unionWith f) empty
+
+foldr' :: (a -> b -> b) -> b -> Map k a -> b
+foldr' f z m = foldrWithKey (\_ v acc -> acc `seq` f v acc) z m
+
+foldl' :: (b -> a -> b) -> b -> Map k a -> b
+foldl' f z m = foldlWithKey (\acc _ v -> let a' = f acc v in a' `seq` a') z m
+
+instance Functor (Map k) where
+  fmap = map
