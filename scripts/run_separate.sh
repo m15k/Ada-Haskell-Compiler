@@ -66,10 +66,15 @@ if [ $((n3 - n2)) -eq 1 ] && run_golden
 then step "semantic root edit: exactly 1 object"
 else flunk "semantic root edit compiled $((n3-n2)) objects"; fi
 
-# 5. semantic library edit (the Data.Map in the copied lib/)
+# 5. semantic library edit (Data.Map's implementation module in the
+#    copied lib/ - Data.Map.Internal since M142). The probe must really
+#    change the file: a refactor that moves the line would otherwise
+#    turn this step into a silent no-op.
 perl -pi -e \
   's/notMember k m = not \(member k m\)/notMember k m = if member k m then False else True/' \
-  "$tmp/lib/Data/Map.hs"
+  "$tmp/lib/Data/Map/Internal.hs"
+grep -q 'notMember k m = if member k m' "$tmp/lib/Data/Map/Internal.hs" \
+  || flunk "semantic library edit: the probe line was not found"
 scripts/ahc-build.sh "$tmp/lisp/Main.hs" "$out" >/dev/null 2>&1
 n4=$(nobj)
 if [ $((n4 - n3)) -eq 1 ] && run_golden

@@ -1,0 +1,25 @@
+("one","two",'X',"three","four")
+stdin mode: LineBuffering
+size 0: <stdout>: hSetBuffering: invalid argument (illegal buffer size 0)
+size -1: <stdout>: hSetBuffering: invalid argument (illegal buffer size (-1))
+size minBound: <stdout>: hSetBuffering: invalid argument (illegal buffer size (-9223372036854775808))
+after errors: BlockBuffering Nothing
+size maxBound: ()
+reads back: BlockBuffering (Just 9223372036854775807)
+size 2^32+1: ()
+reads back: BlockBuffering (Just 4294967297)
+1
+2
+3
+closed hSetBuffering: hsetbuffering_review.tmp: hSetBuffering: illegal operation (handle is closed)
+closed size 0: hsetbuffering_review.tmp: hSetBuffering: illegal operation (handle is closed)
+closed hGetBuffering: hsetbuffering_review.tmp: hGetBuffering: illegal operation (handle is closed)
+closed hSetEcho: hsetbuffering_review.tmp: hIsTerminalDevice: illegal operation (handle is closed)
+closed hGetEcho: hsetbuffering_review.tmp: hIsTerminalDevice: illegal operation (handle is closed)
+closed hPutStr: hsetbuffering_review.tmp: hPutStr: illegal operation (handle is closed)
+not a tty: hGetEcho: False
+not a tty: hSetEcho: ()
+100000
+('x','x',99998)
+a reused slot: the old handle keeps its name: hsetbuffering_review.tmp: hGetLine: illegal operation (handle is closed)
+and the new one has its own: hsetbuffering_review2.tmp: hPutStr: illegal operation (handle is closed)

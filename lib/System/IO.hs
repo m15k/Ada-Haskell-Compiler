@@ -105,22 +105,24 @@ hFlush (MkHandle i) = primHFlush i
 data BufferMode = NoBuffering | LineBuffering | BlockBuffering (Maybe Int)
   deriving (Eq, Ord, Read, Show)
 
+-- The mode and the block size travel separately, so any Int size
+-- (maxBound included) reads back exactly; a size <= 0 is GHC's
+-- "illegal buffer size" IOError, raised by the runtime after the
+-- closed-handle check.
 hSetBuffering :: Handle -> BufferMode -> IO ()
-hSetBuffering (MkHandle i) m = primHSetBuffering i code
-  where
-    code = case m of
-      NoBuffering              -> 1
-      LineBuffering            -> 2
-      BlockBuffering Nothing   -> 3
-      BlockBuffering (Just n)  -> if n <= 0 then 3 else 3 + n
+hSetBuffering (MkHandle i) m = case m of
+  NoBuffering              -> primHSetBuffering i 1 0
+  LineBuffering            -> primHSetBuffering i 2 0
+  BlockBuffering Nothing   -> primHSetBuffering i 3 0
+  BlockBuffering (Just n)  -> primHSetBuffering i 4 n
 
 hGetBuffering :: Handle -> IO BufferMode
 hGetBuffering (MkHandle i) = fmap decode (primHGetBuffering i)
   where
-    decode 1 = NoBuffering
-    decode 2 = LineBuffering
-    decode 3 = BlockBuffering Nothing
-    decode n = BlockBuffering (Just (n - 3))
+    decode (1, _) = NoBuffering
+    decode (2, _) = LineBuffering
+    decode (3, _) = BlockBuffering Nothing
+    decode (_, n) = BlockBuffering (Just n)
 
 hSetEcho :: Handle -> Bool -> IO ()
 hSetEcho (MkHandle i) b = primHSetEcho i b

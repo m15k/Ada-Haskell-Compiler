@@ -1207,6 +1207,11 @@ package body AHC.Builtins is
             --  like GHC's trace.
             Ignore := Def_Global
               ("primTraceStr", Mono (FN (String_T2, TC (Env.Unit_TC))));
+            --  traceIO: the same write as an IO action, made each time
+            --  the action runs (M142 review).
+            Ignore := Def_Global
+              ("primTraceIO",
+               Mono (FN (String_T2, IO_T (TC (Env.Unit_TC)))));
             --  System.Directory and System.Process (M142): paths and
             --  arguments as Strings; failures are IOErrors carrying
             --  GHC's location strings.
@@ -1221,6 +1226,8 @@ package body AHC.Builtins is
                Res3    : constant Real_Type_Id :=
                  AP (AP (AP (TC (Env.Tuple_TCs (3)), Int_T2), String_T2),
                      String_T2);
+               Int2    : constant Real_Type_Id :=
+                 AP (AP (TC (Env.Tuple_TCs (2)), Int_T2), Int_T2);
             begin
                Ignore := Def_Global
                  ("primDirExists", Mono (FN (String_T2, IO_T (Bool_T2))));
@@ -1238,22 +1245,28 @@ package body AHC.Builtins is
                --  0 getCurrentDirectory, 1 getHomeDirectory
                Ignore := Def_Global
                  ("primDirQuery", Mono (FN (Int_T2, IO_T (String_T2))));
-               --  location, argv (program first), stdin to feed
-               --  hSetBuffering/hGetBuffering (mode code), hSetEcho,
+               --  hSetBuffering (handle, mode code, block size) and
+               --  hGetBuffering ((mode code, block size)), hSetEcho,
                --  hGetEcho - handles as Int, as the other h* prims.
                Ignore := Def_Global
                  ("primHSetBuffering",
-                  Mono (FN (Int_T2, FN (Int_T2, IO_T (Unit_T2)))));
+                  Mono (FN (Int_T2, FN (Int_T2, FN (Int_T2,
+                                                    IO_T (Unit_T2))))));
                Ignore := Def_Global
-                 ("primHGetBuffering", Mono (FN (Int_T2, IO_T (Int_T2))));
+                 ("primHGetBuffering", Mono (FN (Int_T2, IO_T (Int2))));
                Ignore := Def_Global
                  ("primHSetEcho",
                   Mono (FN (Int_T2, FN (Bool_T2, IO_T (Unit_T2)))));
                Ignore := Def_Global
                  ("primHGetEcho", Mono (FN (Int_T2, IO_T (Bool_T2))));
+               --  location, argv (program first), capture flags (bit 0
+               --  stdout, bit 1 stderr), stdin to feed (Nothing
+               --  inherits)
                Ignore := Def_Global
                  ("primProcRun",
-                  Mono (FN (String_T2, FN (Strs, FN (MStr, IO_T (Res3))))));
+                  Mono (FN (String_T2,
+                            FN (Strs, FN (Int_T2, FN (MStr,
+                                                      IO_T (Res3)))))));
             end;
             Ignore := Def_Global
               ("primHGetLine",

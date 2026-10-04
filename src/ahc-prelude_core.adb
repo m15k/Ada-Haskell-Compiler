@@ -1584,6 +1584,7 @@ package body AHC.Prelude_Core is
          BP ("primHClose", "ahc_prim_h_close");
          BP ("primHPutStr", "ahc_prim_h_put_str");
          BP ("primTraceStr", "ahc_prim_trace_str");
+         BP ("primTraceIO", "ahc_prim_trace_io");
          BP ("primDirExists", "ahc_prim_dir_exists");
          BP ("primFileExists", "ahc_prim_file_exists");
          BP ("primListDir", "ahc_prim_list_dir");
