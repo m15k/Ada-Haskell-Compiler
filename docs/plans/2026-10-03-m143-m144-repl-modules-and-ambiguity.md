@@ -157,3 +157,102 @@ run_repl.sh rc=0.
 Known leftovers: instance-head ambiguity is reported at the declaration
 column (GHC: the class name's); import-vs-Prelude for two different
 VALUES still resolves to the import.
+
+## Phase M144b - a real export list on the Prelude
+
+Design implemented in the working tree (uncommitted, builds with
+`alr build --validation`):
+- prelude/Prelude.hs: `module Prelude ( ... )` with GHC 9.4.8's 216 exported
+  names (from `:browse Prelude`); 31 names GHC exports but AHC lacks are
+  listed in a comment block at the top (MonadFail, ReadS, ShowS, (=<<),
+  asinh/acosh/atanh, foldMap, the RealFloat methods floatRadix ...
+  isIEEE, appendFile, writeFile, asTypeOf, errorWithoutStackTrace, lex,
+  scanl/scanl1/scanr/scanr1, showChar, unzip3, zip3, zipWith3).
+- Rename.Resolve_Module resolves the Prelude's export list against Env in
+  the (registry-less) Prelude pass into Res.Public; errors loudly on an
+  unresolvable name.
+- Registry gains Public_Base (export list + builtin syntax + tuples);
+  Module_Arena gains Is_Library, set by the driver for files found through
+  the stdlib cascade; the renamer picks `Pre` (Base for library modules,
+  Public_Base for user modules) in ONE place and judges own-vs-Prelude
+  ambiguity against Public_Base for everyone.
+- AHC.Report_Prelude and the generator script are deleted.
+
+Sweep (old binary vs new, `ahc check`, every .hs under tests/ and
+examples/): the conformance corpus, the golden/corpus/differential
+programs and every multi-module conformance case are UNCHANGED. 34
+programs break, over the 25 limit, so work stopped here for review:
+- wired FFI surface used without any import (AHC has no Foreign.*
+  modules; Ptr, FunPtr, CInt, CSize, Int64, nullPtr, mallocBytes, free,
+  peek*/poke*): tests/exec/ffi_{fixed,fixed_err,io,marshal,marshal_err,
+  qsort,word64,wrapper,wrapper_free}.hs, io_waitread{,or}.hs, exc_callback.hs,
+  text_io.hs, examples/ffi/engine/Engine.hs, examples/sqlite/ahcsql.hs,
+  tests/golden/{check_foreign_errors,parse_foreign}.hs;
+- prim* names called directly from test programs (primCatch, primThrowIO,
+  primExc*, primIoe*, SomeException without importing Control.Exception):
+  tests/exec/exc_{arith,basic,boundary_lazy,conc_child,conc_scope_unwind,
+  exit,io,par,prot_entry,rethrow_shared,uncaught,uncaught_exit,
+  uncaught_io,waiter}.hs, socket_echo.hs;
+- GHC-style missing import: tests/exec/either_maybe.hs (fromMaybe, isJust).
+
+### M144b resolution (after the review of the stop above)
+
+Decisions: (1) add the cheap missing Prelude names; (2) build GHC-named
+Foreign.* modules (M145) and take the wired FFI names out of the public
+Prelude; (3) an internal `AHC.Prim` for the `prim*` names the tests use.
+Order: Prelude additions, M145, sweep fixes, check script and docs, gates.
+
+Prelude additions (prelude/Prelude.hs, oracle-checked by
+tests/conformance/ch09_prelude_additions.hs): scanl, scanl1, scanr,
+scanr1, zip3, unzip3, zipWith3 (moved from Data.List, which re-exports),
+writeFile/appendFile (moved from System.IO, over the handle primitives,
+IOError relabelled "withFile" as before), (=<<), ShowS, ReadS, showChar,
+asTypeOf, errorWithoutStackTrace, asinh/acosh/atanh (GHC's class-default
+formulas), and foldMap as a Foldable METHOD with GHC's default over
+foldr. Left absent and documented (ABSENT-NAMES line, EXCLUSIONS):
+MonadFail (AHC's Monad carries `fail`; a class would change do-notation's
+failing patterns), lex, and the ten RealFloat internals.
+
+Sweep with the final design (old vs new `ahc check` over tests/ and
+examples/): the programs that needed edits were 32 - 17 wired-FFI users
+(imports of Foreign.Ptr / Foreign.C.Types / Foreign.Marshal.Alloc /
+AHC.FFI / Data.Int / Data.Text), 14 prim* users (import AHC.Prim,
+Control.Exception) and either_maybe.hs (import Data.Maybe) - all fixed
+by an import and re-checked; tests/golden check_foreign_errors and
+parse_foreign were re-pinned (their sources gained an import line), the
+three Core goldens moved by the Foldable foldMap field only (verified with
+`_[0-9]+` stripped). scripts/run_separate.sh now probes a library edit
+through a copy of lib/ on $AHC_LIB (a copy beside the root is a user
+module and cannot see the whole Prelude).
+
+New checks: scripts/check_prelude_exports.sh (0.8 s, in run_gate.sh as
+`prelude-exports`), multi/m144b_non_prelude_name and
+multi/m144b_prelude_qualified (rejected, as by GHC), lib_foreign_modules.hs.
+
+Gates: GATE ok (unit, conformance, exec, exec-own, golden,
+prelude-exports all rc=0); differential, differential_types, repl,
+export, bindgen, examples, separate, build, install, stack, discharge,
+deps, pkg, sqlite all rc=0; run_fuzz_par.sh 300 6 1 -> 300 ok.
+
+## M145 - Foreign modules
+
+User's choice: GHC's shape. The FFI names stay wired in the compiler
+(the marshaller identifies Ptr/FunPtr/CInt by TyCon) and are NOT in the
+public Prelude; GHC's modules are facades over them (lib modules see the
+whole Prelude, so their export lists name the wired entities, exactly as
+Data.Int does for Int8).
+
+Phase 1 - modules. lib/Foreign/Ptr.hs, Foreign/C/Types.hs,
+Foreign/C/String.hs, Foreign/Marshal/Alloc.hs, Foreign/Marshal.hs,
+Foreign/C.hs, Foreign.hs; AHC-only lib/AHC/FFI.hs (byte-offset
+peek*/poke*, no GHC home) and lib/AHC/Prim.hs (internal, unstable).
+Gate: every module imports and checks; lib_foreign_modules.hs byte-
+identical to runghc.
+
+Phase 2 - users. examples/ffi, examples/sqlite and every tests/exec ffi_*
+program add the imports; bindgen needs no change (it emits GHC-side
+Haskell that already imports the real Foreign.* modules).
+Gate: run_exec.sh (both GC modes), run_examples.sh, run_export.sh,
+run_bindgen.sh, run_sqlite.sh.
+
+Phase 3 - docs. MANUAL FFI chapter, EXCLUSIONS rows.

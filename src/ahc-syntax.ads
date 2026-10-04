@@ -453,6 +453,11 @@ package AHC.Syntax is
       Has_Header      : Boolean := False;
       Module_Name     : Names.Name_Id := Names.No_Name;
       Has_Export_List : Boolean := False;
+      --  Set by the driver for a module that came from the compiler's
+      --  own lib directory / $AHC_LIB: such a module is base's
+      --  internals and sees the WHOLE Prelude, where a user module
+      --  sees only what GHC's Prelude exports (M144b).
+      Is_Library      : Boolean := False;
       Exports         : Entity_Vectors.Vector;
       Imports         : Import_Vectors.Vector;
       Top_Decls       : Decl_Id_Vectors.Vector;

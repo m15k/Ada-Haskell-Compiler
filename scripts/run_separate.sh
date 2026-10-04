@@ -17,11 +17,12 @@ cd "$(dirname "$0")/.."
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cp -R examples/lisp "$tmp/lisp"
-# The copied root must resolve Lisp.* beside itself; lib/ modules
-# still come from the repo's lib/ (cwd-relative), which we do NOT
-# touch - the library probe copies the one module it edits.
-mkdir -p "$tmp/lisp/Data"
-cp lib/Data/Map.hs "$tmp/lisp/Data/Map.hs"
+# The copied root must resolve Lisp.* beside itself. The library probe
+# edits a COPY of lib/ reached through $AHC_LIB: a module found there is
+# a library module (it sees the whole Prelude, M144b), where a copy
+# beside the root would be a user module and could not.
+cp -R lib "$tmp/lib"
+export AHC_LIB="$tmp/lib"
 
 out="$tmp/lisp/app"
 fail=0
@@ -65,10 +66,10 @@ if [ $((n3 - n2)) -eq 1 ] && run_golden
 then step "semantic root edit: exactly 1 object"
 else flunk "semantic root edit compiled $((n3-n2)) objects"; fi
 
-# 5. semantic library edit (the copied Data.Map shadows lib/'s)
+# 5. semantic library edit (the Data.Map in the copied lib/)
 perl -pi -e \
   's/notMember k m = not \(member k m\)/notMember k m = if member k m then False else True/' \
-  "$tmp/lisp/Data/Map.hs"
+  "$tmp/lib/Data/Map.hs"
 scripts/ahc-build.sh "$tmp/lisp/Main.hs" "$out" >/dev/null 2>&1
 n4=$(nobj)
 if [ $((n4 - n3)) -eq 1 ] && run_golden

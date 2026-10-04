@@ -169,45 +169,6 @@ permutations xs0 = xs0 : perms xs0 []
           case interleave2 (\l -> f (y : l)) ys r of
             (us, zs) -> (y : us, f (t : y : us) : zs)
 
-zip3 :: [a] -> [b] -> [c] -> [(a, b, c)]
-zip3 (a : as) (b : bs) (c : cs) = (a, b, c) : zip3 as bs cs
-zip3 _ _ _ = []
-
-zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
-zipWith3 f (a : as) (b : bs) (c : cs) =
-  f a b c : zipWith3 f as bs cs
-zipWith3 _ _ _ _ = []
-
-unzip3 :: [(a, b, c)] -> ([a], [b], [c])
-unzip3 xs =
-  ( [a | (a, _, _) <- xs]
-  , [b | (_, b, _) <- xs]
-  , [c | (_, _, c) <- xs]
-  )
-
-scanl :: (b -> a -> b) -> b -> [a] -> [b]
-scanl f z xs =
-  z : case xs of
-        []      -> []
-        (x : r) -> scanl f (f z x) r
-
-scanl1 :: (a -> a -> a) -> [a] -> [a]
-scanl1 _ [] = []
-scanl1 f (x : xs) = scanl f x xs
-
-scanr :: (a -> b -> b) -> b -> [a] -> [b]
-scanr _ z [] = [z]
-scanr f z (x : xs) = f x (head qs) : qs
-  where
-    qs = scanr f z xs
-
-scanr1 :: (a -> a -> a) -> [a] -> [a]
-scanr1 _ [] = []
-scanr1 _ [x] = [x]
-scanr1 f (x : xs) = f x (head qs) : qs
-  where
-    qs = scanr1 f xs
-
 tails :: [a] -> [[a]]
 tails [] = [[]]
 tails (x : xs) = (x : xs) : tails xs

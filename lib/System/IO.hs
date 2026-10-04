@@ -97,10 +97,3 @@ hIsEOF (MkHandle i) = primHIsEOF i
 
 hFlush :: Handle -> IO ()
 hFlush (MkHandle i) = primHFlush i
-
-writeFile :: String -> String -> IO ()
-writeFile path s = withFile path WriteMode (\h -> hPutStr h s)
-
-appendFile :: String -> String -> IO ()
-appendFile path s = withFile path AppendMode (\h -> hPutStr h s)
-

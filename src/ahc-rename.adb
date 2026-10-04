@@ -1,5 +1,3 @@
-with AHC.Report_Prelude;
-
 package body AHC.Rename is
 
    use AHC.Syntax;
@@ -151,6 +149,20 @@ package body AHC.Rename is
       --  two modules may declare the same name (M75).
       Global_Scope : constant Boolean := not Modular;
 
+      --  The implicit Prelude this module sees (M144b): a library
+      --  module (compiled from lib/ or $AHC_LIB) is base's
+      --  internals and sees the whole snapshot; a user module sees
+      --  only the Prelude's export list. Pub is always the public
+      --  view: own-vs-Prelude ambiguity is judged against what GHC's
+      --  Prelude exports, even inside the library.
+      Pre : constant access constant Modules.Iface :=
+        (if not Modular then null
+         elsif Arena.Is_Library then Reg.Base'Unchecked_Access
+         else Reg.Public_Base'Unchecked_Access);
+      Pub : constant access constant Modules.Iface :=
+        (if not Modular then null
+         else Reg.Public_Base'Unchecked_Access);
+
       --  An explicit `import Prelude ...` suppresses the implicit
       --  whole-Prelude fallback (Report 5.6.1): resolution then goes
       --  through the import's filtered view like any other module.
@@ -233,14 +245,6 @@ package body AHC.Rename is
            and then not Prelude_Explicit then Implicit_Prelude
          else Through_Import);
 
-      --  M144: an own declaration is ambiguous (Report 5.5.2) with a
-      --  same-named entity from an unqualified import or from the
-      --  implicit Prelude - but only for names GHC's Prelude really
-      --  exports; AHC's Prelude is wider (fromMaybe, swap, helpers).
-      function In_Report_Prelude
-        (Kind : Character; N : Names.Name_Id) return Boolean
-      is (AHC.Report_Prelude.Exports (Kind, Text (N)));
-
       --  Import-aware resolution for type constructors, data
       --  constructors and classes - one shape for all three (M75).
       --  Qualified through an import name or alias: only those
@@ -297,7 +301,7 @@ package body AHC.Rename is
             when Implicit_Prelude =>
                --  Prelude.T: only the Prelude, never this module's
                --  or an import's T (mirrors Lookup_Value).
-               Found := In_Iface (Reg.Base, Q.Name);
+               Found := In_Iface (Pre.all, Q.Name);
             when This_Module =>
                --  M.T inside M: only M's own declarations.
                Found := In_Iface (Own, Q.Name);
@@ -322,13 +326,9 @@ package body AHC.Rename is
                         end;
                      end if;
                   end loop;
-                  if not Prelude_Explicit
-                    and then In_Report_Prelude
-                               ((if What = "constructor" then 'C' else 'T'),
-                                Q.Name)
-                  then
+                  if not Prelude_Explicit then
                      declare
-                        B : constant Id := In_Iface (Reg.Base, Q.Name);
+                        B : constant Id := In_Iface (Pub.all, Q.Name);
                      begin
                         if B /= None and then B /= Found
                           and then not Shadowable (B)
@@ -356,7 +356,7 @@ package body AHC.Rename is
                  or else Is_Builtin_Syntax (Q.Name)
                then
                   declare
-                     B : constant Id := In_Iface (Reg.Base, Q.Name);
+                     B : constant Id := In_Iface (Pre.all, Q.Name);
                   begin
                      --  An import and the implicit Prelude naming two
                      --  different entities are ambiguous (Report
@@ -480,7 +480,7 @@ package body AHC.Rename is
                   end if;
                end loop;
             when Implicit_Prelude =>
-               Take (Reg.Base.Synonyms);
+               Take (Pre.Synonyms);
             when This_Module =>
                Found := Own.Synonyms.Contains (Q.Name);
                return;
@@ -497,8 +497,7 @@ package body AHC.Rename is
                      end if;
                   end loop;
                   if not Prelude_Explicit
-                    and then Reg.Base.Synonyms.Contains (Q.Name)
-                    and then In_Report_Prelude ('T', Q.Name)
+                    and then Pub.Synonyms.Contains (Q.Name)
                   then
                      Amb := True;
                   end if;
@@ -518,7 +517,7 @@ package body AHC.Rename is
                   end if;
                end loop;
                if not Prelude_Explicit then
-                  Take (Reg.Base.Synonyms);
+                  Take (Pre.Synonyms);
                end if;
          end case;
          if Amb then
@@ -579,9 +578,9 @@ package body AHC.Rename is
             --  of the same name are ambiguous when GHC's Prelude
             --  exports that name (M144); a builtin it does not export
             --  (Int8, ...) is shadowed as before.
-            if Q.Qualifier = Names.No_Name
+            if Modular and then Q.Qualifier = Names.No_Name
               and then not TyCon_Wired (TC)
-              and then In_Report_Prelude ('T', Q.Name)
+              and then Pub.TyCons.Contains (Q.Name)
             then
                Choice := Ambiguous;
                Bag.Add (Diagnostics.Error,
@@ -691,7 +690,7 @@ package body AHC.Rename is
             then
                declare
                   C : constant Builtins.Var_Maps.Cursor :=
-                    Reg.Base.Values.Find (Q.Name);
+                    Pre.Values.Find (Q.Name);
                begin
                   if Builtins.Var_Maps.Has_Element (C) then
                      return (Kind => Var_Res,
@@ -735,12 +734,10 @@ package body AHC.Rename is
                               end;
                            end if;
                         end loop;
-                        if not Prelude_Explicit
-                          and then In_Report_Prelude ('V', Q.Name)
-                        then
+                        if not Prelude_Explicit then
                            declare
                               BC : constant Builtins.Var_Maps.Cursor :=
-                                Reg.Base.Values.Find (Q.Name);
+                                Pub.Values.Find (Q.Name);
                            begin
                               if Builtins.Var_Maps.Has_Element (BC)
                                 and then Core.Var_Id
@@ -810,7 +807,7 @@ package body AHC.Rename is
             if not Prelude_Explicit then
                declare
                   C : constant Builtins.Var_Maps.Cursor :=
-                    Reg.Base.Values.Find (Q.Name);
+                    Pre.Values.Find (Q.Name);
                begin
                   if Builtins.Var_Maps.Has_Element (C) then
                      return (Kind => Var_Res,
@@ -2213,7 +2210,7 @@ package body AHC.Rename is
                View.Qualified := Imp.Qualified;
                if Imp.Module = Names.Name_Id (Prelude_Name) then
                   Prelude_Explicit := True;
-                  Filter (Reg.Base);
+                  Filter (Pre.all);
                elsif MI = 0 then
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Rename_Out_Of_Scope, Imp.Span,
@@ -2430,8 +2427,10 @@ package body AHC.Rename is
 
       --  Register this module's exports: everything top-level, or
       --  the export list's subset (Report 5.2). Re-exports resolve
-      --  through imports and Base.
-      if Modular then
+      --  through imports and Base. The Prelude pass has no registry
+      --  but does have an export list (M144b): the same machinery
+      --  resolves it against the flat environment into Res.Public.
+      if Modular or else Arena.Has_Export_List then
          declare
             Ent : Modules.Module_Entry;
 
@@ -2582,8 +2581,9 @@ package body AHC.Rename is
                               Found := True;
                            elsif E.Name.Name =
                              Names.Name_Id (Prelude_Name)
+                             and then Pre /= null
                            then
-                              Merge (Reg.Base);
+                              Merge (Pre.all);
                               Found := True;
                            else
                               for V of Imp_Views loop
@@ -2743,7 +2743,11 @@ package body AHC.Rename is
                Ent.Exports.Synonyms := Own.Synonyms;
             end if;
             Ent.Exports.Fixities := Fixities;
-            Reg.Mods.Append (Ent);
+            if Modular then
+               Reg.Mods.Append (Ent);
+            else
+               Res.Public := Ent.Exports;
+            end if;
          end;
       end if;
       --  Kinds caches these and publishes the cached records into

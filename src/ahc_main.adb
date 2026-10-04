@@ -333,6 +333,16 @@ procedure AHC_Main is
       --  CWD's lib/, the installation's lib/ - AHC.Paths). Returns
       --  the first candidate, or the root-relative path for the
       --  error message; on ambiguity sets Failed and returns "".
+      --  Files that came from the stdlib cascade: library modules
+      --  (M144b). Recorded here, the one place that knows where a
+      --  module's file was found; Load turns membership into the
+      --  arena's Is_Library flag.
+      Lib_Files : Ada.Strings.Unbounded.Unbounded_String;
+
+      function Is_Lib_File (File : String) return Boolean
+      is (Ada.Strings.Unbounded.Index
+            (Lib_Files, ASCII.NUL & File & ASCII.NUL) > 0);
+
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
@@ -417,6 +427,8 @@ procedure AHC_Main is
                  AHC.Paths.Stdlib_File (P & ".hs");
             begin
                if Std /= "" then
+                  Ada.Strings.Unbounded.Append
+                    (Lib_Files, ASCII.NUL & Std & ASCII.NUL);
                   return Std;
                end if;
             end;
@@ -458,6 +470,7 @@ procedure AHC_Main is
          L.Name := Mod_Name;
          L.Path := Ada.Strings.Unbounded.To_Unbounded_String (File);
          L.Ref := new AHC.Syntax.Module_Arena;
+         L.Ref.Is_Library := Is_Lib_File (File);
          declare
             L_Pragmas : AHC.Lexer.Span_Vectors.Vector;
          begin
@@ -509,7 +522,14 @@ procedure AHC_Main is
          Order.Append (L);
       end Load;
 
-      --  Snapshot the flat environment as the registry Base.
+      --  What the Prelude's export list named (M144b), filled by the
+      --  Prelude pass; Have_Public is False when there is none.
+      Prelude_Public : AHC.Modules.Iface;
+      Have_Public    : Boolean := False;
+
+      --  Snapshot the flat environment as the registry Base, and the
+      --  public view of it: the Prelude's export list plus builtin
+      --  syntax, which is grammar and not an export.
       procedure Snapshot_Base is
       begin
          Reg.Base.Values := Env.Values;
@@ -517,6 +537,80 @@ procedure AHC_Main is
          Reg.Base.DataCons := Env.DataCons;
          Reg.Base.Classes := Env.Classes;
          Reg.Base.Synonyms := Env.Synonyms;
+         if not Have_Public then
+            Reg.Public_Base := Reg.Base;
+            return;
+         end if;
+         Reg.Public_Base := Prelude_Public;
+         declare
+            Syntax_Names : constant array (1 .. 3) of AHC.Names.Name_Id :=
+              [AHC.Names.Name_Id (Table.Intern ("()")),
+               AHC.Names.Name_Id (Table.Intern ("[]")),
+               AHC.Names.Name_Id (Table.Intern (":"))];
+         begin
+         --  The exported synonyms' records, as Kinds cached them.
+         declare
+            Cached : AHC.Builtins.Syn_Maps.Map;
+         begin
+            for C in Prelude_Public.Synonyms.Iterate loop
+               declare
+                  K : constant AHC.Names.Name_Id :=
+                    AHC.Builtins.Syn_Maps.Key (C);
+               begin
+                  Cached.Include
+                    (K, (if Env.Synonyms.Contains (K)
+                         then Env.Synonyms.Element (K)
+                         else AHC.Builtins.Syn_Maps.Element (C)));
+               end;
+            end loop;
+            Reg.Public_Base.Synonyms := Cached;
+         end;
+         --  Tuples are syntax too: (,), (,,), ... and (->).
+         for C in Env.DataCons.Iterate loop
+            declare
+               K : constant AHC.Names.Name_Id :=
+                 AHC.Builtins.DataCon_Maps.Key (C);
+               T : constant String :=
+                 Table.Text (AHC.Names.Real_Name_Id (K));
+            begin
+               if T'Length >= 2 and then T (T'First) = '('
+                 and then T (T'First + 1) = ','
+               then
+                  Reg.Public_Base.DataCons.Include
+                    (K, AHC.Builtins.DataCon_Maps.Element (C));
+               end if;
+            end;
+         end loop;
+         for C in Env.TyCons.Iterate loop
+            declare
+               K : constant AHC.Names.Name_Id :=
+                 AHC.Builtins.TyCon_Maps.Key (C);
+               T : constant String :=
+                 Table.Text (AHC.Names.Real_Name_Id (K));
+            begin
+               if T'Length >= 2 and then T (T'First) = '('
+                 and then (T (T'First + 1) = ',' or else T = "(->)")
+               then
+                  Reg.Public_Base.TyCons.Include
+                    (K, AHC.Builtins.TyCon_Maps.Element (C));
+               end if;
+            end;
+         end loop;
+         for Syntax_Name of Syntax_Names loop
+            if Env.TyCons.Contains (Syntax_Name) then
+               Reg.Public_Base.TyCons.Include
+                 (Syntax_Name, Env.TyCons.Element (Syntax_Name));
+            end if;
+            if Env.DataCons.Contains (Syntax_Name) then
+               Reg.Public_Base.DataCons.Include
+                 (Syntax_Name, Env.DataCons.Element (Syntax_Name));
+            end if;
+            if Env.Values.Contains (Syntax_Name) then
+               Reg.Public_Base.Values.Include
+                 (Syntax_Name, Env.Values.Element (Syntax_Name));
+            end if;
+         end loop;
+         end;
       end Snapshot_Base;
    begin
       if not Deps_Ok then
@@ -611,6 +705,10 @@ procedure AHC_Main is
                if not Bag.Has_Errors then
                   AHC.Rename.Resolve_Module
                     (P_Arena, Table, Bag, M, Env, P_Res);
+                  if P_Arena.Has_Export_List then
+                     Prelude_Public := P_Res.Public;
+                     Have_Public := True;
+                  end if;
                   AHC.Kinds.Check_Module
                     (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos,
                      P_Preds);
