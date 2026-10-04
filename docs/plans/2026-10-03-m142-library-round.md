@@ -1223,6 +1223,23 @@ unresolved finding; `./scripts/run_tsan.sh` green (new C code).
       early, EINTR), NUL bytes in paths/args.
 - [ ] Findings land as one commit `fix: N defects an adversarial review of M142 found`.
 
+**F1 scout result (2026-10-04):** thirteen hangman repos; the gaps
+they hit (forever, isLetter, hSetEcho/hSetBuffering) closed in b6fe00d;
+supermacro/hangman AGREES-BANNER, three more agree but for their
+randomly drawn word.
+
+**F2 adversarial review verdict: GO as of 4d15bda.** Three reviewers
+(library vs GHC, runtime/GC/C hardening, claims/types/contracts) found
+~35 defects after a green gate; fixed in ac193d4 (26, library and I/O)
+and 0714b98 (12, compiler and runtime - incl. the pre-existing
+elaborate Solve_Ev $dMISSING, main-result forcing, ignored strict
+fields), merged as bfc830f/746e5dc. The milestone gate then showed
+b_sort +8%: a Boehm false retention from one-past-the-end stack
+addresses, fixed in be95cab (4d15bda). Final: full gate both GC modes,
+both differentials, repl, examples, bindgen, separate, export, TSan,
+own soak PASS, fuzz 300/300, /security-review clean (twice), bench vs
+v1.15 within -1%..+2% except b_map -52% and b_sort -4%.
+
 ### Task F3: merge M143/M144, gate, docs, release
 
 - [ ] If the M143/M144 branch has landed, merge it; resolve any lib/

@@ -1,5 +1,63 @@
 # AHC Changelog
 
+## v1.16 (unreleased)
+
+**M142 - the library round.** Hackage-style modules are the first
+reason real GitHub Haskell does not build under AHC, by a wide margin.
+M142 closes the most frequent: `Debug.Trace`, `Data.Map.Strict` (and
+containers' full everyday Map API), `Control.Monad.State`,
+`Text.Printf`, `System.Random`, `System.Directory`, `System.Process`,
+plus `BufferMode`/`hSetBuffering`/`hSetEcho`, `forever`, `isLetter`
+and a real `toRational`. Each is byte-identical to GHC 9.4.8 on its
+oracled programs; the heavy ones are TRANSCRIBED from their sources,
+not reconstructed - Text.Printf from base-4.17, Data.Map from
+containers-0.6.7, System.Random bit-for-bit from random-1.2.1.2 and
+splitmix-0.1.3.2 (known-answer tests over five seeds and thousands of
+draws). Instances over `(->)` now resolve (a function type unifies
+with `(->)` applied to two arguments), which is what Printf's
+`PrintfType (a -> r)` and `Functor ((->) r)` stand on.
+
+**M143-M145 - modules, closer to GHC.** The REPL loads multi-module
+programs (`:load` with sibling imports, `AHC_PATH`, GHCi-style
+shadowing of session names). A module's own declaration is now
+AMBIGUOUS with a same-named import or Prelude entity at an unqualified
+use, as in GHC (M75's own-wins policy is gone). The Prelude has GHC
+9.4.8's export list, kept in sync by `scripts/check_prelude_exports.sh`
+in the gate; user modules see only it, library modules see everything.
+The FFI names live in GHC's `Foreign.*` modules.
+
+**Four adversarial reviews, ~70 findings, all fixed or documented.**
+M143-M145's review found sixteen; M142's three reviewers found about
+thirty-five more - and the most serious were COMPILER bugs older than
+M142 that its new code made reachable: elaborate never substituted an
+instance's head into its context, so superclass dictionaries of
+contextual instances were `$dMISSING` at run time (the committed Core
+golden carried one inside the Prelude's own `Monoid Maybe`); `main`'s
+final result was forced, so `main = printf ...` died; strict
+constructor fields (`!Int`) were ignored; NaN compared equal; Int
+enumeration wrapped past `maxBound`. Merging the work exposed one more:
+Kinds and the desugarer found "the instance this declaration minted"
+by SOURCE SPAN - per-file byte offsets - so two modules' instances at
+the same offsets collided (System.Random's landed on the Prelude's
+Show 6-tuple). Identity now flows from the renamer instead.
+
+**The repo scout** tried thirteen hangman programs: the gaps it hit
+(`forever`, `isLetter`, `hSetEcho`) are closed; supermacro/hangman
+AGREES-BANNER and three more agree but for their randomly drawn word.
+
+Gates: unit, 195 conformance programs, exec in both GC modes, golden,
+prelude-exports, userlib; both differentials, repl, examples, bindgen,
+separate, export, TSan; own soak with `AHC_OWN_VERIFY=1` PASS; fuzz
+300/300; `/security-review` of the process and terminal code clean.
+Bench delta, interleaved A/B best-of-5
+against v1.15 (release builds, identical output): b_map 4930 -> 2378 ms
+(-52%, containers' algorithms), b_sort 1733 -> 1664 ms (-4%); every
+other program within -1%..+2%. The review fixes first showed b_sort
++8%: not the code - a one-past-the-end stack address held in a static
+root let Boehm pin a whole heap section whenever the kernel placed one
+flush after a stack, and the new Prelude dictionaries had shifted the
+layout into it. Every AHC stack now ends in a PROT_NONE cap page.
+
 ## v1.15 (2026-10-03)
 
 **M75 - per-module namespaces.** Two modules of one program may now
