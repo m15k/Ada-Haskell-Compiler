@@ -1,0 +1,14 @@
+m142_dir_tmp/a dir=True file=False
+m142_dir_tmp/a/f.txt dir=False file=True
+m142_dir_tmp/missing dir=False file=False
+["b","f.txt"]
+[".","..","b","f.txt"]
+["b","g.txt"]
+createDirectory existing failed: m142_dir_tmp/a: createDirectory: already exists (File exists)
+removeDirectory non-empty failed: m142_dir_tmp/a: removeDirectory: unsatisfied constraints (Directory not empty)
+removeFile missing failed: m142_dir_tmp/a/nope: removeLink: does not exist (No such file or directory)
+listDirectory missing failed: m142_dir_tmp/zz: getDirectoryContents:openDirStream: does not exist (No such file or directory)
+renameFile missing failed: m142_dir_tmp/zz: renameFile:renamePath:rename: does not exist (No such file or directory)
+cwd ends with root: True
+root left behind: False
+home non-empty: True

@@ -783,6 +783,7 @@ instance Show IOException where
         7 -> "user error"
         8 -> "inappropriate type"
         10 -> "invalid argument"
+        11 -> "unsatisfied constraints"
         _ -> "failed"
 
 instance Eq IOException where

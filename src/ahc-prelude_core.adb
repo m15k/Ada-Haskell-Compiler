@@ -1559,6 +1559,13 @@ package body AHC.Prelude_Core is
          BP ("primHClose", "ahc_prim_h_close");
          BP ("primHPutStr", "ahc_prim_h_put_str");
          BP ("primTraceStr", "ahc_prim_trace_str");
+         BP ("primDirExists", "ahc_prim_dir_exists");
+         BP ("primFileExists", "ahc_prim_file_exists");
+         BP ("primListDir", "ahc_prim_list_dir");
+         BP ("primPathOp", "ahc_prim_path_op");
+         BP ("primRename", "ahc_prim_rename");
+         BP ("primDirQuery", "ahc_prim_dir_query");
+         BP ("primProcRun", "ahc_prim_proc_run");
          BP ("primHGetLine", "ahc_prim_h_get_line");
          BP ("primHGetChar", "ahc_prim_h_get_char");
          BP ("primHGetContents", "ahc_prim_h_get_contents");
@@ -2238,6 +2245,33 @@ package body AHC.Prelude_Core is
                     and then All_Nullary (Real_TyCon_Id (Inst.Head))
                   then
                      Derive_Bounded (Real_Instance_Id (II));
+                  elsif Cl_Id = Env.Bounded_Cl
+                    and then (Inst.Head = Env.Int_TC
+                              or else Inst.Head = Env.Char_TC)
+                  then
+                     --  Bounded Int and Char (M142, found by Printf's
+                     --  %u): minBound/maxBound had no runtime. Int is
+                     --  64-bit as GHC's; Char spans the code points.
+                     declare
+                        function Lit (L : Literal) return Real_Expr_Id
+                        is (M.Add (Expr_Node'
+                              (Kind => Lit_C, Span => Span, Lit => L)));
+                        Ms : Expr_Id_Vectors.Vector;
+                     begin
+                        if Inst.Head = Env.Int_TC then
+                           Ms.Append (Lit ((Kind => L_Int,
+                             Text => Names.Name_Id (Table.Intern
+                               ("-9223372036854775808")))));
+                           Ms.Append (Lit ((Kind => L_Int,
+                             Text => Names.Name_Id (Table.Intern
+                               ("9223372036854775807")))));
+                        else
+                           Ms.Append (Lit ((Kind => L_Char, Code => 0)));
+                           Ms.Append (Lit ((Kind => L_Char,
+                                            Code => 16#10FFFF#)));
+                        end if;
+                        Give_Dict (Real_Instance_Id (II), Ms);
+                     end;
                   elsif Table.Text (M.Info (Cl).Name) = "Ix"
                     and then Has_DataCons (Real_TyCon_Id (Inst.Head))
                     and then All_Nullary (Real_TyCon_Id (Inst.Head))

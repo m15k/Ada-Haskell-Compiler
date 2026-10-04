@@ -727,8 +727,11 @@ package body AHC.Builtins is
          --  anyway, so oracle outputs agree).
          declare
             Cl : constant Real_Class_Id :=
+              --  Report 6.4: class (Real a, Fractional a) => RealFrac
+              --  a - so RealFloat a gives Ord a, as base's
+              --  showFFloat relies on (M142; was Fractional only).
               Def_Class ("RealFrac", Star_K,
-                         Sup1 (Env.Fractional_Cl));
+                         Sup2 (Env.Real_Cl, Env.Fractional_Cl));
             A  : constant Real_TyVar_Id := New_Tv ("a");
             AI : constant Real_Type_Id := FN (TV (A), Integer_T);
          begin
@@ -883,7 +886,11 @@ package body AHC.Builtins is
             Def_Instance (Cl (Env.Ord_Cl), TCn (T));
             Def_Instance (Cl (Env.Show_Cl), TCn (T));
             Def_Instance (Cl (Env.Enum_Cl), TCn (T));
-            Def_Instance (Cl (Env.Bounded_Cl), TCn (T));
+            --  Integer is unbounded: no Bounded instance (Report
+            --  6.3.7; GHC rejects `minBound :: Integer`) - M142.
+            if T /= Env.Integer_TC then
+               Def_Instance (Cl (Env.Bounded_Cl), TCn (T));
+            end if;
          end loop;
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Float_TC));
@@ -1182,6 +1189,42 @@ package body AHC.Builtins is
             --  like GHC's trace.
             Ignore := Def_Global
               ("primTraceStr", Mono (FN (String_T2, TC (Env.Unit_TC))));
+            --  System.Directory and System.Process (M142): paths and
+            --  arguments as Strings; failures are IOErrors carrying
+            --  GHC's location strings.
+            declare
+               Bool_T2 : constant Real_Type_Id := TC (Env.Bool_TC);
+               Int_T2  : constant Real_Type_Id := TC (Env.Int_TC);
+               Unit_T2 : constant Real_Type_Id := TC (Env.Unit_TC);
+               Strs    : constant Real_Type_Id :=
+                 AP (TC (Env.List_TC), String_T2);
+               MStr    : constant Real_Type_Id :=
+                 AP (TC (Env.Maybe_TC), String_T2);
+               Res3    : constant Real_Type_Id :=
+                 AP (AP (AP (TC (Env.Tuple_TCs (3)), Int_T2), String_T2),
+                     String_T2);
+            begin
+               Ignore := Def_Global
+                 ("primDirExists", Mono (FN (String_T2, IO_T (Bool_T2))));
+               Ignore := Def_Global
+                 ("primFileExists", Mono (FN (String_T2, IO_T (Bool_T2))));
+               Ignore := Def_Global
+                 ("primListDir", Mono (FN (String_T2, IO_T (Strs))));
+               --  0 mkdir, 1 unlink, 2 rmdir, 3 chdir
+               Ignore := Def_Global
+                 ("primPathOp",
+                  Mono (FN (String_T2, FN (Int_T2, IO_T (Unit_T2)))));
+               Ignore := Def_Global
+                 ("primRename",
+                  Mono (FN (String_T2, FN (String_T2, IO_T (Unit_T2)))));
+               --  0 getCurrentDirectory, 1 getHomeDirectory
+               Ignore := Def_Global
+                 ("primDirQuery", Mono (FN (Int_T2, IO_T (String_T2))));
+               --  location, argv (program first), stdin to feed
+               Ignore := Def_Global
+                 ("primProcRun",
+                  Mono (FN (String_T2, FN (Strs, FN (MStr, IO_T (Res3))))));
+            end;
             Ignore := Def_Global
               ("primHGetLine",
                Mono (FN (TC (Env.Int_TC), IO_T (String_T2))));

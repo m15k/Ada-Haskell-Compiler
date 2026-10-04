@@ -1,0 +1,7 @@
+caught: printf: bad formatting char 'q'
+caught: printf: argument list ended prematurely
+caught: printf: formatting string ended prematurely
+caught: printf: bad formatting char 'd'
+caught: printf: bad formatting char 's'
+caught: printf: formatting string ended prematurely
+caught: printf: bad argument

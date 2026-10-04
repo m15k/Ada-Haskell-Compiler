@@ -108,6 +108,9 @@ typedef struct AhcCatch {
 #include <sys/mman.h>
 #include <unistd.h>
 #include <signal.h>
+#include <dirent.h>
+#include <spawn.h>
+#include <sys/wait.h>
 
 #define AHC_TASK_STACK (64ul * 1024 * 1024)
 
@@ -1556,9 +1559,13 @@ static AhcNode *int_from_dec(const char *sdec) {
 }
 
 AhcNode *ahc_mk_ratlit(long contag, const char *n, const char *d) {
+  /* Both bignums before the constructor that owns them: the own
+     collector's allocation-order invariant (found in M142). */
+  AhcNode *nn = int_from_dec(n);
+  AhcNode *dd = int_from_dec(d);
   AhcNode *r = ahc_mk_con(contag, 2);
-  r->u.con.fields[0] = int_from_dec(n);
-  r->u.con.fields[1] = int_from_dec(d);
+  r->u.con.fields[0] = nn;
+  r->u.con.fields[1] = dd;
   return r;
 }
 
@@ -3010,12 +3017,13 @@ static AhcNode *mk_just(AhcNode *v) {
 #define IOE_INAPPROPRIATE_TYPE 8
 #define IOE_OTHER              9
 #define IOE_INVALID_ARGUMENT   10
+#define IOE_UNSATISFIED        11   /* GHC's UnsatisfiedConstraints (M142) */
 
-static const char *const ioe_type_names[11] = {
+static const char *const ioe_type_names[12] = {
   "already exists", "does not exist", "resource busy",
   "resource exhausted", "end of file", "illegal operation",
   "permission denied", "user error", "inappropriate type", "failed",
-  "invalid argument"
+  "invalid argument", "unsatisfied constraints"
 };
 static const char *const arith_names[6] = {
   "arithmetic overflow", "arithmetic underflow", "loss of precision",
@@ -3033,6 +3041,7 @@ static int ioe_type_of_errno(int e) {
     return IOE_RESOURCE_EXHAUSTED;
   case EISDIR: case ENOTDIR: return IOE_INAPPROPRIATE_TYPE;
   case EINVAL: case ENAMETOOLONG: case ELOOP: return IOE_INVALID_ARGUMENT;
+  case ENOTEMPTY: return IOE_UNSATISFIED;
   default: return IOE_OTHER;
   }
 }
@@ -3152,7 +3161,7 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
       n = exc_put_c(buf, n, cap, ": ");
     }
     n = exc_put_c(buf, n, cap,
-                  t >= 0 && t < 11 ? ioe_type_names[t] : "failed");
+                  t >= 0 && t < 12 ? ioe_type_names[t] : "failed");
     if (desc->u.con.contag == CONS_TAG) {
       n = exc_put_c(buf, n, cap, " (");
       n = exc_put_list(buf, n, cap, desc);
@@ -5908,6 +5917,308 @@ static FILE *ahc_handle_rw(long id, const char *what, int want_write) {
   return f;
 }
 
+/* ----- System.Directory and System.Process (M142) -------------------
+   Paths and arguments arrive as Haskell Strings and leave as UTF-8 C
+   strings; an embedded NUL is an IOError, never a silent truncation.
+   Errors carry GHC's location strings (copied from runghc's output)
+   and the errno-derived type, so `show` of the IOError matches GHC. */
+
+/* A Haskell String as a fresh NUL-terminated C string (caller frees);
+   an embedded NUL raises InvalidArgument at LOC. */
+static char *hs_cstr(AhcNode *s, const char *loc) {
+  StrBuf b = {0, 0, 0};
+  sb_hs(&b, s);
+  if (b.len && memchr(b.p, 0, b.len)) {
+    free(b.p);
+    exc_throw_io(IOE_INVALID_ARGUMENT, loc,
+                 "embedded NUL in a path or argument", NULL);
+  }
+  sb_ch(&b, 0);
+  return b.p;
+}
+
+static void dir_throw(const char *loc, int e, const char *path) {
+  exc_throw_io(ioe_type_of_errno(e), loc, strerror(e), path);
+}
+
+static AhcNode *io_dir_exists(AhcNode **env, AhcNode *w) {
+  char *p = hs_cstr(env[0], "doesDirectoryExist");
+  struct stat st;
+  int ok = stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+  (void)w;
+  free(p);
+  return mk_bool(ok);
+}
+static AhcNode *p_dir_exists(AhcNode *p) {
+  AhcNode **e = ahc_env(1); e[0] = p;
+  return ahc_mk_fun(io_dir_exists, e);
+}
+
+static AhcNode *io_file_exists(AhcNode **env, AhcNode *w) {
+  char *p = hs_cstr(env[0], "doesFileExist");
+  struct stat st;
+  int ok = stat(p, &st) == 0 && !S_ISDIR(st.st_mode);
+  (void)w;
+  free(p);
+  return mk_bool(ok);
+}
+static AhcNode *p_file_exists(AhcNode *p) {
+  AhcNode **e = ahc_env(1); e[0] = p;
+  return ahc_mk_fun(io_file_exists, e);
+}
+
+/* Every entry, "." and ".." included, in the OS's order (GHC does not
+   sort). Built child-first, so the list is reversed at the end. */
+static AhcNode *io_list_dir(AhcNode **env, AhcNode *w) {
+  char *p = hs_cstr(env[0], "getDirectoryContents");
+  DIR *d = opendir(p);
+  struct dirent *de;
+  AhcNode *rev, *acc;
+  (void)w;
+  if (!d) {
+    int e = errno;
+    AhcNode *ioe = mk_ioerror(ioe_type_of_errno(e),
+                              "getDirectoryContents:openDirStream",
+                              strerror(e), p);
+    free(p);
+    exc_throw_ioe(ioe);
+  }
+  free(p);
+  rev = ahc_mk_con(NIL_TAG, 0);
+  while ((de = readdir(d)) != NULL) {
+    /* Child before owner (the own collector's allocation-order
+       invariant): the name first, then the cons cell. */
+    AhcNode *nm = ahc_mk_string_len(de->d_name, strlen(de->d_name));
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+    c->u.con.fields[0] = nm;
+    c->u.con.fields[1] = rev;
+    rev = c;
+  }
+  closedir(d);
+  acc = ahc_mk_con(NIL_TAG, 0);
+  while (rev->u.con.contag == CONS_TAG) {
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+    c->u.con.fields[0] = rev->u.con.fields[0];
+    c->u.con.fields[1] = acc;
+    acc = c;
+    rev = rev->u.con.fields[1];
+  }
+  return acc;
+}
+static AhcNode *p_list_dir(AhcNode *p) {
+  AhcNode **e = ahc_env(1); e[0] = p;
+  return ahc_mk_fun(io_list_dir, e);
+}
+
+/* One path, one syscall, one GHC location: mkdir / unlink / rmdir /
+   chdir. Which is env[1] (an Int). */
+static AhcNode *io_path_op(AhcNode **env, AhcNode *w) {
+  static const char *const locs[4] = {
+    "createDirectory", "removeLink", "removeDirectory",
+    "setCurrentDirectory:changeWorkingDirectory"
+  };
+  long which = ahc_eval(env[1])->u.i;
+  char *p = hs_cstr(env[0], locs[which & 3]);
+  int r;
+  (void)w;
+  switch (which) {
+  case 0:  r = mkdir(p, 0777); break;
+  case 1:  r = unlink(p); break;
+  case 2:  r = rmdir(p); break;
+  default: r = chdir(p); break;
+  }
+  if (r != 0) {
+    int e = errno;
+    AhcNode *ioe = mk_ioerror(ioe_type_of_errno(e), locs[which & 3],
+                              strerror(e), p);
+    free(p);
+    exc_throw_ioe(ioe);
+  }
+  free(p);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_path_op(AhcNode *p, AhcNode *which) {
+  AhcNode **e = ahc_env(2); e[0] = p; e[1] = which;
+  return ahc_mk_fun(io_path_op, e);
+}
+
+static AhcNode *io_rename(AhcNode **env, AhcNode *w) {
+  const char *loc = "renameFile:renamePath:rename";
+  char *a = hs_cstr(env[0], loc);
+  char *b = hs_cstr(env[1], loc);
+  (void)w;
+  if (rename(a, b) != 0) {
+    int e = errno;
+    AhcNode *ioe = mk_ioerror(ioe_type_of_errno(e), loc, strerror(e), a);
+    free(a); free(b);
+    exc_throw_ioe(ioe);
+  }
+  free(a); free(b);
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_rename(AhcNode *a, AhcNode *b) {
+  AhcNode **e = ahc_env(2); e[0] = a; e[1] = b;
+  return ahc_mk_fun(io_rename, e);
+}
+
+/* getCurrentDirectory (which 0) and getHomeDirectory (which 1). */
+static AhcNode *io_dir_query(AhcNode **env, AhcNode *w) {
+  long which = ahc_eval(env[0])->u.i;
+  (void)w;
+  if (which == 0) {
+    char *buf = getcwd(NULL, 0);
+    AhcNode *r;
+    if (!buf) dir_throw("getCurrentDirectory:getWorkingDirectory", errno, NULL);
+    r = ahc_mk_string_len(buf, strlen(buf));
+    free(buf);
+    return r;
+  } else {
+    const char *h = getenv("HOME");
+    if (!h) exc_throw_io(IOE_NO_SUCH_THING, "getHomeDirectory",
+                         "no HOME in the environment", NULL);
+    return ahc_mk_string_len(h, strlen(h));
+  }
+}
+static AhcNode *p_dir_query(AhcNode *which) {
+  AhcNode **e = ahc_env(1); e[0] = which;
+  return ahc_mk_fun(io_dir_query, e);
+}
+
+/* Run argv (head = program, searched on PATH) to completion.
+   env[0] = GHC location for spawn failures ("callProcess", ...),
+   env[1] = argv :: [String], env[2] = Maybe String stdin.
+   Nothing: the child inherits stdin/stdout/stderr. Just s: all three
+   are pipes - s is fed, stdout and stderr captured - drained together
+   with poll() so neither side can deadlock on a full pipe. The
+   scheduler is blocked while the child runs (documented). Returns
+   (exit code, stdout, stderr); a signal n is code -n, as GHC's
+   ExitFailure (-n). */
+extern char **environ;
+static AhcNode *io_proc_spawn(AhcNode **env, AhcNode *w) {
+  StrBuf locb = {0, 0, 0};
+  AhcNode *cell, *inp;
+  char **argv = NULL;
+  size_t argc = 0, i;
+  pid_t pid;
+  int capture, rc, status, code;
+  int in_p[2] = {-1, -1}, out_p[2] = {-1, -1}, err_p[2] = {-1, -1};
+  posix_spawn_file_actions_t fa;
+  StrBuf ob = {0, 0, 0}, eb = {0, 0, 0}, ib = {0, 0, 0};
+  AhcNode *res;
+  (void)w;
+  sb_hs(&locb, env[0]);
+  sb_ch(&locb, 0);
+  for (cell = ahc_eval(env[1]); cell->u.con.contag == CONS_TAG;
+       cell = ahc_eval(cell->u.con.fields[1])) {
+    argv = realloc(argv, sizeof(char *) * (argc + 2));
+    if (!argv) ahc_die("out of memory");
+    argv[argc++] = hs_cstr(cell->u.con.fields[0], locb.p);
+  }
+  if (argc == 0) ahc_die("System.Process: empty argument vector");
+  argv[argc] = NULL;
+  inp = ahc_eval(env[2]);
+  capture = inp->u.con.contag == JUST_TAG;
+  if (capture) sb_hs(&ib, inp->u.con.fields[0]);
+  posix_spawn_file_actions_init(&fa);
+  if (capture) {
+    if (pipe(in_p) || pipe(out_p) || pipe(err_p))
+      dir_throw(locb.p, errno, NULL);
+    posix_spawn_file_actions_adddup2(&fa, in_p[0], 0);
+    posix_spawn_file_actions_adddup2(&fa, out_p[1], 1);
+    posix_spawn_file_actions_adddup2(&fa, err_p[1], 2);
+    posix_spawn_file_actions_addclose(&fa, in_p[1]);
+    posix_spawn_file_actions_addclose(&fa, out_p[0]);
+    posix_spawn_file_actions_addclose(&fa, err_p[0]);
+  }
+  rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&fa);
+  if (rc != 0) {
+    /* GHC: "<prog>: <caller>: posix_spawnp: does not exist (...)". */
+    StrBuf lb = {0, 0, 0};
+    AhcNode *ioe;
+    sb_cstr(&lb, locb.p);
+    sb_cstr(&lb, ": posix_spawnp");
+    sb_ch(&lb, 0);
+    if (capture) {
+      close(in_p[0]); close(in_p[1]); close(out_p[0]);
+      close(out_p[1]); close(err_p[0]); close(err_p[1]);
+    }
+    ioe = mk_ioerror(ioe_type_of_errno(rc), lb.p, strerror(rc), argv[0]);
+    for (i = 0; i < argc; i++) free(argv[i]);
+    free(argv); free(lb.p); free(locb.p); free(ib.p);
+    exc_throw_ioe(ioe);
+  }
+  if (capture) {
+    struct sigaction ign, old;
+    size_t off = 0;
+    int in_open = 1, out_open = 1, err_open = 1;
+    close(in_p[0]); close(out_p[1]); close(err_p[1]);
+    fcntl(in_p[1], F_SETFL, fcntl(in_p[1], F_GETFL, 0) | O_NONBLOCK);
+    if (ib.len == 0) { close(in_p[1]); in_open = 0; }
+    /* A child that closes stdin early must not kill us with SIGPIPE. */
+    memset(&ign, 0, sizeof ign);
+    ign.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &ign, &old);
+    while (out_open || err_open || in_open) {
+      struct pollfd pf[3];
+      int n = 0, k;
+      if (out_open) { pf[n].fd = out_p[0]; pf[n].events = POLLIN; n++; }
+      if (err_open) { pf[n].fd = err_p[0]; pf[n].events = POLLIN; n++; }
+      if (in_open)  { pf[n].fd = in_p[1];  pf[n].events = POLLOUT; n++; }
+      if (poll(pf, n, -1) < 0) {
+        if (errno == EINTR) continue;
+        break;
+      }
+      for (k = 0; k < n; k++) {
+        if (!pf[k].revents) continue;
+        if (pf[k].fd == in_p[1]) {
+          ssize_t m = write(in_p[1], ib.p + off, ib.len - off);
+          if (m > 0) off += (size_t)m;
+          if ((m < 0 && errno != EAGAIN && errno != EINTR)
+              || off >= ib.len) {
+            close(in_p[1]); in_open = 0;
+          }
+        } else {
+          char buf[65536];
+          ssize_t m = read(pf[k].fd, buf, sizeof buf);
+          if (m > 0) {
+            StrBuf *dst = pf[k].fd == out_p[0] ? &ob : &eb;
+            ssize_t j;
+            for (j = 0; j < m; j++) sb_ch(dst, buf[j]);
+          } else if (m == 0 || (errno != EINTR && errno != EAGAIN)) {
+            if (pf[k].fd == out_p[0]) { close(out_p[0]); out_open = 0; }
+            else { close(err_p[0]); err_open = 0; }
+          }
+        }
+      }
+    }
+    sigaction(SIGPIPE, &old, NULL);
+  }
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+    ;
+  code = WIFEXITED(status) ? WEXITSTATUS(status)
+       : WIFSIGNALED(status) ? -WTERMSIG(status) : 1;
+  for (i = 0; i < argc; i++) free(argv[i]);
+  free(argv); free(locb.p); free(ib.p);
+  {
+    /* Components before the tuple that owns them (allocation-order
+       invariant). */
+    AhcNode *c_n = ahc_mk_int(code);
+    AhcNode *o_s = ahc_mk_string_len(ob.p ? ob.p : "", ob.len);
+    AhcNode *e_s = ahc_mk_string_len(eb.p ? eb.p : "", eb.len);
+    res = ahc_mk_con(1, 3);
+    res->u.con.fields[0] = c_n;
+    res->u.con.fields[1] = o_s;
+    res->u.con.fields[2] = e_s;
+  }
+  free(ob.p); free(eb.p);
+  return res;
+}
+static AhcNode *p_proc_spawn(AhcNode *loc, AhcNode *argv, AhcNode *inp) {
+  AhcNode **e = ahc_env(3); e[0] = loc; e[1] = argv; e[2] = inp;
+  return ahc_mk_fun(io_proc_spawn, e);
+}
+
 static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
   static const char *modes[4] = {"r", "w", "a", "r+"};
   StrBuf pb = {0, 0, 0};
@@ -6709,6 +7020,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_getline, *ahc_prim_getcontents, *ahc_prim_readfile,
   *ahc_prim_h_open, *ahc_prim_h_close, *ahc_prim_h_put_str,
   *ahc_prim_trace_str,
+  *ahc_prim_dir_exists, *ahc_prim_file_exists, *ahc_prim_list_dir,
+  *ahc_prim_path_op, *ahc_prim_rename, *ahc_prim_dir_query,
+  *ahc_prim_proc_run,
   *ahc_prim_h_get_line, *ahc_prim_h_get_char,
   *ahc_prim_h_get_contents, *ahc_prim_h_is_eof, *ahc_prim_h_flush,
   *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
@@ -6897,6 +7211,13 @@ void ahc_rts_init(void) {
   ahc_prim_h_close = mk_prim1(p_h_close);
   ahc_prim_h_put_str = mk_prim2(p_h_put_str);
   ahc_prim_trace_str = mk_prim1(p_trace_str);
+  ahc_prim_dir_exists = mk_prim1(p_dir_exists);
+  ahc_prim_file_exists = mk_prim1(p_file_exists);
+  ahc_prim_list_dir = mk_prim1(p_list_dir);
+  ahc_prim_path_op = mk_prim2(p_path_op);
+  ahc_prim_rename = mk_prim2(p_rename);
+  ahc_prim_dir_query = mk_prim1(p_dir_query);
+  ahc_prim_proc_run = mk_prim3(p_proc_spawn);
   ahc_prim_h_get_line = mk_prim1(p_h_get_line);
   ahc_prim_h_get_char = mk_prim1(p_h_get_char);
   ahc_prim_h_get_contents = mk_prim1(p_h_get_contents);
