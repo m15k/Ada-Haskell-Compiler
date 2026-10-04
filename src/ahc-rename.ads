@@ -163,6 +163,16 @@ package AHC.Rename is
      with Post =>
        (for all R of Res.Syn_Res =>
           (if R.Is_Own then Res.Own_Syns.Contains (R.Name)
-           else R.Rec.Bad or else Core."/=" (R.Rec.Core_Rhs, Core.No_Type)));
+           else R.Rec.Bad or else Core."/=" (R.Rec.Core_Rhs, Core.No_Type)))
+       --  Every instance declaration minted its Instance_Info unless
+       --  resolving it failed (and said so): Kinds and the desugarer
+       --  find it ONLY through Decl_Inst (M142).
+       and then Natural (Res.Decl_Inst.Length) = Natural (Arena.Last_Decl)
+       and then
+         (Diagnostics.Has_Errors (Bag)
+          or else
+            (for all D of Arena.Top_Decls =>
+               (if Syntax."=" (Arena.Node (D).Kind, Syntax.Instance_D)
+                then Core."/=" (Res.Decl_Inst (Positive (D)), 0))));
 
 end AHC.Rename;

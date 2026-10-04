@@ -242,14 +242,14 @@ package body AHC.Kinds is
                   return T;
                when Core.TApp_T =>
                   return Core.Type_Id
-                    (M.Add (Core.Type_Node'
-                       (Kind => Core.TApp_T,
-                        T_Fun => Core.Real_Type_Id
+                    (Builtins.Make_App
+                       (M, Env,
+                        Core.Real_Type_Id
                           (Subst_Syn (Core.Type_Id (N.T_Fun),
                                       Vars, Args)),
-                        T_Arg => Core.Real_Type_Id
+                        Core.Real_Type_Id
                           (Subst_Syn (Core.Type_Id (N.T_Arg),
-                                      Vars, Args)))));
+                                      Vars, Args))));
                when Core.TFun_T =>
                   return Core.Type_Id
                     (M.Add (Core.Type_Node'
@@ -383,10 +383,8 @@ package body AHC.Kinds is
                      K := KR;
                   end;
                   Result := Core.Type_Id
-                    (M.Add (Core.Type_Node'
-                       (Kind => Core.TApp_T,
-                        T_Fun => Core.Real_Type_Id (Result),
-                        T_Arg => Args (I))));
+                    (Builtins.Make_App
+                       (M, Env, Core.Real_Type_Id (Result), Args (I)));
                end loop;
                Out_Kind := Core.Kind_Id (K);
             end;
@@ -523,30 +521,12 @@ package body AHC.Kinds is
                              KTo => KR)),
                           N.Span);
                   --  `(->) a b` written as an application is the
-                  --  arrow: build the TFun every other pass expects
-                  --  (M142).
-                  declare
-                     FN : constant Core.Type_Node :=
-                       M.Node (Core.Real_Type_Id (RF));
-                  begin
-                     if FN.Kind = Core.TApp_T
-                       and then M.Node (FN.T_Fun).Kind = Core.TCon_T
-                       and then Core."=" (Core.TyCon_Id
-                                  (M.Node (FN.T_Fun).Con), Env.Arrow_TC)
-                     then
-                        Result := Core.Type_Id
-                          (M.Add (Core.Type_Node'
-                             (Kind => Core.TFun_T,
-                              From => FN.T_Arg,
-                              To => Core.Real_Type_Id (RA))));
-                     else
-                        Result := Core.Type_Id
-                          (M.Add (Core.Type_Node'
-                             (Kind => Core.TApp_T,
-                              T_Fun => Core.Real_Type_Id (RF),
-                              T_Arg => Core.Real_Type_Id (RA))));
-                     end if;
-                  end;
+                  --  arrow: Make_App builds the TFun every other pass
+                  --  expects (M142).
+                  Result := Core.Type_Id
+                    (Builtins.Make_App
+                       (M, Env, Core.Real_Type_Id (RF),
+                        Core.Real_Type_Id (RA)));
                   Kind := Core.Kind_Id (KR);
                end;
 
@@ -580,9 +560,8 @@ package body AHC.Kinds is
                      return;
                   end if;
                   Result := Core.Type_Id
-                    (M.Add (Core.Type_Node'
-                       (Kind => Core.TApp_T, T_Fun => List_Con,
-                        T_Arg => Core.Real_Type_Id (RE))));
+                    (Builtins.Make_App
+                       (M, Env, List_Con, Core.Real_Type_Id (RE)));
                end;
 
             when Tuple_T =>
@@ -610,10 +589,9 @@ package body AHC.Kinds is
                            return;
                         end if;
                         Acc := Core.Type_Id
-                          (M.Add (Core.Type_Node'
-                             (Kind => Core.TApp_T,
-                              T_Fun => Core.Real_Type_Id (Acc),
-                              T_Arg => Core.Real_Type_Id (RI))));
+                          (Builtins.Make_App
+                             (M, Env, Core.Real_Type_Id (Acc),
+                              Core.Real_Type_Id (RI)));
                      end loop;
                      Result := Acc;
                   end;
@@ -1004,10 +982,8 @@ package body AHC.Kinds is
                  M.Add (Core.Type_Node'(Kind => Core.TVar_T, Tv => Tv));
             begin
                Result_T := Core.Type_Id
-                 (M.Add (Core.Type_Node'
-                    (Kind => Core.TApp_T,
-                     T_Fun => Core.Real_Type_Id (Result_T),
-                     T_Arg => TvT)));
+                 (Builtins.Make_App
+                    (M, Env, Core.Real_Type_Id (Result_T), TvT));
             end;
          end loop;
 

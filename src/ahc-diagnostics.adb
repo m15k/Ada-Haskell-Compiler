@@ -34,6 +34,9 @@ package body AHC.Diagnostics is
      (Bag : Diagnostic_Bag; Index : Positive) return Natural
    is (Bag.Items (Index).Origin);
 
+   function Current_Origin (Bag : Diagnostic_Bag) return Natural
+   is (Bag.Current);
+
    function Count (Bag : Diagnostic_Bag) return Natural
    is (Natural (Bag.Items.Length));
 

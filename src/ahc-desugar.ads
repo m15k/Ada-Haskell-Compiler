@@ -42,6 +42,13 @@ package AHC.Desugar is
       Annos : Kinds.Anno_Maps.Map;
       Preds : Kinds.Pred_Vectors.Vector :=
         Kinds.Pred_Vectors.Empty_Vector;
-      Warn_Matches : Boolean := False);
+      Warn_Matches : Boolean := False)
+     --  The renamer's declaration tables cover this arena exactly: the
+     --  desugarer completes the instance each declaration minted
+     --  through Decl_Inst, never by span (M142), as Kinds does.
+     with Pre =>
+       Natural (Res.Decl_Inst.Length) = Natural (Arena.Last_Decl)
+       and then Natural (Res.Decl_TyCon.Length) = Natural (Arena.Last_Decl)
+       and then Natural (Res.Decl_Con.Length) = Natural (Arena.Last_Con);
 
 end AHC.Desugar;

@@ -263,7 +263,12 @@ package body AHC.Optimizer is
       begin
          case N.Kind is
             when Con_C =>
-               DC := DataCon_Id (N.Con);
+               --  A constructor with strict fields forces them when
+               --  applied (Report 4.2.1): its application is not a
+               --  value whose fields may be bound lazily, so `case
+               --  T undefined of T _ -> e` must not be simplified to e.
+               DC := (if (for some S of M.Info (N.Con).Stricts => S)
+                      then 0 else DataCon_Id (N.Con));
             when App_C =>
                Con_Spine (N.Fun, DC, Args);
                if DC /= 0 then

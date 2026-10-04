@@ -255,6 +255,17 @@ package body AHC.Prelude_Core is
         Prim ("primsucc", "ahc_prim_succ_int");
       P_Pred : constant Real_Var_Id :=
         Prim ("primpred", "ahc_prim_pred_int");
+      --  Integer's are unbounded; Int's stop at (and succ/pred check)
+      --  maxBound/minBound, as GHC's (M142 review).
+      P_SuccZ : constant Real_Var_Id :=
+        Prim ("primsuccInteger", "ahc_prim_succ_integer");
+      P_PredZ : constant Real_Var_Id :=
+        Prim ("primpredInteger", "ahc_prim_pred_integer");
+      P_EnumFZ : constant Real_Var_Id :=
+        Prim ("primenumFromInteger", "ahc_prim_enum_from_integer");
+      P_EnumFThZ : constant Real_Var_Id :=
+        Prim ("primenumFromThenInteger",
+              "ahc_prim_enum_from_then_integer");
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
@@ -305,7 +316,14 @@ package body AHC.Prelude_Core is
       Ordering_GT : Real_DataCon_Id := 1;
 
       --  compare x y == LT / GT etc. built over primcompare.
-      function Cmp_Method (Want_Tag : Real_DataCon_Id; Negate : Boolean)
+      --  Swap compares y with x: `x > y` as `compare y x == LT`. For a
+      --  total order that is the same answer; for Double and Float it
+      --  is the IEEE one, because primcompare answers GT for an
+      --  UNORDERED pair (a NaN) both ways round, as GHC's compare does
+      --  - so `nan > 1` must not ask compare whether x is GT.
+      function Cmp_Method
+        (Want_Tag : Real_DataCon_Id; Negate : Boolean;
+         Swap : Boolean := False)
         return Real_Expr_Id
       is
          X : constant Real_Var_Id := Fresh ("x");
@@ -326,8 +344,9 @@ package body AHC.Prelude_Core is
            (Kind => Default_Alt, Span => Span, Alt_Body => F_E)));
          return Lam (X, Lam (Y, M.Add (Expr_Node'
            (Kind => Case_C, Span => Span,
-            Scrutinee => Ap2 (V (P_CmpP), V (X),
-                              V (Y)),
+            Scrutinee => (if Swap
+                          then Ap2 (V (P_CmpP), V (Y), V (X))
+                          else Ap2 (V (P_CmpP), V (X), V (Y))),
             Alts => Alts))));
       end Cmp_Method;
 
@@ -1762,8 +1781,18 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_CmpP));   --  compare
                      Ms.Append (Cmp_Method (Ordering_LT, False));  --  <
                      Ms.Append (Cmp_Method (Ordering_GT, True));   --  <=
-                     Ms.Append (Cmp_Method (Ordering_GT, False));  --  >
-                     Ms.Append (Cmp_Method (Ordering_LT, True));   --  >=
+                     if Inst.Head = Env.Double_TC
+                       or else Inst.Head = Env.Float_TC
+                     then
+                        --  IEEE: every comparison with a NaN is False.
+                        Ms.Append (Cmp_Method (Ordering_LT, False,
+                                               Swap => True));  --  >
+                        Ms.Append (Cmp_Method (Ordering_GT, True,
+                                               Swap => True));  --  >=
+                     else
+                        Ms.Append (Cmp_Method (Ordering_GT, False));
+                        Ms.Append (Cmp_Method (Ordering_LT, True));
+                     end if;
                      Ms.Append (Max_Min (True));
                      Ms.Append (Max_Min (False));
                      Give_Dict (Real_Instance_Id (II), Ms);
@@ -2076,8 +2105,10 @@ package body AHC.Prelude_Core is
                      declare
                         Fill : Expr_Id_Vectors.Vector;
                      begin
-                        Fill.Append (V (P_Succ));
-                        Fill.Append (V (P_Pred));
+                        Fill.Append (V (if Inst.Head = Env.Int_TC
+                                        then P_Succ else P_SuccZ));
+                        Fill.Append (V (if Inst.Head = Env.Int_TC
+                                        then P_Pred else P_PredZ));
                         declare
                            N : constant Real_Var_Id := Fresh ("n");
                         begin
@@ -2090,8 +2121,10 @@ package body AHC.Prelude_Core is
                            Fill.Append (Lam (N, V (Var_Id (N))));
                            --  ... and so is fromEnum.
                         end;
-                        Fill.Append (V (P_EnumF));
-                        Fill.Append (V (P_EnumFTh));
+                        Fill.Append (V (if Inst.Head = Env.Int_TC
+                                        then P_EnumF else P_EnumFZ));
+                        Fill.Append (V (if Inst.Head = Env.Int_TC
+                                        then P_EnumFTh else P_EnumFThZ));
                         Fill.Append (V (P_EnumFT));
                         Fill.Append (V (P_EnumFTT));
                         Give_Dict (Real_Instance_Id (II), Fill);

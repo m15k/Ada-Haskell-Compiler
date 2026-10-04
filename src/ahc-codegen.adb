@@ -612,7 +612,22 @@ package body AHC.CodeGen is
             when Con_C =>
                declare
                   Info : constant DataCon_Info := M.Info (N.Con);
+                  --  Strict fields (Report 4.2.1): bit I-1 set when
+                  --  field I is `!`; the runtime forces those
+                  --  arguments when the constructor is saturated.
+                  Mask : Long_Long_Integer := 0;
                begin
+                  for I in 1 .. Natural'Min (Info.Stricts.Last_Index, 62)
+                  loop
+                     if Info.Stricts (I) then
+                        Mask := Mask + 2 ** (I - 1);
+                     end if;
+                  end loop;
+                  if Mask /= 0 then
+                     return "ahc_mk_confun_strict(" & Img (Info.Tag)
+                       & ", " & Img (Info.Arity) & ", "
+                       & Long_Long_Integer'Image (Mask) & "L)";
+                  end if;
                   return "ahc_mk_confun(" & Img (Info.Tag) & ", "
                     & Img (Info.Arity) & ")";
                end;

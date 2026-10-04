@@ -479,10 +479,16 @@ x ^^ n = if n >= 0 then x ^ n else recip (x ^ negate n)
 -- internal). Char rides ord/chr over the Int instance; Double
 -- follows Report 6.3.4's numeric enumeration (the half-step rule).
 charSucc_ :: Char -> Char
-charSucc_ c = chr (ord c + 1)
+charSucc_ c =
+  if ord c == 1114111
+    then errorWithoutStackTrace "Prelude.Enum.Char.succ: bad argument"
+    else chr (ord c + 1)
 
 charPred_ :: Char -> Char
-charPred_ c = chr (ord c - 1)
+charPred_ c =
+  if ord c == 0
+    then errorWithoutStackTrace "Prelude.Enum.Char.pred: bad argument"
+    else chr (ord c - 1)
 
 charEF_ :: Char -> [Char]
 charEF_ a = charEFT_ a '\1114111'
@@ -572,6 +578,20 @@ instance Applicative IO where
   pure x = return x
   mf <*> mx = mf >>= \f -> mx >>= \x -> return (f x)
 
+-- The function type `(->) r` - the reader - as base has it (M142
+-- made `(->)` an ordinary type constructor for instance heads).
+instance Functor ((->) r) where
+  fmap f g = \x -> f (g x)
+
+instance Applicative ((->) r) where
+  pure x = \_ -> x
+  f <*> g = \x -> f x (g x)
+  liftA2 q f g = \x -> q (f x) (g x)
+
+instance Monad ((->) r) where
+  return x = \_ -> x
+  f >>= k = \r -> k (f r) r
+
 span :: (a -> Bool) -> [a] -> ([a], [a])
 span p xs = (takeWhile p xs, dropWhile p xs)
 
@@ -609,6 +629,31 @@ words s = case dropWhile primIsSpaceU s of
 
 until :: (a -> Bool) -> (a -> a) -> a -> a
 until p f x = if p x then x else until p f (f x)
+
+-- Bounded tuples, componentwise, for every tuple size AHC has.
+instance (Bounded a, Bounded b) => Bounded (a, b) where
+  minBound = (minBound, minBound)
+  maxBound = (maxBound, maxBound)
+
+instance (Bounded a, Bounded b, Bounded c) => Bounded (a, b, c) where
+  minBound = (minBound, minBound, minBound)
+  maxBound = (maxBound, maxBound, maxBound)
+
+instance (Bounded a, Bounded b, Bounded c, Bounded d) => Bounded (a, b, c, d) where
+  minBound = (minBound, minBound, minBound, minBound)
+  maxBound = (maxBound, maxBound, maxBound, maxBound)
+
+instance (Bounded a, Bounded b, Bounded c, Bounded d, Bounded e) => Bounded (a, b, c, d, e) where
+  minBound = (minBound, minBound, minBound, minBound, minBound)
+  maxBound = (maxBound, maxBound, maxBound, maxBound, maxBound)
+
+instance (Bounded a, Bounded b, Bounded c, Bounded d, Bounded e, Bounded f) => Bounded (a, b, c, d, e, f) where
+  minBound = (minBound, minBound, minBound, minBound, minBound, minBound)
+  maxBound = (maxBound, maxBound, maxBound, maxBound, maxBound, maxBound)
+
+instance (Bounded a, Bounded b, Bounded c, Bounded d, Bounded e, Bounded f, Bounded g) => Bounded (a, b, c, d, e, f, g) where
+  minBound = (minBound, minBound, minBound, minBound, minBound, minBound, minBound)
+  maxBound = (maxBound, maxBound, maxBound, maxBound, maxBound, maxBound, maxBound)
 
 -- Show instances over prelude types (real elaborated dictionaries) ----
 

@@ -75,6 +75,8 @@ package AHC.Kinds is
      --  by name (M75).
      with Pre =>
        Natural (Res.Decl_TyCon.Length) = Natural (Arena.Last_Decl)
-       and then Natural (Res.Decl_Con.Length) = Natural (Arena.Last_Con);
+       and then Natural (Res.Decl_Con.Length) = Natural (Arena.Last_Con)
+       --  ... and every instance from Decl_Inst, never by span (M142).
+       and then Natural (Res.Decl_Inst.Length) = Natural (Arena.Last_Decl);
 
 end AHC.Kinds;

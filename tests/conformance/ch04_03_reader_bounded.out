@@ -1,0 +1,16 @@
+7
+15
+10
+7
+20
+"42"
+(1,'x')
+[11,20,7]
+(False,'\NUL',-9223372036854775808)
+(True,GT)
+(False,False,False,False)
+(True,True,True,True,True)
+(False,False,False,False,False,False)
+(GT,True,True,True,True,True,'\1114111')
+()
+(LT,[LT,EQ,GT],EQ,2,GT,(LT,GT))

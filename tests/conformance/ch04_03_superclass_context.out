@@ -1,0 +1,9 @@
+(True,False)
+(True,False)
+(True,False)
+True
+(3 % 2,3 % 2)
+1 % 6
+(True,False)
+(GT,True)
+(Just [1,2],Just "x")
