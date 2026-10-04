@@ -51,3 +51,4 @@ the reason a conformance program does not exist for it.
 
 Runtime warnings differ by design: GHC's `-W` diagnostics are not
 part of conformance (the oracle captures stdout only).
+| lib, process | System.Process robustness notes (M142 security review) | After an exception while feeding a child's stdin, AHC sends SIGTERM and waits ~200 ms to reap it; a child that ignores SIGTERM is left a zombie until the program exits. Terminal state (ICANON/echo) is saved and restored at exit only for fds 0-2; a terminal opened as another handle is not restored. A nested spawn started while forcing another spawn's stdin inherits SIGPIPE ignored. |

@@ -4,8 +4,8 @@ AHC implements Haskell 2010 and ships its own small library set — no
 Hackage, no `cabal`, no GHC extensions. That rules out most of GitHub,
 but not the part of it worth reading: single-file interpreters,
 textbook exercise code, algorithm collections, puzzle solvers. This
-page lists **thirty-one repositories**, none written with AHC in mind, that
-AHC compiles today — twenty-eight of them run, three typecheck and
+page lists **thirty-two repositories**, none written with AHC in mind, that
+AHC compiles today — twenty-nine of them run, three typecheck and
 generate C — plus seven more it compiles as libraries, with the exact
 commands and the output they produce.
 
@@ -23,7 +23,7 @@ structural (AHC resolves imports beside the root file, so a
 touches a line of Haskell. Command-line arguments and stdin
 transcripts are stated too: they are input, not edits.
 
-## Round two — twenty-two, each diffed against GHC 9.4.8
+## Round two — twenty-three, each diffed against GHC 9.4.8
 
 `AGREES` means every byte of output and the exit status matched.
 
@@ -51,6 +51,7 @@ transcripts are stated too: they are input, not edits.
 | [patrickmn/euler-haskell](https://github.com/patrickmn/euler-haskell) | 3 files, 8 loc | Project Euler 1 | AGREES |
 | [nlarosa/HaskellRomanNumerals](https://github.com/nlarosa/HaskellRomanNumerals) | 1 file, 95 loc | Roman numerals, dispatching on `getProgName` | banner + CallStack |
 | [PLUkraine/rpn-calculator](https://github.com/PLUkraine/rpn-calculator) | 5 modules, 310 loc | Shunting-yard calculator; two of its modules each declare a `Token` type (blocked until M75) | banner only |
+| [supermacro/hangman](https://github.com/supermacro/hangman) | 1 file, 175 loc | Hangman over stdin, `forever`-driven (blocked until M142's scout fixes) | banner only |
 
 **Sixteen are byte-identical.** The other five agree on every byte of
 stdout and on the exit status, and differ only where AHC's
@@ -310,7 +311,7 @@ sets, puzzle solvers, RPN calculators, JSON parsers, brainfuck and
 Re-ordered after round two, by how often it actually came up across
 ~90 candidates:
 
-- **Hackage dependencies**, still first by a wide margin. In round
+- **Hackage dependencies**, still first by a wide margin. M142 closed the most frequent - `Debug.Trace`, `System.Random`, `Data.Map.Strict`, `Text.Printf`, `Control.Monad.State`, `System.Process`, `System.Directory` now exist, and `forever`/`isLetter`/`hSetEcho`/`hSetBuffering` were added after the M142 scout hit them in hangman programs; the rest of this list still stands. In round
   two's sample: `System.Random` and `Debug.Trace` (3 each), `parsec`
   (one repo, six modules of it), `System.Process`, `gloss`,
   `Data.Word8`, `Data.Map.Strict` (2 each), then `QuickCheck`,

@@ -2541,6 +2541,32 @@ alternatives to one another — they answer different questions:
 | share mutable state between those tasks | **protected values** | `Control.Concurrent.Protected` |
 | make a *pure* computation finish sooner using more cores | **sparks** | `Control.Parallel` |
 
+### Transcribe, don't reconstruct (M142)
+
+The library round added the modules real GitHub code reaches for
+first: `Debug.Trace`, `Data.Map.Strict`, `Control.Monad.State`,
+`Text.Printf`, `System.Random`, `System.Directory`, `System.Process`,
+and `BufferMode`/`hSetBuffering`/`hSetEcho`. The rule that made them
+byte-identical to GHC is to TRANSCRIBE the reference source rather
+than write a module "with the same behaviour": `Text.Printf` follows
+base-4.17's formatter line for line, `Data.Map` is containers-0.6.7's
+balancing, key-identity and error texts (`Data.Map.Internal`), and
+`System.Random` is random-1.2.1.2 on splitmix-0.1.3.2 to the bit -
+each algorithm cites the function it came from, and known-answer
+tests over thousands of draws prove it. The first drafts written
+from memory diverged in a dozen places the adversarial review then
+had to find (`%08.3d`, `%hhx`, which key `alter` keeps, the lazy
+`StateT`); the transcriptions did not.
+
+Two smaller rules came out of the same work. A module whose `show` of
+an error must match GHC carries GHC's LOCATION strings verbatim
+(`removeLink`, `renameFile:renamePath:rename`, `posix_spawnp`), copied
+from the oracle's output, not invented. And anything that runs a
+child process or touches the terminal restores what it changed on
+every exit path - termios at exit and on fatal signals, pipe ends
+close-on-exec at fd 3 and above, every resource released before an
+exception unwinds.
+
 ### 18.1 The one thing that surprises everyone
 
 **Tasks give you concurrency. Only sparks give you cores.**
