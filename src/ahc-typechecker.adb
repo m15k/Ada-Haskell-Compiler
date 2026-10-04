@@ -189,6 +189,41 @@ package body AHC.Typechecker is
         (Real_Meta_Id, Real_Type_Id,
          Hash => Meta_Hash, Equivalent_Keys => "=");
 
+      --  `a -> b` IS `(->) a b` (Report 4.1.2), but AHC keeps a
+      --  dedicated TFun node, which the arity and FFI code peel. A
+      --  rebuilt application that turns out to be `(->)` applied to
+      --  two arguments becomes TFun again, so inferred types, error
+      --  messages and those peelers see an ordinary arrow (M142).
+      function Make_App (F, A : Real_Type_Id) return Real_Type_Id is
+         NF : constant Type_Node := M.Node (Repr (F));
+      begin
+         if NF.Kind = TApp_T then
+            declare
+               H : constant Type_Node := M.Node (Repr (NF.T_Fun));
+            begin
+               if H.Kind = TCon_T and then TyCon_Id (H.Con) = Env.Arrow_TC
+               then
+                  return M.Add (Type_Node'
+                    (Kind => TFun_T, From => NF.T_Arg, To => A));
+               end if;
+            end;
+         end if;
+         return M.Add (Type_Node'(Kind => TApp_T, T_Fun => F, T_Arg => A));
+      end Make_App;
+
+      --  The TApp spine `(->) a b` of a function type, for unifying
+      --  it against a type-constructor variable applied to two
+      --  arguments (`k a b`, as in `instance Cat (->)`).
+      function Arrow_Spine (A, B : Real_Type_Id) return Real_Type_Id is
+         Arr : constant Real_Type_Id := M.Add (Type_Node'
+           (Kind => TCon_T, Con => Real_TyCon_Id (Env.Arrow_TC),
+            Refine => No_Refinement));
+         F : constant Real_Type_Id := M.Add (Type_Node'
+           (Kind => TApp_T, T_Fun => Arr, T_Arg => A));
+      begin
+         return M.Add (Type_Node'(Kind => TApp_T, T_Fun => F, T_Arg => B));
+      end Arrow_Spine;
+
       function Zonk_With
         (T : Real_Type_Id; Subst : Meta_Type_Maps.Map)
          return Real_Type_Id
@@ -208,10 +243,8 @@ package body AHC.Typechecker is
                   return Z;
                end;
             when TApp_T =>
-               return M.Add (Type_Node'
-                 (Kind => TApp_T,
-                  T_Fun => Zonk_With (N.T_Fun, Subst),
-                  T_Arg => Zonk_With (N.T_Arg, Subst)));
+               return Make_App (Zonk_With (N.T_Fun, Subst),
+                                Zonk_With (N.T_Arg, Subst));
             when TFun_T =>
                return M.Add (Type_Node'
                  (Kind => TFun_T,
@@ -337,6 +370,18 @@ package body AHC.Typechecker is
             end;
          end if;
 
+         --  A function type meets a type-constructor application
+         --  (`k a b ~ (a -> b)` binds k := (->)): compare the arrow as
+         --  its TApp spine (M142: instance Cat (->), PT (a -> r),
+         --  Functor ((->) r)).
+         if NA.Kind = TFun_T and then NB.Kind = TApp_T then
+            Unify (Arrow_Spine (NA.From, NA.To), ZB, Span);
+            return;
+         elsif NA.Kind = TApp_T and then NB.Kind = TFun_T then
+            Unify (ZA, Arrow_Spine (NB.From, NB.To), Span);
+            return;
+         end if;
+
          case NA.Kind is
             when TCon_T =>
                if not Same_Con_Erased (NA, NB) then
@@ -395,10 +440,8 @@ package body AHC.Typechecker is
                   return T;
                end;
             when TApp_T =>
-               return M.Add (Type_Node'
-                 (Kind => TApp_T,
-                  T_Fun => Subst_TyVars (N.T_Fun, Map),
-                  T_Arg => Subst_TyVars (N.T_Arg, Map)));
+               return Make_App (Subst_TyVars (N.T_Fun, Map),
+                                Subst_TyVars (N.T_Arg, Map));
             when TFun_T =>
                return M.Add (Type_Node'
                  (Kind => TFun_T,

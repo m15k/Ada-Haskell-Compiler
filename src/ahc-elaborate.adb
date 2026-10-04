@@ -114,6 +114,10 @@ package body AHC.Elaborate is
                         exit;
                      when TApp_T =>
                         T := N.T_Fun;
+                     when TFun_T =>
+                        --  An arrow instance's evidence (M142).
+                        Head := Env.Arrow_TC;
+                        exit;
                      when others =>
                         exit;
                   end case;

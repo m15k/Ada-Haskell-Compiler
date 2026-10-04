@@ -522,11 +522,31 @@ package body AHC.Kinds is
                              KFrom => Core.Real_Kind_Id (KA),
                              KTo => KR)),
                           N.Span);
-                  Result := Core.Type_Id
-                    (M.Add (Core.Type_Node'
-                       (Kind => Core.TApp_T,
-                        T_Fun => Core.Real_Type_Id (RF),
-                        T_Arg => Core.Real_Type_Id (RA))));
+                  --  `(->) a b` written as an application is the
+                  --  arrow: build the TFun every other pass expects
+                  --  (M142).
+                  declare
+                     FN : constant Core.Type_Node :=
+                       M.Node (Core.Real_Type_Id (RF));
+                  begin
+                     if FN.Kind = Core.TApp_T
+                       and then M.Node (FN.T_Fun).Kind = Core.TCon_T
+                       and then Core."=" (Core.TyCon_Id
+                                  (M.Node (FN.T_Fun).Con), Env.Arrow_TC)
+                     then
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TFun_T,
+                              From => FN.T_Arg,
+                              To => Core.Real_Type_Id (RA))));
+                     else
+                        Result := Core.Type_Id
+                          (M.Add (Core.Type_Node'
+                             (Kind => Core.TApp_T,
+                              T_Fun => Core.Real_Type_Id (RF),
+                              T_Arg => Core.Real_Type_Id (RA))));
+                     end if;
+                  end;
                   Kind := Core.Kind_Id (KR);
                end;
 
