@@ -1,0 +1,12 @@
+NoBuffering
+LineBuffering
+[NoBuffering,LineBuffering,BlockBuffering Nothing,BlockBuffering (Just 4096)]
+(True,True)
+forever stopped: user error (stop)
+1
+3
+6
+6
+42
+([True,True,False,False,False,True],[True,False],[True,True,False])
+([True,True,False,True,True,False],[True,False,False],[True,False,False])

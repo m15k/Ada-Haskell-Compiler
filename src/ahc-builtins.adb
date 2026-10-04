@@ -1233,6 +1233,18 @@ package body AHC.Builtins is
                Ignore := Def_Global
                  ("primDirQuery", Mono (FN (Int_T2, IO_T (String_T2))));
                --  location, argv (program first), stdin to feed
+               --  hSetBuffering/hGetBuffering (mode code), hSetEcho,
+               --  hGetEcho - handles as Int, as the other h* prims.
+               Ignore := Def_Global
+                 ("primHSetBuffering",
+                  Mono (FN (Int_T2, FN (Int_T2, IO_T (Unit_T2)))));
+               Ignore := Def_Global
+                 ("primHGetBuffering", Mono (FN (Int_T2, IO_T (Int_T2))));
+               Ignore := Def_Global
+                 ("primHSetEcho",
+                  Mono (FN (Int_T2, FN (Bool_T2, IO_T (Unit_T2)))));
+               Ignore := Def_Global
+                 ("primHGetEcho", Mono (FN (Int_T2, IO_T (Bool_T2))));
                Ignore := Def_Global
                  ("primProcRun",
                   Mono (FN (String_T2, FN (Strs, FN (MStr, IO_T (Res3))))));

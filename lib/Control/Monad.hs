@@ -7,6 +7,7 @@ module Control.Monad
   , (>=>), (<=<), join
   , liftM, liftM2, ap
   , guard, MonadPlus (..), msum, mfilter
+  , forever, foldM_, liftM3, (<$!>)
   ) where
 
 import Control.Applicative (Alternative (..))
@@ -96,3 +97,17 @@ liftM2 f ma mb = ma >>= \a -> mb >>= \b -> return (f a b)
 
 ap :: Monad m => m (a -> b) -> m a -> m b
 ap mf ma = mf >>= \f -> ma >>= \a -> return (f a)
+
+-- Found by the M142 repo scout (four hangman programs).
+forever :: Monad m => m a -> m b
+forever a = let a' = a >> a' in a'
+
+foldM_ :: Monad m => (b -> a -> m b) -> b -> [a] -> m ()
+foldM_ f z xs = foldM f z xs >> return ()
+
+liftM3 :: Monad m => (a1 -> a2 -> a3 -> r) -> m a1 -> m a2 -> m a3 -> m r
+liftM3 f m1 m2 m3 = do { a1 <- m1; a2 <- m2; a3 <- m3; return (f a1 a2 a3) }
+
+infixl 4 <$!>
+(<$!>) :: Monad m => (a -> b) -> m a -> m b
+f <$!> m = m >>= \x -> let z = f x in z `seq` return z

@@ -8,6 +8,7 @@ module System.IO
   , hGetLine, hGetChar, hGetContents, hIsEOF, hFlush
   , writeFile, appendFile
   , hPutText, hGetContentsText
+  , BufferMode (..), hSetBuffering, hGetBuffering, hSetEcho, hGetEcho
   ) where
 
 import Control.Exception (bracket)
@@ -97,3 +98,32 @@ hIsEOF (MkHandle i) = primHIsEOF i
 
 hFlush :: Handle -> IO ()
 hFlush (MkHandle i) = primHFlush i
+
+-- Buffering and echo (M142, found by the repo scout: interactive
+-- programs open with `hSetBuffering stdout NoBuffering`, and hangman
+-- hides the word with hSetEcho).
+data BufferMode = NoBuffering | LineBuffering | BlockBuffering (Maybe Int)
+  deriving (Eq, Ord, Read, Show)
+
+hSetBuffering :: Handle -> BufferMode -> IO ()
+hSetBuffering (MkHandle i) m = primHSetBuffering i code
+  where
+    code = case m of
+      NoBuffering              -> 1
+      LineBuffering            -> 2
+      BlockBuffering Nothing   -> 3
+      BlockBuffering (Just n)  -> if n <= 0 then 3 else 3 + n
+
+hGetBuffering :: Handle -> IO BufferMode
+hGetBuffering (MkHandle i) = fmap decode (primHGetBuffering i)
+  where
+    decode 1 = NoBuffering
+    decode 2 = LineBuffering
+    decode 3 = BlockBuffering Nothing
+    decode n = BlockBuffering (Just (n - 3))
+
+hSetEcho :: Handle -> Bool -> IO ()
+hSetEcho (MkHandle i) b = primHSetEcho i b
+
+hGetEcho :: Handle -> IO Bool
+hGetEcho (MkHandle i) = primHGetEcho i

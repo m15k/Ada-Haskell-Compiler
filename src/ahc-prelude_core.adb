@@ -1572,6 +1572,10 @@ package body AHC.Prelude_Core is
          BP ("primRename", "ahc_prim_rename");
          BP ("primDirQuery", "ahc_prim_dir_query");
          BP ("primProcRun", "ahc_prim_proc_run");
+         BP ("primHSetBuffering", "ahc_prim_h_set_buffering");
+         BP ("primHGetBuffering", "ahc_prim_h_get_buffering");
+         BP ("primHSetEcho", "ahc_prim_h_set_echo");
+         BP ("primHGetEcho", "ahc_prim_h_get_echo");
          BP ("primHGetLine", "ahc_prim_h_get_line");
          BP ("primHGetChar", "ahc_prim_h_get_char");
          BP ("primHGetContents", "ahc_prim_h_get_contents");

@@ -2,6 +2,7 @@ module Data.Char
   ( ord, chr
   , isUpper, isLower, isAlpha, isDigit, isAlphaNum, isSpace
   , isHexDigit, isOctDigit, isPunctuation
+  , isLetter, isAscii, isLatin1, isControl, isAsciiUpper, isAsciiLower
   , toUpper, toLower
   , digitToInt, intToDigit
   ) where
@@ -57,3 +58,24 @@ intToDigit n
   | n >= 0 && n <= 9   = chr (ord '0' + n)
   | n >= 10 && n <= 15 = chr (ord 'a' + n - 10)
   | otherwise          = error "Char.intToDigit: not a digit"
+
+-- The predicates GHC defines without the general-category table (M142,
+-- found by the repo scout): isLetter IS isAlpha in GHC, and Cc - the
+-- Control category - is exactly U+0000-001F and U+007F-009F.
+isLetter :: Char -> Bool
+isLetter = isAlpha
+
+isAscii :: Char -> Bool
+isAscii c = c < '\128'
+
+isLatin1 :: Char -> Bool
+isLatin1 c = c <= '\255'
+
+isControl :: Char -> Bool
+isControl c = c < ' ' || (c >= '\DEL' && c <= '\159')
+
+isAsciiUpper :: Char -> Bool
+isAsciiUpper c = c >= 'A' && c <= 'Z'
+
+isAsciiLower :: Char -> Bool
+isAsciiLower c = c >= 'a' && c <= 'z'

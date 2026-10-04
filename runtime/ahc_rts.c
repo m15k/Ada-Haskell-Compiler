@@ -113,6 +113,7 @@ typedef struct AhcCatch {
 #include <dirent.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <termios.h>
 
 #define AHC_TASK_STACK (64ul * 1024 * 1024)
 
@@ -6277,6 +6278,78 @@ static AhcNode *p_proc_spawn(AhcNode *loc, AhcNode *argv, AhcNode *inp) {
   return ahc_mk_fun(io_proc_spawn, e);
 }
 
+/* hSetBuffering / hGetBuffering, hSetEcho / hGetEcho (M142, found by
+   the repo scout). The buffer mode is remembered per slot: 1
+   NoBuffering, 2 LineBuffering, 3 BlockBuffering Nothing, 3 + n
+   BlockBuffering (Just n); 0 = never set, reported as GHC's default -
+   stderr unbuffered, a terminal line-buffered, anything else
+   block-buffered. Echo only means something on a terminal; elsewhere
+   setting it is a no-op and reading it is False, as GHC. */
+static long ahc_handle_buf[AHC_MAX_HANDLES];
+
+static AhcNode *io_h_set_buffering(AhcNode **env, AhcNode *w) {
+  long id = ahc_eval(env[0])->u.i;
+  long code = ahc_eval(env[1])->u.i;
+  FILE *f = ahc_handle(id, "hSetBuffering");
+  (void)w;
+  fflush(f);
+  if (code == 1) setvbuf(f, NULL, _IONBF, 0);
+  else if (code == 2) setvbuf(f, NULL, _IOLBF, BUFSIZ);
+  else setvbuf(f, NULL, _IOFBF, code > 3 ? (size_t)(code - 3) : BUFSIZ);
+  ahc_handle_buf[handle_slot(id)] = code;
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_h_set_buffering(AhcNode *h, AhcNode *m) {
+  AhcNode **e = ahc_env(2); e[0] = h; e[1] = m;
+  return ahc_mk_fun(io_h_set_buffering, e);
+}
+
+static AhcNode *io_h_get_buffering(AhcNode **env, AhcNode *w) {
+  long id = ahc_eval(env[0])->u.i;
+  FILE *f = ahc_handle(id, "hGetBuffering");
+  long s = handle_slot(id), code = ahc_handle_buf[s];
+  (void)w;
+  if (code == 0)
+    code = s == 2 ? 1 : isatty(fileno(f)) ? 2 : 3;
+  return ahc_mk_int(code);
+}
+static AhcNode *p_h_get_buffering(AhcNode *h) {
+  AhcNode **e = ahc_env(1); e[0] = h;
+  return ahc_mk_fun(io_h_get_buffering, e);
+}
+
+static AhcNode *io_h_set_echo(AhcNode **env, AhcNode *w) {
+  long id = ahc_eval(env[0])->u.i;
+  int on = ahc_eval(env[1])->u.con.contag == TRUE_TAG;
+  FILE *f = ahc_handle(id, "hSetEcho");
+  int fd = fileno(f);
+  struct termios t;
+  (void)w;
+  if (isatty(fd) && tcgetattr(fd, &t) == 0) {
+    if (on) t.c_lflag |= ECHO; else t.c_lflag &= ~(tcflag_t)ECHO;
+    tcsetattr(fd, TCSANOW, &t);
+  }
+  return ahc_mk_con(UNIT_TAG, 0);
+}
+static AhcNode *p_h_set_echo(AhcNode *h, AhcNode *b) {
+  AhcNode **e = ahc_env(2); e[0] = h; e[1] = b;
+  return ahc_mk_fun(io_h_set_echo, e);
+}
+
+static AhcNode *io_h_get_echo(AhcNode **env, AhcNode *w) {
+  long id = ahc_eval(env[0])->u.i;
+  FILE *f = ahc_handle(id, "hGetEcho");
+  int fd = fileno(f);
+  struct termios t;
+  (void)w;
+  return mk_bool(isatty(fd) && tcgetattr(fd, &t) == 0
+                 && (t.c_lflag & ECHO) != 0);
+}
+static AhcNode *p_h_get_echo(AhcNode *h) {
+  AhcNode **e = ahc_env(1); e[0] = h;
+  return ahc_mk_fun(io_h_get_echo, e);
+}
+
 static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
   static const char *modes[4] = {"r", "w", "a", "r+"};
   StrBuf pb = {0, 0, 0};
@@ -6306,6 +6379,7 @@ static AhcNode *io_h_open(AhcNode **env, AhcNode *w) {
   }
   ahc_handle_names[i] = pb.p;      /* the registry owns the path now */
   ahc_handle_modes[i] = (signed char)m;
+  ahc_handle_buf[i] = 0;   /* a reopened slot starts at the default */
   ahc_handles[i] = f;
   return ahc_mk_int(ahc_handle_gen[i] * AHC_MAX_HANDLES + i);
 }
@@ -7084,6 +7158,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_dir_exists, *ahc_prim_file_exists, *ahc_prim_list_dir,
   *ahc_prim_path_op, *ahc_prim_rename, *ahc_prim_dir_query,
   *ahc_prim_proc_run,
+  *ahc_prim_h_set_buffering, *ahc_prim_h_get_buffering,
+  *ahc_prim_h_set_echo, *ahc_prim_h_get_echo,
   *ahc_prim_h_get_line, *ahc_prim_h_get_char,
   *ahc_prim_h_get_contents, *ahc_prim_h_is_eof, *ahc_prim_h_flush,
   *ahc_prim_getargs, *ahc_prim_getprogname, *ahc_prim_exit_with,
@@ -7281,6 +7357,10 @@ void ahc_rts_init(void) {
   ahc_prim_rename = mk_prim2(p_rename);
   ahc_prim_dir_query = mk_prim1(p_dir_query);
   ahc_prim_proc_run = mk_prim3(p_proc_spawn);
+  ahc_prim_h_set_buffering = mk_prim2(p_h_set_buffering);
+  ahc_prim_h_get_buffering = mk_prim1(p_h_get_buffering);
+  ahc_prim_h_set_echo = mk_prim2(p_h_set_echo);
+  ahc_prim_h_get_echo = mk_prim1(p_h_get_echo);
   ahc_prim_h_get_line = mk_prim1(p_h_get_line);
   ahc_prim_h_get_char = mk_prim1(p_h_get_char);
   ahc_prim_h_get_contents = mk_prim1(p_h_get_contents);
