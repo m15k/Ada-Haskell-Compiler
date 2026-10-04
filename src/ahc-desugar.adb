@@ -817,17 +817,15 @@ package body AHC.Desugar is
                                  declare
                                     Scrut : constant Core.Real_Var_Id
                                       := Fresh ("$pg", Span);
+                                    Rhs : constant Core.Real_Expr_Id :=
+                                      Ds_Expr (QN.Bind_Expr);
+                                    Matched : constant Core.Real_Expr_Id
+                                      := Match_One
+                                           (Scrut, QN.Bind_Pat, Acc,
+                                            Fresh_Ref (VarE (GK, Span)));
                                  begin
                                     Acc := Let1
-                                      (Scrut,
-                                       Ds_Expr (QN.Bind_Expr),
-                                       Match_One
-                                         (Scrut,
-                                          QN.Bind_Pat,
-                                          Acc,
-                                          Fresh_Ref
-                                            (VarE (GK, Span))),
-                                       Span);
+                                      (Scrut, Rhs, Matched, Span);
                                  end;
                               when Let_S =>
                                  declare
@@ -897,12 +895,14 @@ package body AHC.Desugar is
                declare
                   Then_Sel : constant Builtins.Var_Maps.Cursor :=
                     Env.Values.Find (Table.Intern (">>"));
+                  E : constant Core.Real_Expr_Id := Ds_Expr (N.Expr);
+                  Rest : constant Core.Real_Expr_Id :=
+                    Ds_Do (Stmts, From + 1, Span);
                begin
                   return App2
                     (Global (Core.Var_Id
                        (Builtins.Var_Maps.Element (Then_Sel)), Span),
-                     Ds_Expr (N.Expr),
-                     Ds_Do (Stmts, From + 1, Span), Span);
+                     E, Rest, Span);
                end;
             when Bind_S =>
                declare
@@ -985,10 +985,13 @@ package body AHC.Desugar is
             case N.Kind is
                when Syntax.Expr_S =>
                   --  Boolean guard.
-                  return Bool_Case
-                    (Ds_Expr (N.Expr),
-                     Ds_Comp (Quals, From + 1, Head, Span),
-                     Nil (Span), Span);
+                  declare
+                     G : constant Core.Real_Expr_Id := Ds_Expr (N.Expr);
+                     Rest : constant Core.Real_Expr_Id :=
+                       Ds_Comp (Quals, From + 1, Head, Span);
+                  begin
+                     return Bool_Case (G, Rest, Nil (Span), Span);
+                  end;
                when Bind_S =>
                   declare
                      Rest : constant Core.Real_Expr_Id :=
@@ -1131,7 +1134,16 @@ package body AHC.Desugar is
                      Lit => (Core.L_String, N.Text))), Span);
 
             when App_E =>
-               return App1 (Ds_Expr (N.Fun), Ds_Expr (N.Arg), Span);
+               --  Ada leaves the order of actuals unspecified (RM
+               --  6.4(10)) and both mint fresh variables: desugar left
+               --  to right in named constants, or the Core numbering
+               --  depends on the optimisation level.
+               declare
+                  F : constant Core.Real_Expr_Id := Ds_Expr (N.Fun);
+                  A : constant Core.Real_Expr_Id := Ds_Expr (N.Arg);
+               begin
+                  return App1 (F, A, Span);
+               end;
 
             when Op_Chain_E =>
                return Error_Call ("unresolved operator chain", Span);
@@ -1190,8 +1202,13 @@ package body AHC.Desugar is
                end;
 
             when If_E =>
-               return Bool_Case (Ds_Expr (N.Cond), Ds_Expr (N.Then_E),
-                                 Ds_Expr (N.Else_E), Span);
+               declare
+                  C : constant Core.Real_Expr_Id := Ds_Expr (N.Cond);
+                  T : constant Core.Real_Expr_Id := Ds_Expr (N.Then_E);
+                  E : constant Core.Real_Expr_Id := Ds_Expr (N.Else_E);
+               begin
+                  return Bool_Case (C, T, E, Span);
+               end;
 
             when Case_E =>
                declare
