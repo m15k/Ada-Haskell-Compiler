@@ -1,0 +1,19 @@
+Conformance programs: each *.hs here is compiled by AHC and its stdout
+compared byte-for-byte with the .out beside it, which is GHC 9.4.8's
+output (scripts/run_conformance.sh; --oracle regenerates).
+
+Oracle packages
+---------------
+
+Most programs need only GHC's boot packages. The lib_* programs for
+libraries outside base need these installed for the oracle runghc,
+via ~/.ghcup/bin/cabal install --lib <pkg> --package-env default
+(recorded in ~/.ghc/<arch>-9.4.8/environments/default):
+
+  random-1.2.1.2     lib_random.hs        (installs splitmix with it)
+  splitmix-0.1.3.2   lib_splitmix.hs, lib_random.hs
+
+AHC's lib/System/Random.hs and lib/System/Random/SplitMix.hs are
+transcribed from exactly these versions' sources (cabal get
+random-1.2.1.2 splitmix-0.1.3.2); a different installed version may
+legitimately produce different numbers.

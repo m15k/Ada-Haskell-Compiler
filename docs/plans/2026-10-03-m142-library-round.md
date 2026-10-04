@@ -938,14 +938,14 @@ ok; `ch04_03_fun_instances`, `lib_numeric_float`, `lib_printf`,
 
 ### Task D0: install the oracle package
 
-- [ ] `~/.ghcup/bin/cabal update` then
+- [x] `~/.ghcup/bin/cabal update` then
       `~/.ghcup/bin/cabal install --lib random-1.2.1.2 --package-env default`
       (installs splitmix too). Verify: `echo 'import System.Random
       main = print (fst (randomR (1,6 :: Int) (mkStdGen 42)))' > /tmp/claude-501/r.hs && ~/.ghcup/bin/runghc /tmp/claude-501/r.hs`.
       Record the exact versions installed (`ghc-pkg list random
       splitmix --user`) in `tests/conformance/README` (create the
       section "Oracle packages" if absent).
-- [ ] `~/.ghcup/bin/cabal get random-1.2.1.2 splitmix-<installed>`
+- [x] `~/.ghcup/bin/cabal get random-1.2.1.2 splitmix-<installed>`
       into `/private/tmp/claude-501/random-src/` - the SOURCE every
       algorithm below is transcribed from. Cite the function name in
       a comment above each transcription.
@@ -963,7 +963,7 @@ gamma fix-up, and `instance Show SMGen` (`SMGen <seed> <gamma>` - copy
 its exact showsPrec). All arithmetic is AHC Word64 (wraps like GHC,
 M139); shifts via `Data.Bits.shiftR`/`shiftL`, `xor`, `popCount`.
 
-- [ ] **Known-answer regression** `lib_splitmix.hs`: for seeds
+- [x] **Known-answer regression** `lib_splitmix.hs`: for seeds
       `[0, 1, 42, -1, maxBound]` (as Word64 `fromIntegral`), print the
       first 20 `nextWord64` values, the two halves of `splitSMGen`
       after 3 steps (`show`), and 20 `nextInt`. Oracle with runghc
@@ -1014,7 +1014,7 @@ Word8..Word64, Char, Bool, Double, Float; `uniform`, `uniformR`
   (`clock_gettime(CLOCK_REALTIME)` in nanoseconds) unless an
   equivalent prim exists (`grep -n "clock_gettime\|getCPUTime"
   runtime/ahc_rts.c src/ahc-builtins.adb` first and reuse it).
-- [ ] **Known-answer regression** `lib_random.hs` (stdout,
+- [x] **Known-answer regression** `lib_random.hs` (stdout,
       deterministic): for seeds `[0, 1, 42, -1, maxBound :: Int]`:
       `take 1000 (randoms g :: [Int])`, `take 1000 (randoms g ::
       [Double])`, `take 1000 (randoms g :: [Bool])`, `take 1000
@@ -1025,18 +1025,38 @@ Word8..Word64, Char, Bool, Double, Float; `uniform`, `uniformR`
       the first/last 5 elements of each list rather than all 1000 to
       keep the golden readable - but sum ALL of them, so any drift
       anywhere shows.
-- [ ] **Property regression** `tests/exec/random_io.hs`: `randomRIO
+- [x] **Property regression** `tests/exec/random_io.hs`: `randomRIO
       (1, 6)` 1000 times all in range; two `newStdGen` give different
       first values; `setStdGen (mkStdGen 7) >> getStdGen` shows the
       same as `mkStdGen 7`; prints only booleans, so the `.out` is
       deterministic (oracle with runghc).
-- [ ] **Commit** `feat(lib): system.random, bit-for-bit random-1.2 on splitmix`
+- [x] **Commit** `feat(lib): system.random, bit-for-bit random-1.2 on splitmix`
 
 **Gate (Phase D):** `./scripts/run_gate.sh` → `GATE ok` (exec-own
 exercises the new GC roots), `lib_splitmix` and `lib_random`
 byte-identical, `random_io` passing, plus
 `AHC_OWN_VERIFY=1 ./scripts/run_own_soak.sh --quick` → PASS (new
 roots).
+
+**Phase D results:** `run_gate.sh` → unit/conformance/exec/exec-own/
+golden all rc=0, `GATE ok`. `lib_splitmix` (82 lines) and
+`lib_random` (229 lines: 5 seeds x 26 list summaries, reversed and
+degenerate ranges, uniform/uniformR, pairs/triples, genWord*R, split,
+plus two user generators that rely on RandomGen's defaults, one via
+`next`/`genRange`) byte-identical to random-1.2.1.2/splitmix-0.1.3.2
+FIRST RUN. `random_io` passes under both collectors; a global-slot
+churn program matches GHC under `AHC_GC=own` + `AHC_OWN_VERIFY=1` at
+64KB/256KB/4MB floors. Own soak (`AHC_OWN_VERIFY=1 --quick`): `OWN SOAK: PASS`. Deviations: (1)
+`primGlobalRef :: Int -> a -> IO (IORef a)` takes the initial value
+instead of creating the cell holding unit - reading a unit cell at
+`Maybe StdGen` would rely on constructor-tag coincidence; (2) the
+seed prim is `primEntropySeed` (getentropy), not `primClockNanos`:
+splitmix's `initialSeed` on unix/macOS IS `splitmix_init` = OS
+entropy, and CLOCK_REALTIME is microsecond-grained on Darwin (two
+`initStdGen` in a row came out equal); (3) Float draws match but
+compute at double precision (AHC's Float is a double); IO functions
+are at IO, not MonadIO. Golden diff renumber-only (stripped-id
+comparison identical for core_class_dict/core_exprs/core_patterns).
 
 ---
 

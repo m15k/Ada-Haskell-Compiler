@@ -37,6 +37,8 @@
 #include <math.h>
 #include <limits.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/random.h>   /* getentropy (System.Random's seed) */
 
 #if defined(AHC_GC_OWN)
 /* The collector campaign's own allocator (C1, leak mode -
@@ -3476,6 +3478,62 @@ static AhcNode *p_ioref_write_ret(AhcNode **a) {
   return ahc_mk_fun(io_ioref_write_ret, e);
 }
 
+/* Process-global IORefs (M142): what base builds with a top-level
+   `unsafePerformIO (newIORef ...)` - System.Random's theStdGen - AHC
+   has as numbered slots: `primGlobalRef n v` returns slot n's IORef,
+   creating it holding v (unevaluated) on the FIRST call for n; later
+   calls ignore v and return the same cell. (An initial value rather
+   than unit, so a slot is never read at a type it was not written
+   at.) Slot numbers are a registry: 0 System.Random.theStdGen,
+   1 System.Random.SplitMix.theSMGen.
+   ROOTING: the array is a zero-initialised static, so it lives in the
+   executable's __DATA segment (bss), which BOTH collectors scan as a
+   root on every cycle - Boehm registers the data segments at
+   GC_INIT, the own collector sweeps getsegmentdata("__DATA") in its
+   mark phase - exactly how the ahc_prim_* and generated g_* globals
+   stay alive. No write barrier: roots are re-scanned every cycle.
+   The cell is fully built (its field is the already-allocated v -
+   components before their owner) before it is published to the
+   slot. Green tasks switch only at binds and sparks never run IO,
+   so the check-then-create below cannot race. */
+#define AHC_GLOBAL_REFS 16
+static AhcNode *global_ref_slots[AHC_GLOBAL_REFS];
+static AhcNode *io_global_ref(AhcNode **env, AhcNode *w) {
+  AhcNode *n = ahc_eval(env[0]);
+  long i;
+  (void)w;
+  if (n->tag != AHC_INT || n->u.i < 0 || n->u.i >= AHC_GLOBAL_REFS)
+    ahc_die_raw("primGlobalRef: slot out of range");
+  i = n->u.i;
+  if (!global_ref_slots[i]) {
+    AhcNode *c = ahc_mk_con(1, 1);
+    c->u.con.fields[0] = env[1];
+    global_ref_slots[i] = c;
+  }
+  return global_ref_slots[i];
+}
+static AhcNode *p_global_ref(AhcNode *n, AhcNode *v) {
+  AhcNode **e = ahc_env(2);
+  e[0] = n; e[1] = v;
+  return ahc_mk_fun(io_global_ref, e);
+}
+
+/* 64 bits of OS entropy - the seed of System.Random's initStdGen and
+   global generator (M142). splitmix-0.1.3.2's cbits-unix/init.c
+   (`splitmix_init`) transcribed: getentropy, and its fallback
+   constant 0xfeed1000 on failure. (cbits-apple uses
+   SecRandomCopyBytes; getentropy is the same kernel source without
+   linking the Security framework.) A wall clock would not do:
+   CLOCK_REALTIME is microsecond-grained on Darwin, so two
+   initStdGen in a row came out equal. Returned as the Int with the
+   same 64 bits; the library reinterprets it as Word64. */
+static AhcNode *io_entropy_seed(AhcNode **env, AhcNode *w) {
+  uint64_t r;
+  (void)env; (void)w;
+  if (getentropy(&r, sizeof r) != 0) r = 0xfeed1000;
+  return ahc_mk_int((long)r);
+}
+
 /* ----- sockets (Network.Socket, M140) ------------------------------
    The constants and the sockaddr layout live HERE, so the library and
    the programs over it carry nothing platform-specific (ahttpd used to
@@ -6768,6 +6826,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_narrow, *ahc_prim_fix_cast, *ahc_prim_ioref_new,
   *ahc_prim_ioref_read, *ahc_prim_ioref_write, *ahc_prim_ioref_same,
   *ahc_prim_ioref_write_ret, *ahc_prim_bshru,
+  *ahc_prim_global_ref, *ahc_prim_entropy_seed,
   *ahc_prim_sock_listen, *ahc_prim_sock_accept, *ahc_prim_sock_connect,
   *ahc_prim_sock_recv, *ahc_prim_sock_send, *ahc_prim_sock_close,
   *ahc_prim_double_from_dec;
@@ -7025,6 +7084,8 @@ void ahc_rts_init(void) {
   ahc_prim_ioref_same = mk_prim2(p_ioref_same);
   ahc_prim_ioref_write_ret = ahc_mk_primn(3, p_ioref_write_ret);
   ahc_prim_bshru = mk_prim2(p_bshru);
+  ahc_prim_global_ref = mk_prim2(p_global_ref);
+  ahc_prim_entropy_seed = ahc_mk_fun(io_entropy_seed, NULL);
   ahc_prim_sock_listen = mk_prim2(p_sock_listen);
   ahc_prim_sock_accept = mk_prim1(p_sock_accept);
   ahc_prim_sock_connect = mk_prim2(p_sock_connect);

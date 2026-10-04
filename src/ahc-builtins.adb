@@ -1281,6 +1281,17 @@ package body AHC.Builtins is
                                                    FN (TV (B), IO_T (TV (B)))))));
                   Ignore := Def_Global
                     ("primShiftRU", Mono (FN (Int_T, FN (Int_T, Int_T))));
+                  --  Process-global IORef slots and an OS entropy seed
+                  --  (M142, System.Random): base's top-level
+                  --  unsafePerformIO newIORef, without unsafePerformIO.
+                  --  `primGlobalRef n v`: slot n's IORef, created
+                  --  holding v on the first call; one slot, one type
+                  --  (the slot registry is in runtime/ahc_rts.c).
+                  Ignore := Def_Global
+                    ("primGlobalRef",
+                     Poly1 (A2, FN (Int_T, FN (TV (A2), IO_T (Ref_A)))));
+                  Ignore := Def_Global
+                    ("primEntropySeed", Mono (IO_T (Int_T)));
                   --  Sockets (Network.Socket, M140): fds as Int, payloads
                   --  as Text; would-block is a value (-1 / Nothing).
                   declare
