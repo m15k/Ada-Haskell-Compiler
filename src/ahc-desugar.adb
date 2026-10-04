@@ -2086,14 +2086,19 @@ package body AHC.Desugar is
                      Binds : Core.Bind_Vectors.Vector;
                   begin
                      Ds_Method_Bodies (N.I_Decls, Binds);
-                     --  Attach to the Instance_Info with this span.
-                     for I in 1 .. M.Instances.Last_Index loop
-                        if Diagnostics."="
-                             (M.Instances (I).Span, N.Span)
-                        then
-                           M.Instances (I).Method_Binds := Binds;
+                     --  Attach to the Instance_Info the renamer minted
+                     --  for THIS declaration - by identity: spans are
+                     --  per-file offsets, and matching them overwrote a
+                     --  Prelude instance's methods with another
+                     --  module's (M142).
+                     declare
+                        I : constant Core.Instance_Id :=
+                          Res.Decl_Inst.Element (Positive (D));
+                     begin
+                        if Core."/=" (I, 0) then
+                           M.Instances (Core.Real_Instance_Id (I)).Method_Binds := Binds;
                         end if;
-                     end loop;
+                     end;
                   end;
                when Foreign_D =>
                   Ds_Foreign (D, N);

@@ -57,6 +57,8 @@ package AHC.Rename is
      (Positive, Core.Var_Id, Core."=");
    package DataCon_Res_Vectors is new Ada.Containers.Vectors
      (Positive, Core.DataCon_Id, Core."=");
+   package Inst_Res_Vectors is new Ada.Containers.Vectors
+     (Positive, Core.Instance_Id, Core."=");
 
    --  A Con_T occurrence that resolved to a type synonym (M75):
    --  either one this module declares - Kinds expands it from its
@@ -124,6 +126,12 @@ package AHC.Rename is
       --  declaration minted (M75).
       Decl_TyCon : TyCon_Res_Vectors.Vector;   --  Data_D/Newtype_D
       Decl_Con   : DataCon_Res_Vectors.Vector; --  Con_Node id
+      --  Instance_D -> the Instance_Info it minted. Kinds and the
+      --  desugarer complete THAT instance; they used to find it by
+      --  source span, and spans are per-file offsets - an instance in
+      --  one module whose span equalled one in another (the Prelude's
+      --  Show 6-tuple) had its method bodies overwritten (M142).
+      Decl_Inst  : Inst_Res_Vectors.Vector;
       Syn_Res    : Syn_Res_Maps.Map;          --  Con_T -> synonym
       Field_Res  : Field_Res_Maps.Map;        --  Rec_Update_E fields
       Own_Syns   : Builtins.Syn_Maps.Map;     --  this module's, uncached

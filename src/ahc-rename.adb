@@ -1889,11 +1889,11 @@ package body AHC.Rename is
                        ("$d" & Text (N.I_Class.Name)
                         & Text (M.Info (Core.Real_TyCon_Id (Head)).Name)),
                      Span => N.Span, Is_Global => True, others => <>));
-               Ignore : Core.Real_Instance_Id;
+               Inst : Core.Real_Instance_Id;
             begin
                --  Head_Vars and Context are filled by AHC.Kinds once
                --  the instance type is converted.
-               Ignore := M.Mint_Instance
+               Inst := M.Mint_Instance
                  ((Of_Class => Core.Class_Id (Cl), Head => Head,
                    Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
                    Context => Core.Constraint_Vectors.Empty_Vector,
@@ -1902,7 +1902,8 @@ package body AHC.Rename is
                    Method_Binds => Core.Bind_Vectors.Empty_Vector,
                    Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
                    Span => N.Span));
-               pragma Unreferenced (Ignore);
+               Res.Decl_Inst.Replace_Element
+                 (Positive (D), Core.Instance_Id (Inst));
             end;
          end;
       end Declare_Instance;
@@ -2003,6 +2004,7 @@ package body AHC.Rename is
       for I in 1 .. Natural (Arena.Last_Decl) loop
          Res.Decl_Var.Append (Core.No_Var);
          Res.Decl_TyCon.Append (Core.No_TyCon);
+         Res.Decl_Inst.Append (0);
          Res.Decl_Class.Append (Core.No_Class);
       end loop;
       for I in 1 .. Natural (Arena.Last_Con) loop

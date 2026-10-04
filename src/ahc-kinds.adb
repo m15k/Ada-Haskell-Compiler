@@ -1197,17 +1197,17 @@ package body AHC.Kinds is
                Convert_Assertion (A, TvEnv, Order, True, Ctx);
             end loop;
 
-            --  Locate the Instance_Info minted by the renamer (same
-            --  class, same span) and complete it.
-            for I in 1 .. M.Instances.Last_Index loop
-               if M.Instances (I).Of_Class = Cl_Id
-                 and then Diagnostics."="
-                            (M.Instances (I).Span, N.Span)
-               then
-                  M.Instances (I).Head_Vars := Order;
-                  M.Instances (I).Context := Ctx;
+            --  Complete the Instance_Info the renamer minted for THIS
+            --  declaration - by identity, never by span (M142).
+            declare
+               I : constant Core.Instance_Id :=
+                 Res.Decl_Inst.Element (Positive (D));
+            begin
+               if Core."/=" (I, 0) then
+                  M.Instances (Core.Real_Instance_Id (I)).Head_Vars := Order;
+                  M.Instances (Core.Real_Instance_Id (I)).Context := Ctx;
                end if;
-            end loop;
+            end;
          end;
       end Do_Instance;
 
