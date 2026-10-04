@@ -3,6 +3,7 @@
 -- atexit at process exit). SIGINT = 2 on every POSIX platform.
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import Foreign.Ptr
 foreign import ccall "wrapper" mkHandler :: IO () -> IO (FunPtr (IO ()))
 foreign import ccall "wrapper" mkSigH
   :: (Int -> IO ()) -> IO (FunPtr (Int -> IO ()))

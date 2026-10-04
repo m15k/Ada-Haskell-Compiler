@@ -3,6 +3,7 @@
 -- only then does the handler run. The first exception wins - a
 -- child raising during that join is lost, as in Ada.
 import Control.Concurrent.Scoped
+import AHC.Prim
 
 main :: IO ()
 main = do

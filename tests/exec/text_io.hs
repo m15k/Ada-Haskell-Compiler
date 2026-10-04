@@ -1,6 +1,7 @@
 -- Text IO pins: file round trip at the byte level, putText's raw
 -- fwrite, and the C-string bridges (AHC-only surface).
 import qualified Data.Text as T
+import Foreign.Marshal.Alloc
 main :: IO ()
 main = do
   let t = T.pack "h\233llo \955\28450 \128077"

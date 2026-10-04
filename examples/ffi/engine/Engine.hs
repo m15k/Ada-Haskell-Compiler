@@ -17,6 +17,8 @@ module Engine where
 import Data.Char (isAlpha, isDigit, isSpace, ord, toLower)
 import Data.List (group, intercalate, sort, sortBy)
 import qualified Data.Text as T
+import Data.Text (Text)
+import Foreign.C.Types
 
 --  OUTBOUND: provided by whatever language embeds this library.
 foreign import ccall "host_log" hostLog :: String -> IO ()

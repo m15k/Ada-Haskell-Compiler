@@ -4,6 +4,10 @@
 -- out of range").
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import AHC.FFI
+import Data.Int
+import Data.Word
+import Foreign.Marshal.Alloc
 foreign import ccall "llabs" c_llabs :: Int64 -> Int64
 
 main :: IO ()

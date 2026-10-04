@@ -2,6 +2,8 @@
 -- Int and Integer, for all four operators; a bad chr raises ErrorCall
 -- with GHC's text. The last one is left uncaught: its stderr line is
 -- the historical "ahc: divide by zero".
+import AHC.Prim
+import Control.Exception
 report :: SomeException -> IO ()
 report e = print (primExcKind e, primExcCode e)
 

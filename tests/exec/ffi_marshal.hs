@@ -1,5 +1,9 @@
 -- The Foreign.Marshal surface: raw memory, byte offsets, every
 -- width, pointer arithmetic, and C-string round trips.
+import AHC.FFI
+import Foreign.C.String
+import Foreign.Marshal.Alloc
+import Foreign.Ptr
 main :: IO ()
 main = do
   p <- mallocBytes 32

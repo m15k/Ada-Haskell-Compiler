@@ -7,6 +7,7 @@
 import Control.Concurrent.Scoped
 import Control.Exception
 import System.IO.Error
+import AHC.Prim
 
 main :: IO ()
 main = do

@@ -3,6 +3,11 @@
 -- the test's own FFI plumbing - the runtime never owns the fd.
 {-# LANGUAGE ForeignFunctionInterface #-}
 import Control.Concurrent.Scoped
+import AHC.FFI
+import Foreign.C.String
+import Foreign.C.Types
+import Foreign.Marshal.Alloc
+import Foreign.Ptr
 
 foreign import ccall "pipe" c_pipe :: Ptr a -> IO CInt
 foreign import ccall "write" c_write :: CInt -> String -> CInt -> IO CInt

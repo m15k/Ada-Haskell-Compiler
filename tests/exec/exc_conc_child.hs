@@ -3,6 +3,8 @@
 -- fails the scope with it at the join - where a catch around the
 -- scope receives it (M137). Every child is joined first.
 import Control.Concurrent.Scoped
+import AHC.Prim
+import Control.Exception
 
 msg :: SomeException -> String
 msg e = primExcMessage e

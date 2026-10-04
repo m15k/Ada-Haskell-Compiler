@@ -2,6 +2,7 @@
 -- primThrow/primThrowIO, primEvaluate, the accessors, and the
 -- rethrow rule - a thunk abandoned by a raise re-raises on its next
 -- force instead of reporting <<loop>>.
+import AHC.Prim
 main :: IO ()
 main = do
   -- catch an `error`, read it back through the accessors

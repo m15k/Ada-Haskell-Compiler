@@ -7,6 +7,11 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# OPTIONS_AHC_LINK -lsqlite3 #-}
 
+import AHC.FFI
+import Foreign.C.String
+import Foreign.C.Types
+import Foreign.Marshal.Alloc
+import Foreign.Ptr
 type ExecCB = Ptr () -> CInt -> Ptr (Ptr Char) -> Ptr (Ptr Char)
               -> IO CInt
 

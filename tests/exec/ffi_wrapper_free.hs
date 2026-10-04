@@ -3,6 +3,7 @@
 -- touching a collected closure.
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import Foreign.Ptr
 foreign import ccall "wrapper" mkSigH
   :: (Int -> IO ()) -> IO (FunPtr (Int -> IO ()))
 foreign import ccall "signal" c_signal

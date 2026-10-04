@@ -6,6 +6,7 @@
 -- handler caught it and the waiter parked forever.
 import Control.Concurrent.Scoped
 import Control.Concurrent.Protected
+import AHC.Prim
 
 main :: IO ()
 main = do

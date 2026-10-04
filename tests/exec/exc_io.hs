@@ -3,6 +3,8 @@
 -- is read back field by field through the primitives, and the
 -- values are GHC's (type index, location, description, filename).
 import System.IO
+import AHC.Prim
+import Control.Exception
 
 fields :: SomeException -> (Int, String, String, Maybe String)
 fields e = let i = primExcIO e

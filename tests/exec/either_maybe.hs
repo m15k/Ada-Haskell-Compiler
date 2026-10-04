@@ -1,3 +1,4 @@
+import Data.Maybe
 safeDiv :: Int -> Int -> Either String Int
 safeDiv _ 0 = Left "divide by zero"
 safeDiv a b = Right (a `div` b)
