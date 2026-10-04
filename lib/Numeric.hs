@@ -7,6 +7,7 @@ module Numeric
 
 import Data.Char (intToDigit, digitToInt, isDigit, isHexDigit,
                   isOctDigit)
+import Data.Ratio (numerator, denominator)
 
 showIntAtBase :: Int -> (Int -> Char) -> Int -> String -> String
 showIntAtBase base toDig n s
@@ -47,11 +48,13 @@ readOct s = readIntAtBase 8 isOctDigit s
 -- needs Show too (EXCLUSIONS).
 ------------------------------------------------------------------
 
--- | floatToDigits 10 x, for x >= 0: digits ds and exponent e with
--- x = 0.ds * 10^e, shortest, as GHC's.
+-- | floatToDigits base x, for x >= 0: digits ds and exponent e with
+-- x = 0.ds * base^e, shortest, as GHC's. Base 10 reads the digits off
+-- `show`; every other base runs GHC's Burger-Dybvig generator.
 floatToDigits :: (RealFloat a, Show a) => Integer -> a -> ([Int], Int)
-floatToDigits _ x
+floatToDigits base x
   | x == 0    = ([0], 0)
+  | base /= 10 = floatToDigitsGen base x
   | otherwise =
       let s = show x
           (mant, ex) = break (== 'e') s
@@ -65,6 +68,67 @@ floatToDigits _ x
           ds = reverse (dropWhile (== 0) (reverse (drop lead digits)))
           e = length ip + e10 - lead
       in (if null ds then [0] else ds, e)
+
+-- GHC.Float's floatToDigits, transcribed (Burger and Dybvig's free-
+-- format algorithm), for the bases other than 10. AHC's Prelude has no
+-- decodeFloat (EXCLUSIONS), so the IEEE double is decoded from its
+-- exact toRational - GHC's normalised 53-bit mantissa, subnormals
+-- included. A Float is a double at run time here, so it decodes as
+-- one (EXCLUSIONS).
+floatToDigitsGen :: RealFloat a => Integer -> a -> ([Int], Int)
+floatToDigitsGen base x =
+  let (f0, e0) = decodeDouble x
+      minExp0 = -1021 :: Int
+      p = 53 :: Int
+      b = 2 :: Integer
+      minExp = minExp0 - p
+      (f, e) = let n = minExp - e0 in
+               if n > 0 then (f0 `quot` (b ^ n), e0 + n) else (f0, e0)
+      (r, s, mUp, mDn) =
+        if e >= 0 then
+          let be = b ^ e in
+          if f == b ^ (p - 1)
+            then (f * be * b * 2, 2 * b, be * b, be)
+            else (f * be * 2, 2, be, be)
+        else
+          if e > minExp && f == b ^ (p - 1)
+            then (f * b * 2, b ^ (negate e + 1) * 2, b, 1)
+            else (f * 2, b ^ negate e * 2, 1, 1)
+      k0 :: Int
+      k0 = fromInteger (ceiling ((log (fromInteger (f + 1) :: Double)
+                     + fromIntegral e * log (fromInteger b))
+                    / log (fromInteger base)))
+      fixup n =
+        if n >= 0
+          then if r + mUp <= base ^ n * s then n else fixup (n + 1)
+          else if base ^ negate n * (r + mUp) <= s then n else fixup (n + 1)
+      k = fixup k0
+      gen ds rn sN mUpN mDnN =
+        let (dn, rn') = (rn * base) `quotRem` sN
+            mUpN' = mUpN * base
+            mDnN' = mDnN * base
+        in case (rn' < mDnN', rn' + mUpN' > sN) of
+             (True,  False) -> dn : ds
+             (False, True)  -> dn + 1 : ds
+             (True,  True)  -> if rn' * 2 < sN then dn : ds else dn + 1 : ds
+             (False, False) -> gen (dn : ds) rn' sN mUpN' mDnN'
+      rds = if k >= 0
+              then gen [] r (s * base ^ k) mUp mDn
+              else let bk = base ^ negate k in gen [] (r * bk) s (mUp * bk) (mDn * bk)
+  in (map fromInteger (reverse rds), k)
+
+decodeDouble :: RealFloat a => a -> (Integer, Int)
+decodeDouble x =
+  let q = toRational (abs x)
+      n = numerator q
+      d = denominator q
+      e = ilog2 n - ilog2 d - 52
+      m = if e >= 0 then n `div` (d * 2 ^ e) else (n * 2 ^ negate e) `div` d
+  in (if x < 0 then negate m else m, e)
+  where
+    ilog2 :: Integer -> Int
+    ilog2 v = go 0 v
+      where go acc w = if w <= 1 then acc else go (acc + 1) (w `div` 2)
 
 data FFFormat = FFExponent | FFFixed | FFGeneric
 

@@ -67,6 +67,8 @@ Spec: `docs/specs/2026-10-03-m142-library-round.md`.
 
 ## Phase A - Debug.Trace, Data.Map.Strict, toRational
 
+**Result (landed 2ba0f67, 808a00c, 726c95d; reworked by the review round):** Debug.Trace forces the whole message first, strips NULs with GHC's warning, writes once, and traceIO is a real IO primitive (`primTraceIO`); Data.Map is containers-0.6.7's algorithm in lib/Data/Map/Internal.hs with containers' key identity, error texts and the everyday API, Data.Map.Strict forcing every stored value (lib_map_api.hs); toRational landed as planned.
+
 ### Task A1: Debug.Trace
 
 **Files:** Create `lib/Debug/Trace.hs`, `tests/exec/debug_trace.hs` +
@@ -76,7 +78,7 @@ Spec: `docs/specs/2026-10-03-m142-library-round.md`.
 **Interfaces:** Produces `primTraceStr :: String -> ()` (forcing the
 result writes the string and a newline to stderr, unbuffered).
 
-- [ ] **Step 1: the primitive.** In `src/ahc-builtins.adb`, beside
+- [x] **Step 1: the primitive.** In `src/ahc-builtins.adb`, beside
       `primHPutStr` (~:1176):
 
 ```ada
@@ -109,7 +111,7 @@ static AhcNode *p_trace_str(AhcNode *s) {
       unit constructor and `mk_prim1` names the file already uses -
       check `grep -n "mk_prim1\|ahc_unit\|AHC_UNIT" runtime/ahc_rts.c`.)
 
-- [ ] **Step 2: the module.**
+- [x] **Step 2: the module.**
 
 ```haskell
 module Debug.Trace
@@ -143,7 +145,7 @@ traceIO :: String -> IO ()
 traceIO msg = case primTraceStr msg of () -> return ()
 ```
 
-- [ ] **Step 3: regression test** `tests/exec/debug_trace.hs` (an
+- [x] **Step 3: regression test** `tests/exec/debug_trace.hs` (an
       exec test, because conformance discards stderr). Stdout is set
       unbuffered so the interleaving in the `2>&1` capture is the
       evaluation order, identically under GHC:
@@ -174,16 +176,16 @@ main = do
       Report does not order, rewrite that line of the test to force
       order with `seq` and record the case in EXCLUSIONS (spec: do not
       chase evaluator artifacts).
-- [ ] **Step 4: goldens** - `./scripts/run_golden.sh`; if rc=1, verify
+- [x] **Step 4: goldens** - `./scripts/run_golden.sh`; if rc=1, verify
       renumber-only (strip `_[0-9]+`), then `--update`.
-- [ ] **Step 5: commit** `feat(lib): debug.trace, printing to stderr when the traced value is forced`
+- [x] **Step 5: commit** `feat(lib): debug.trace, printing to stderr when the traced value is forced`
 
 ### Task A2: Data.Map completions and Data.Map.Strict
 
 **Files:** Modify `lib/Data/Map.hs`; create `lib/Data/Map/Strict.hs`,
 `tests/conformance/lib_map_strict.hs` + `.out`.
 
-- [ ] **Step 1: Data.Map gains the missing lazy API** (export list and
+- [x] **Step 1: Data.Map gains the missing lazy API** (export list and
       bodies). Bodies, written over the existing `insert`, `lookup`,
       `delete`, `foldrWithKey`, `fromList`:
 
@@ -235,7 +237,7 @@ instance Functor (Map k) where
       `lib/Data/Map.hs:230` before using it; if it differs from
       containers' `(a -> k -> b -> a)`, adapt the lambda, not the
       export.
-- [ ] **Step 2: Data.Map.Strict** - same type; strict where containers
+- [x] **Step 2: Data.Map.Strict** - same type; strict where containers
       is:
 
 ```haskell
@@ -320,7 +322,7 @@ unionsWith f = foldl (unionWith f) L.empty
       `unionWith f a b` must equal containers' (left-biased: on a
       shared key the result is `f (a's value) (b's value)`) - the test
       pins it against GHC; adjust the fold direction to match if not.
-- [ ] **Step 3: regression** `tests/conformance/lib_map_strict.hs`:
+- [x] **Step 3: regression** `tests/conformance/lib_map_strict.hs`:
 
 ```haskell
 import qualified Data.Map as L
@@ -343,9 +345,9 @@ main = do
 ```
 
       Oracle with runghc; must be byte-identical.
-- [ ] **Step 4: verify** `./scripts/run_conformance.sh` (lib_map,
+- [x] **Step 4: verify** `./scripts/run_conformance.sh` (lib_map,
       lib_map_strict and every Data.Map user still ok).
-- [ ] **Step 5: commit** `feat(lib): data.map.strict, and the rest of data.map's everyday api`
+- [x] **Step 5: commit** `feat(lib): data.map.strict, and the rest of data.map's everyday api`
 
 ### Task A3: toRational has a runtime
 
@@ -358,7 +360,7 @@ stay), `runtime/ahc_rts.c`/`.h`, `src/ahc-codegen.adb` (~:1566-1580),
 **Interfaces:** Produces C `ahc_ratio_tag` (int, -1 until codegen sets
 it) and the prims behind `toRational` at Int, Integer, Double, Float.
 
-- [ ] **Step 1: the ratio tag reaches the runtime.** `src/ahc-codegen.adb`
+- [x] **Step 1: the ratio tag reaches the runtime.** `src/ahc-codegen.adb`
       already finds `:%`'s tag (`Ratio_Tag`, ~:1566-1580). Emit, in
       the root unit's init (where `main` is called), the line
       `ahc_ratio_tag = <Ratio_Tag>;` when `Ratio_Tag >= 0`. Declare
@@ -370,7 +372,7 @@ it) and the prims behind `toRational` at Int, Integer, Double, Float.
       a Rational can only flow into `fromRational`, whose C
       (`p_from_rational_d`, ~:1685) reads the two fields regardless
       of tag.
-- [ ] **Step 2: the C primitives** (in `ahc_rts.c`, beside
+- [x] **Step 2: the C primitives** (in `ahc_rts.c`, beside
       `p_from_rational_d`):
       - `p_to_rational_int(n)`: `n :% 1` (n evaluated; Int and Integer
         share the bignum-aware int representation - check `AHC_INT`
@@ -391,7 +393,7 @@ it) and the prims behind `toRational` at Int, Integer, Double, Float.
       - Float: widen to double first (exact), as GHC's `toRational`
         on Float is exact on the float's value - the test includes
         `0.1 :: Float` (= `13421773 % 134217728`).
-- [ ] **Step 3: the dictionaries.** In `Install_Bodies`
+- [x] **Step 3: the dictionaries.** In `Install_Bodies`
       (`src/ahc-prelude_core.adb`, the branch chain ending at the
       `else Give_Dict (..., Errs (Cl))` ~:2236), add before the `else`:
 
@@ -419,7 +421,7 @@ it) and the prims behind `toRational` at Int, Integer, Double, Float.
       The fixed-width source instances (`prelude/Prelude.hs:1082..1446`,
       `toRational a = toRational (toInteger ...)`) then work with no
       edit.
-- [ ] **Step 4: regression** `tests/conformance/lib_to_rational.hs`:
+- [x] **Step 4: regression** `tests/conformance/lib_to_rational.hs`:
 
 ```haskell
 import Data.Ratio
@@ -453,9 +455,9 @@ main = do
       (lib 23/24 row) that begins "Found in passing: the wired
       `Rational` that `toRational` returns has no Show/Eq/Num instance"
       - replace with a pointer to these two programs.
-- [ ] **Step 5: verify** goldens (renumber-only, then `--update`),
+- [x] **Step 5: verify** goldens (renumber-only, then `--update`),
       `./scripts/run_conformance.sh`.
-- [ ] **Step 6: commit** `fix(runtime): toRational has a runtime at int, integer, double and float`
+- [x] **Step 6: commit** `fix(runtime): toRational has a runtime at int, integer, double and float`
 
 **Gate (Phase A):** `./scripts/run_gate.sh` → `GATE ok`, with
 `debug_trace` (exec, both GC modes), `lib_map_strict`,
@@ -465,6 +467,8 @@ programs; golden diff renumber-only.
 ---
 
 ## Phase B - Control.Monad.State
+
+**Result (landed 983215d; reworked by the review round):** Control.Monad.State is the LAZY StateT (transformers' irrefutable matches), Control.Monad.State.Strict a distinct strict StateT (lib_monad_state_lazy.hs). The IO-loop memory growth (10^6 get/put steps ~1.3-1.5GB under both) is the runtime's, not the library's.
 
 ### Task B1: Data.Functor.Identity
 
@@ -593,7 +597,7 @@ module Control.Monad.State.Strict (module Control.Monad.State) where
 import Control.Monad.State
 ```
 
-- [ ] **Regression** `tests/conformance/lib_monad_state.hs`:
+- [x] **Regression** `tests/conformance/lib_monad_state.hs`:
 
 ```haskell
 import Control.Monad.State
@@ -638,9 +642,9 @@ main = do
   print r
 ```
 
-- [ ] **Verify** oracle + `./scripts/run_conformance.sh`.
-- [ ] **Commit** `feat(lib): control.monad.state without the monadstate class`
-- [ ] EXCLUSIONS: a lib row for Control.Monad.State - `MonadState`/
+- [x] **Verify** oracle + `./scripts/run_conformance.sh`.
+- [x] **Commit** `feat(lib): control.monad.state without the monadstate class`
+- [x] EXCLUSIONS: a lib row for Control.Monad.State - `MonadState`/
       `MonadIO` classes absent (no multi-parameter classes in Haskell
       2010); `lift` is StateT-only; `.Strict` is the same type.
 
@@ -650,6 +654,8 @@ main = do
 ---
 
 ## Phase C - instances over (->), then Text.Printf
+
+**Result (landed d465e74, 6b7bf7a; reworked by the review round):** Text.Printf is now base-4.17's code transcribed (modifier parser + field formatter per argument), so Char-as-integer, length-modifier narrowing, `#`-of-zero, precision-clears-zero and `*` arguments all match; floatToDigits honours non-10 bases (lib_float_to_digits.hs). `main = printf ...` needs main's result left unforced (tests/exec/printf_io_result.hs).
 
 ### Task C1: a function type unifies with (->) applied
 
@@ -662,7 +668,7 @@ conversion ~:518-522). Create `tests/conformance/ch04_03_fun_instances.hs`
 **Interfaces:** none new; behaviour: `k a b ~ (a -> b)` binds `k :=
 (->)`.
 
-- [ ] **Step 1: Unify.** Before `case NA.Kind is` (~:340), add:
+- [x] **Step 1: Unify.** Before `case NA.Kind is` (~:340), add:
 
 ```ada
          --  `a -> b` IS `(->) a b` (Report 4.1.2): AHC keeps a
@@ -695,7 +701,7 @@ conversion ~:518-522). Create `tests/conformance/ch04_03_fun_instances.hs`
 ```
 
       (match the field names exactly to `src/ahc-core.ads:157-174`.)
-- [ ] **Step 2: canonicalise back.** Wherever a TApp node is rebuilt -
+- [x] **Step 2: canonicalise back.** Wherever a TApp node is rebuilt -
       `Zonk_With` and `Subst_TyVars` in the typechecker, and the
       `App_T` case of `Convert` in Kinds - if the rebuilt node is
       `TApp (TApp (TCon Arrow_TC, x), y)`, emit `TFun (x, y)` instead.
@@ -703,11 +709,11 @@ conversion ~:518-522). Create `tests/conformance/ch04_03_fun_instances.hs`
       "(->) Int Int") and the arity/FFI code (refine.adb:290/393/563,
       ahc_main.adb:819/847/855, desugar.adb:1659-1695/1862/1913/1992),
       which peel TFun only, unchanged.
-- [ ] **Step 3: elaborate.** In `Solve_Ev`'s head walk add
+- [x] **Step 3: elaborate.** In `Solve_Ev`'s head walk add
       `when TFun_T => Head := Env.Arrow_TC; exit;` (the superclass and
       default-method evidence path; without it an arrow instance's
       superclass dictionary is `$dMISSING`).
-- [ ] **Step 4: regression** `tests/conformance/ch04_03_fun_instances.hs`:
+- [x] **Step 4: regression** `tests/conformance/ch04_03_fun_instances.hs`:
 
 ```haskell
 class Cat k where
@@ -760,11 +766,11 @@ main = do
       Oracle with runghc (it must compile under plain GHC 9.4 - drop
       the `Collect [c]` instance if GHC rejects it as unused/overlap;
       it is there to mirror Printf's shape).
-- [ ] **Step 5: verify** `./scripts/run_gate.sh`,
+- [x] **Step 5: verify** `./scripts/run_gate.sh`,
       `./scripts/run_differential.sh`,
       `./scripts/run_differential_types.sh`,
       `./scripts/run_fuzz_par.sh 300 6 1` (all ok).
-- [ ] **Step 6: commit** `feat(types): a function type unifies with (->) applied to two arguments, so instances over (->) resolve`
+- [x] **Step 6: commit** `feat(types): a function type unifies with (->) applied to two arguments, so instances over (->) resolve`
 
 ### Task C2: Numeric gains floatToDigits and the show*Float family
 
@@ -804,12 +810,12 @@ algorithm structure exactly (FFExponent / FFFixed / FFGeneric with
 to the function above. Negative numbers: `'-' : ...` of the absolute
 value, as GHC.
 
-- [ ] **Regression** `tests/conformance/lib_numeric_float.hs`: every
+- [x] **Regression** `tests/conformance/lib_numeric_float.hs`: every
       combination of {showEFloat, showFFloat, showGFloat} ×
       {Nothing, Just 0, Just 2, Just 10} × {0, 1, 0.1, 123.456,
       1.0e-4, 9.999999, 1.0e21, -2.5, 5.0e-324, 1.7976931348623157e308}
       printed one per line (`putStrLn (showFFloat p x "")`).
-- [ ] **Commit** `feat(lib): numeric's showffloat, showefloat and showgfloat, rounding ghc's shortest digits`
+- [x] **Commit** `feat(lib): numeric's showffloat, showefloat and showgfloat, rounding ghc's shortest digits`
 
 ### Task C3: Text.Printf
 
@@ -899,7 +905,7 @@ Errors - exact base texts, raised with `error` (base:
 A type mismatch (`%d` given a String) is
 `printf: bad formatting char 'd'` - verify each text against runghc.
 
-- [ ] **Regression** `tests/conformance/lib_printf.hs` - one line per
+- [x] **Regression** `tests/conformance/lib_printf.hs` - one line per
       case, built with `printf ... :: String` so the output is stdout:
 
 ```haskell
@@ -919,13 +925,13 @@ main = do
   printf "%d %d\n" (123456789012345678901234567890 :: Integer) (-1 :: Integer)
 ```
 
-- [ ] **Regression** `tests/exec/printf_errors.hs` (exec: the error
+- [x] **Regression** `tests/exec/printf_errors.hs` (exec: the error
       text is on stderr): catches each of the three errors with
       `Control.Exception.catch` on `ErrorCall` after `evaluate (length
       (printf ... :: String))`, printing the message. Oracle with
       `runghc ... > .out 2>&1`.
-- [ ] **Verify** conformance + exec.
-- [ ] **Commit** `feat(lib): text.printf, in base's shape`
+- [x] **Verify** conformance + exec.
+- [x] **Commit** `feat(lib): text.printf, in base's shape`
 
 **Gate (Phase C):** `./scripts/run_gate.sh` → `GATE ok`; both
 differential suites green; `./scripts/run_fuzz_par.sh 300 6 1` → 300
@@ -1062,6 +1068,8 @@ comparison identical for core_class_dict/core_exprs/core_patterns).
 
 ## Phase E - System.Directory, System.Process
 
+**Result (landed 6b7bf7a; reworked by the review round):** System.Directory has the package's renameFile/createDirectoryIfMissing/setCurrentDirectory texts and the passwd HOME fallback (lib_directory_errors.hs); System.Process captures per stream (readProcess inherits stderr), feeds stdin lazily, keeps every pipe end close-on-exec at fd >= 3, raises GHC's decoding/null-command/waitForProcess errors and releases everything on every throw path (tests/exec/process_streams.hs). The security pass below is still owed.
+
 All primitives raise `IOError` through the runtime's existing
 `exc_throw_io(type, loc, desc, path)` (`ahc_rts.c:3019`, errno type via
 `ioe_type_of_errno`), so `show` of the error matches GHC's
@@ -1106,7 +1114,7 @@ GHC's `loc` strings (e.g. `removeLink`, `getDirectoryContents:openDirStream`,
 `createDirectory`) are whatever runghc prints - copy them from the
 oracle output into the C `exc_throw_io` calls.
 
-- [ ] **Regression** `tests/exec/directory_ops.hs`: creates
+- [x] **Regression** `tests/exec/directory_ops.hs`: creates
       `m142_tmp/a/b` with `createDirectoryIfMissing True`, writes a
       file, `doesFileExist`/`doesDirectoryExist` on file/dir/missing,
       `sort <$> listDirectory`, `renameFile`, `removeFile`,
@@ -1114,7 +1122,7 @@ oracle output into the C `exc_throw_io` calls.
       `show`), `getCurrentDirectory` (prints only `isSuffixOf "m142_tmp"`
       after `setCurrentDirectory`), cleans up. Run from the test's own
       temp directory; the `.out` is runghc's.
-- [ ] **Commit** `feat(lib): system.directory over posix`
+- [x] **Commit** `feat(lib): system.directory over posix`
 
 ### Task E2: System.Process
 
@@ -1170,7 +1178,7 @@ toExit n = ExitFailure n
 output (`readCreateProcess: <cmd> (exit 1): failed`) - the
 `callProcess` text above is the expected shape, verify it.
 
-- [ ] **Regression** `tests/exec/process_ops.hs`: `system "echo hi"`,
+- [x] **Regression** `tests/exec/process_ops.hs`: `system "echo hi"`,
       `rawSystem "/bin/echo" ["a b", "c"]` (one argv element with a
       space - proves no shell), `readProcess "/bin/cat" [] "piped\n"`,
       `readProcessWithExitCode "/bin/sh" ["-c", "echo out; echo err 1>&2; exit 3"] ""`,
@@ -1178,7 +1186,7 @@ output (`readCreateProcess: <cmd> (exit 1): failed`) - the
       `callProcess "/usr/bin/false" []` caught and shown, a missing
       executable caught and shown, `system "kill -9 $$"` →
       `ExitFailure (-9)`. Stdout unbuffered; `.out` from runghc 2>&1.
-- [ ] **Commit** `feat(lib): system.process over posix_spawn, with no shell unless asked`
+- [x] **Commit** `feat(lib): system.process over posix_spawn, with no shell unless asked`
 - [ ] **Security pass:** run `/security-review` on the branch (it
       spawns processes and touches the filesystem - CLAUDE.md step 5).
       Every finding is fixed or explicitly accepted in this plan file

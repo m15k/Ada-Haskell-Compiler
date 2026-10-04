@@ -1,0 +1,19 @@
+to-stderr
+readProcess: "out\n"
+(ExitFailure 3,"out\n","err\n")
+(ExitSuccess,"xxx","")
+(ExitSuccess,"abyyy","")
+"closed-stdin\n"
+"h\233llo \8364 \128512"
+system empty: system: invalid argument (null command)
+callCommand empty: ok
+bad utf8 readProcess: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 255)
+bad utf8 rpwec: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 255)
+bad utf8 stderr: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 254)
+truncated utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 195)
+surrogate utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 237)
+overlong utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 192)
+raise in stdin: boom
+raise in stdin, child ignores it: boom2
+waitpid fails: waitForProcess: does not exist (No child processes)
+system, waitpid fails: waitForProcess: does not exist (No child processes)

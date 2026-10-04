@@ -1,0 +1,19 @@
+rename dir src: dir_errors_wd/d: renameFile: inappropriate type (is a directory) | (False,False,False,Just "dir_errors_wd/d")
+rename dir src onto file: dir_errors_wd/d: renameFile: inappropriate type (is a directory) | (False,False,False,Just "dir_errors_wd/d")
+rename file onto dir: dir_errors_wd/d2: renameFile: inappropriate type (is a directory) | (False,False,False,Just "dir_errors_wd/d2")
+rename missing: dir_errors_wd/nope: renameFile:renamePath:rename: does not exist (No such file or directory) | (True,False,False,Just "dir_errors_wd/nope")
+rename missing onto dir: dir_errors_wd/d2: renameFile: inappropriate type (is a directory) | (False,False,False,Just "dir_errors_wd/d2")
+rename file into missing dir: dir_errors_wd/f.txt: renameFile:renamePath:rename: does not exist (No such file or directory) | (True,False,False,Just "dir_errors_wd/f.txt")
+rename ok: ok
+True
+mkdir -p through a file: dir_errors_wd/f.txt/sub: createDirectory: inappropriate type (Not a directory) | (False,False,False,Just "dir_errors_wd/f.txt/sub")
+mkdir -p through a file, deeper: dir_errors_wd/f.txt/sub/deeper: createDirectory: inappropriate type (Not a directory) | (False,False,False,Just "dir_errors_wd/f.txt/sub/deeper")
+mkdir -p onto a file: dir_errors_wd/f.txt: createDirectory: already exists (File exists) | (False,True,False,Just "dir_errors_wd/f.txt")
+mkdir onto a file: dir_errors_wd/f.txt: createDirectory: already exists (File exists) | (False,True,False,Just "dir_errors_wd/f.txt")
+mkdir -p ok: ok
+mkdir -p trailing slash: ok
+mkdir -p exists: ok
+True
+mkdir missing parent: dir_errors_wd/q/r: createDirectory: does not exist (No such file or directory) | (True,False,False,Just "dir_errors_wd/q/r")
+cd missing: dir_errors_wd/nope: changeWorkingDirectory: does not exist (No such file or directory) | (True,False,False,Just "dir_errors_wd/nope")
+cd file: dir_errors_wd/f.txt: changeWorkingDirectory: inappropriate type (Not a directory) | (False,False,False,Just "dir_errors_wd/f.txt")

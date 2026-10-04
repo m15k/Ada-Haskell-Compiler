@@ -1,0 +1,84 @@
+fromList [(1a,"one"),(2b,"TWO"),(3a,"three")]
+(fromList [(1a,"one"),(2b,"xtwo"),(3a,"three")],fromList [(1a,"one"),(2b,"2bxtwo"),(3a,"three")])
+(fromList [(1a,"one"),(2b,"TWO"),(3a,"three")],fromList [(1a,"one"),(2b,"xtwo"),(3a,"three")])
+(fromList [(1a,"one"),(2a,"two!"),(3a,"three")],fromList [(1a,"one"),(2a,"2atwo"),(3a,"three")])
+(fromList [(1a,"one"),(2a,"two?"),(3a,"three")],fromList [(1a,"one"),(2a,"two"),(3a,"three"),(9b,"new")])
+(fromList [(1a,"one"),(2a,"two"),(3a,"eerht")],fromList [(1a,"one"),(2a,"two"),(3a,"3a")])
+(fromList [(1a,"one"),(2a,"two!"),(3a,"three")],fromList [(1a,"one"),(2a,"two?"),(3a,"three")],fromList [(1a,"one"),(2a,"two"),(3a,"eerht")])
+(fromList [(1a,"one"),(2a,"two"),(3a,"three"),(4r,"quatre")],fromList [(1a,"one"),(2r,"deux"),(3a,"three"),(4r,"quatre")])
+(fromList [(1a,"one"),(2a,"twodeux"),(3a,"three"),(4r,"quatre")],fromList [(1a,"one"),(2r,"deuxtwo"),(3a,"three"),(4r,"quatre")])
+fromList [(1a,"oneuno"),(2a,"twodeux"),(3a,"three"),(4r,"quatre")]
+(fromList [(1a,"one"),(2a,"twodeux"),(3a,"three"),(4r,"quatre")],fromList [(1a,"one"),(2r,"deuxtwo"),(3a,"three"),(4r,"quatre")])
+(fromList [(2a,("two","deux"))],fromList [(2r,("deux","two"))],fromList [(2r,"deux")])
+(fromList [(1b,2)],fromList [(1b,3)])
+(fromList [(1b,2),(2c,3)],fromList [(1b,3)])
+fromList [(0m,"one"),(1m,"three")]
+(1,Just 1,Nothing,100,True)
+error: Map.!: given key is not an element in the map
+(["one","two","three"],["three","two","one"],"1aone2atwo3athree","1aone2atwo3athree")
+fromList [(1,'a'),(2,'c')]
+((1,71),(100,30),Just (1,71),Nothing)
+error: Map.findMin: empty map has no minimal element
+error: Map.findMax: empty map has no maximal element
+error: Map.deleteFindMin: can not return the minimal element of an empty map
+error: Map.deleteFindMax: can not return the maximal element of an empty map
+(fromList [(2a,"two"),(3a,"three")],fromList [(1a,"one"),(2a,"two")],fromList [])
+(True,True,((1a,"one"),fromList [(2a,"two"),(3a,"three")]))
+(Just ("one",fromList [(2a,"two"),(3a,"three")]),Just ("three",fromList [(1a,"one"),(2a,"two")]),Just ((1a,"one"),fromList [(2a,"two"),(3a,"three")]),Nothing)
+([(3a,"three"),(2a,"two"),(1a,"one")],[(1a,"one"),(2a,"two"),(3a,"three")])
+(False,True,True)
+(True,True)
+(fromList [(2,2),(4,4),(6,6),(8,8),(10,10)],fromList [(1,1),(3,3),(5,5),(7,7),(9,9)])
+(fromList [(1,'a'),(2,'b'),(3,'c')],fromList [(4,'d'),(5,'e'),(6,'f')])
+fromList [('c',30),('d',40)]
+fromList [('a',('a',1)),('c',('c',3))]
+(fromList [('b',2),('d',4)],fromList [('a',"1"),('c',"3")])
+((1a,"one"),(3a,"three"),Just 1,2)
+error: Map.elemAt: index out of range
+error: Map.elemAt: index out of range
+error: Map.findIndex: element is not in the map
+error: Map.deleteAt: index out of range
+fromList [(1a,"one"),(3a,"three")]
+(fromList [(1a,"one"),(2a,"two")],fromList [(3a,"three")],(fromList [(1a,"one")],fromList [(2a,"two"),(3a,"three")]),fromList [],fromList [])
+True
+(Just (1a,"one"),Just (3a,"three"),Just (2a,"two"),Just (2a,"two"))
+(Nothing,Nothing,Nothing,Nothing)
+(Just (3a,"three"),Just (1a,"one"))
+((fromList [(1a,"one")],fromList [(3a,"three")]),(fromList [(1a,"one")],Just "two",fromList [(3a,"three")]),(fromList [(1a,"one"),(2a,"two"),(3a,"three")],Nothing,fromList []))
+True
+(fromList [(1,71),(2,41),(3,11)],fromList [(1,'a'),(3,'c'),(5,'e')])
+(True,False)
+fromList [(0,'b'),(1,'e'),(2,'h'),(3,'i')]
+fromList [(0,"ba"),(1,"edc"),(2,"hgf"),(3,"i")]
+fromList [(0,"ba"),(1,"edc"),(2,"hgf"),(3,"i")]
+(fromList [(1,'b'),(2,'c')],fromList [(1,"ba"),(2,"c")])
+(fromList [(3,'c'),(5,'b')],fromList [(1,'x'),(2,'y')])
+([(1a,"one"),(2a,"two"),(3a,"three")],True,False,False)
+(6,fromList [('a',0),('b',1),('c',3)])
+("abc",fromList [('a',2),('b',4),('c',6)])
+[('a',1),('b',2)]
+(Just 1,fromList [('a',11),('b',2)])
+(Just 1,fromList [('b',2)])
+(Just 14,fromList [('a',1),('b',14)])
+fromList [('a',1),('b',200)]
+(LT,GT)
+(True,fromList [(1,'a')])
+(fromList [(1a,"one"),(2a,"two"),(3a,"three"),(4r,"quatre")],fromList [(1a,"one"),(2r,"deux"),(3a,"three"),(4r,"quatre")],fromList [],fromList [(1a,"one"),(2r,"deux"),(3a,"three"),(4r,"quatre")])
+(5050,24,100,1,100,True,False)
+error: Data.Foldable.maximum (for Data.Map): empty map
+error: Data.Foldable.minimum (for Data.Map): empty map
+Just (fromList [('a',2),('b',4),('c',6)])
+Nothing
+[fromList [('a',('a',1)),('b',('b',10))],fromList [('a',('a',1)),('b',('b',11))],fromList [('a',('a',2)),('b',('b',10))],fromList [('a',('a',2)),('b',('b',11))]]
+(fromList [(1a,3),(2a,3),(3a,5)],fromList [(1a,3),(2a,3),(3a,5)],fromList [(1a,3),(2a,3),(3a,5)],fromList [(1a,"1aone"),(2a,"2atwo"),(3a,"3athree")])
+strict fromDistinctAscList: Prelude.undefined
+2
+strict fromAscList: Prelude.undefined
+strict unionWith: Prelude.undefined
+strict mapMaybe: Prelude.undefined
+strict intersectionWith: Prelude.undefined
+1
+1
+strict map: Prelude.undefined
+strict mapWithKey: Prelude.undefined
+(100,1)
