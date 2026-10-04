@@ -79,17 +79,22 @@ the object cache with no second evaluator
 **The REPL and multi-module programs (M143).** `:load PATH` works
 on a program whose root file imports sibling modules, as in GHCi:
 the loaded file's directory is searched for its imports (through
-`$AHC_PATH`, below), the file's own imports become session imports
-- so imported names, `Q.qualified` names and a sibling module's
-types and constructors are usable at the prompt - and `:reload`
-re-reads every module from disk, so editing a sibling and typing
-`:r` takes effect. A type error in a sibling is reported with that
-sibling's file name; a missing module is reported by the driver's
-`ahc: cannot find module` line. `:! CMD` runs a shell command.
+`$AHC_PATH`, below), the file's own top-level imports (not ones inside
+a block comment) become session imports - so imported names,
+`Q.qualified` names and a sibling module's types and constructors are
+usable at the prompt - and `:reload` re-reads every module from disk,
+so editing a sibling and typing `:r` takes effect. A type error in a
+sibling is reported with that sibling's file name; a missing module
+lists every place that was searched. `:! CMD` (or `:!CMD`) runs a shell
+command. Session scoping follows GHCi: the generated session modules
+(`AhcReplSession_`, `AhcReplExpr_`; names no program imports) carry
+`{-# OPTIONS_AHC_SHADOW #-}`, which makes a module's own declarations
+shadow imports and the Prelude instead of being ambiguous with them -
+so `it = 4`, `lookup = 10` followed by `g = lookup + 1`, and a loaded
+file's `main` typed at the prompt all behave as in GHCi.
 `$AHC_PATH` is a colon-separated list of extra module directories
-(GHC's `-i`), searched after the root file's own directory and
-before dependencies and the stdlib; `ahc check`/`ahc build` honour
-it too.
+(GHC's `-i`), searched BEFORE the root file's own directory, then dependencies
+and the stdlib; `ahc check`/`ahc build` honour it too.
 
 **The decision** to use many small stages instead of a few big ones
 was made at the very start and never regretted. Small stages mean
@@ -1201,10 +1206,13 @@ Prelude, as they are not in GHC's; they live in GHC's modules, which
 are facades over the wired entities: `Foreign.Ptr` (`Ptr`, `FunPtr`,
 `nullPtr`, `castPtr`, `plusPtr`, `nullFunPtr`, `freeHaskellFunPtr`),
 `Foreign.C.Types` (`CChar`, `CInt`, `CUInt`, `CLong`, `CULong`,
-`CSize`), `Foreign.C.String` (`CString` = `Ptr Char`, `newCString`,
-`peekCString`, `peekCStringLen`), `Foreign.Marshal.Alloc`
-(`mallocBytes`, `free`), the umbrellas `Foreign`, `Foreign.C` and
-`Foreign.Marshal`, and `Data.Int`/`Data.Word` for `Int8`..`Word64`.
+`CSize`), `Foreign.C.String` (`CString` = `Ptr Char`, `CStringLen`,
+`newCString`, `peekCString`, `peekCStringLen`), `Foreign.Marshal.Alloc`
+(`mallocBytes`, `free`), the umbrellas `Foreign` (which, as in GHC,
+re-exports `Data.Bits`, `Data.Int`, `Data.Word`, `Foreign.Ptr` and
+`Foreign.Marshal`), `Foreign.C` and `Foreign.Marshal`. `CStringLen` is
+GHC's pair and `peekCStringLen` takes it; the curried primitive is
+`AHC.FFI.peekCStringLen`.
 The byte-offset `peekInt8`..`pokeDouble`/`peekPtr`/`pokePtr` family
 has no GHC home (GHC's is the `Storable` class) and lives in the
 AHC-only module `AHC.FFI`. Absent from GHC's modules: `Storable`,

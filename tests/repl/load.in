@@ -1,7 +1,7 @@
 :l tests/repl/fixture.hs
 area 6 7
 putStrLn (grid 2)
-Repl.main
+main
 extra :: Int; extra = 99
 extra
 :r

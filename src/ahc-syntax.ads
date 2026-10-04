@@ -458,6 +458,10 @@ package AHC.Syntax is
       --  internals and sees the WHOLE Prelude, where a user module
       --  sees only what GHC's Prelude exports (M144b).
       Is_Library      : Boolean := False;
+      --  {-# OPTIONS_AHC_SHADOW #-}: GHCi's scoping - this module's own
+      --  top-level names silently shadow imported and Prelude ones (no
+      --  ambiguity). Only the REPL's generated modules carry it.
+      Own_Shadows     : Boolean := False;
       Exports         : Entity_Vectors.Vector;
       Imports         : Import_Vectors.Vector;
       Top_Decls       : Decl_Id_Vectors.Vector;

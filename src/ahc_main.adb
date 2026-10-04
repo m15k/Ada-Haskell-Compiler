@@ -9,6 +9,7 @@
 
 with Ada.Command_Line;
 with Ada.IO_Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -287,6 +288,36 @@ procedure AHC_Main is
          end loop;
       end Collect_Link_Flags;
 
+      --  {-# OPTIONS_AHC_SHADOW #-} anywhere in the module (the REPL's
+      --  generated modules): GHCi scoping, own names shadow.
+      procedure Detect_Shadow
+        (Src   : AHC.Source_Text.Source;
+         Spans : AHC.Lexer.Span_Vectors.Vector;
+         Arena : in out AHC.Syntax.Module_Arena)
+      is
+         Key : constant String := "OPTIONS_AHC_SHADOW";
+      begin
+         for Sp of Spans loop
+            declare
+               From : constant Positive := Positive (Sp.Start) + 3;
+               To   : constant Natural  := Natural (Sp.Stop) - 4;
+            begin
+               if To >= From then
+                  declare
+                     Inner : constant String := AHC.Source_Text.Slice
+                       (Src,
+                        AHC.Source_Text.Byte_Offset (From),
+                        AHC.Source_Text.Byte_Offset (To));
+                  begin
+                     if Ada.Strings.Fixed.Index (Inner, Key) > 0 then
+                        Arena.Own_Shadows := True;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Detect_Shadow;
+
       --  Function contracts (PRE/POST pragmas): collected per
       --  module, signatures injected after the frontend, wrapping
       --  done by AHC.Refine.
@@ -333,19 +364,29 @@ procedure AHC_Main is
       --  CWD's lib/, the installation's lib/ - AHC.Paths). Returns
       --  the first candidate, or the root-relative path for the
       --  error message; on ambiguity sets Failed and returns "".
-      --  Files that came from the stdlib cascade: library modules
-      --  (M144b). Recorded here, the one place that knows where a
-      --  module's file was found; Load turns membership into the
-      --  arena's Is_Library flag.
-      Lib_Files : Ada.Strings.Unbounded.Unbounded_String;
-
+      --  A library module is one whose file lies under the compiler's
+      --  own lib directory or $AHC_LIB (M144b) - by LOCATION, so a
+      --  user's ./lib, or a stdlib file reached through AHC_PATH, is
+      --  classified correctly.
       function Is_Lib_File (File : String) return Boolean
-      is (Ada.Strings.Unbounded.Index
-            (Lib_Files, ASCII.NUL & File & ASCII.NUL) > 0);
+      is (AHC.Paths.Is_Stdlib_File (File));
+
+      --  Every place the last Module_Path call looked, for the
+      --  "cannot find module" message.
+      Last_Searched : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Note (Where : String) is
+      begin
+         if Ada.Strings.Unbounded.Length (Last_Searched) > 0 then
+            Ada.Strings.Unbounded.Append (Last_Searched, ", ");
+         end if;
+         Ada.Strings.Unbounded.Append (Last_Searched, Where);
+      end Note;
 
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
+         Last_Searched := Ada.Strings.Unbounded.Null_Unbounded_String;
          for I in P'Range loop
             if P (I) = '.' then
                P (I) := '/';
@@ -354,13 +395,10 @@ procedure AHC_Main is
          declare
             Local : constant String := Root_Dir & "/" & P & ".hs";
          begin
-            if Ada.Directories.Exists (Local) then
-               return Local;
-            end if;
-            --  $AHC_PATH: extra module directories (colon
-            --  separated, GHC's -i), after the root file's own
-            --  directory. The REPL points it at a :load'ed file's
-            --  directory, since it compiles a scratch module.
+            --  $AHC_PATH: extra module directories (colon separated,
+            --  GHC's -i), searched BEFORE the root file's own directory
+            --  so a program the REPL :load's finds its siblings ahead of
+            --  anything in the scratch directory.
             if Ada.Environment_Variables.Exists ("AHC_PATH") then
                declare
                   Paths : constant String :=
@@ -374,6 +412,7 @@ procedure AHC_Main is
                               Cand : constant String :=
                                 Paths (Start .. I - 1) & "/" & P & ".hs";
                            begin
+                              Note (Cand);
                               if Ada.Directories.Exists (Cand) then
                                  return Cand;
                               end if;
@@ -383,6 +422,10 @@ procedure AHC_Main is
                      end if;
                   end loop;
                end;
+            end if;
+            Note (Local);
+            if Ada.Directories.Exists (Local) then
+               return Local;
             end if;
             declare
                use Ada.Strings.Unbounded;
@@ -394,6 +437,7 @@ procedure AHC_Main is
                      Cand : constant String :=
                        To_String (R.Dir) & "/" & P & ".hs";
                   begin
+                     Note (Cand);
                      if Ada.Directories.Exists (Cand) then
                         if Hit = "" then
                            Hit      := To_Unbounded_String (Cand);
@@ -422,13 +466,12 @@ procedure AHC_Main is
                   return To_String (Hit);
                end if;
             end;
+            Note (AHC.Paths.Stdlib_Candidates (P & ".hs"));
             declare
                Std : constant String :=
                  AHC.Paths.Stdlib_File (P & ".hs");
             begin
                if Std /= "" then
-                  Ada.Strings.Unbounded.Append
-                    (Lib_Files, ASCII.NUL & Std & ASCII.NUL);
                   return Std;
                end if;
             end;
@@ -463,7 +506,9 @@ procedure AHC_Main is
                          "ahc: cannot find module '"
                          & Table.Text
                              (AHC.Names.Real_Name_Id (Mod_Name))
-                         & "' (looked for " & File & ")");
+                         & "' (looked for "
+                         & Ada.Strings.Unbounded.To_String (Last_Searched)
+                         & ")");
                Failed := True;
                return;
          end;
@@ -477,6 +522,7 @@ procedure AHC_Main is
             AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream, L_Pragmas);
             AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
             Collect_Link_Flags (L.Text, L_Pragmas);
+            Detect_Shadow (L.Text, L_Pragmas, L.Ref.all);
             if not Bag.Has_Errors then
                --  PRE/POST contract pragmas become hidden top-level
                --  bindings in this module's arena.
@@ -642,6 +688,7 @@ procedure AHC_Main is
             AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
                                      Root.Ref.all);
             Collect_Link_Flags (Text, R_Pragmas);
+            Detect_Shadow (Text, R_Pragmas, Root.Ref.all);
             if not Bag.Has_Errors then
                AHC.Contracts.Collect
                  (Text, R_Pragmas, Table, Bag, Root.Ref.all,

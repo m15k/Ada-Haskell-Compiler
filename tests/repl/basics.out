@@ -8,8 +8,8 @@ ahc> an IO action
 ahc> 1
 2
 3
-ahc> /tmp/ahc-repl-test-basics/Probe.hs:3:6: error: variable not in scope: nosuchthing
+ahc> /tmp/ahc-repl-test-basics/AhcReplExpr_.hs:4:6: error: variable not in scope: nosuchthing
 ahc> 25
-ahc> /tmp/ahc-repl-test-basics/Repl.hs:3:16: error: 'square' is defined more than once
+ahc> /tmp/ahc-repl-test-basics/AhcReplSession_.hs:4:16: error: 'square' is defined more than once
 ahc> 25
 ahc> 

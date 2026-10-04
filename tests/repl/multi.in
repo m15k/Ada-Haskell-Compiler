@@ -1,5 +1,5 @@
 :l tests/repl/multi/Main.hs
-Repl.main
+main
 area (Sq 2)
 double 3
 U.double 3

@@ -6078,6 +6078,9 @@ DUOP(p_atan_d, atan)
 DUOP(p_sinh_d, sinh)
 DUOP(p_cosh_d, cosh)
 DUOP(p_tanh_d, tanh)
+DUOP(p_asinh_d, asinh)
+DUOP(p_acosh_d, acosh)
+DUOP(p_atanh_d, atanh)
 
 static AhcNode *p_atan2_d(AhcNode *a, AhcNode *b) {
   return ahc_mk_double(atan2(ahc_eval(a)->u.d, ahc_eval(b)->u.d));
@@ -6641,6 +6644,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_sin_d, *ahc_prim_cos_d, *ahc_prim_tan_d,
   *ahc_prim_asin_d, *ahc_prim_acos_d, *ahc_prim_atan_d,
   *ahc_prim_sinh_d, *ahc_prim_cosh_d, *ahc_prim_tanh_d,
+  *ahc_prim_asinh_d, *ahc_prim_acosh_d, *ahc_prim_atanh_d,
   *ahc_prim_floor_d, *ahc_prim_ceiling_d, *ahc_prim_round_d,
   *ahc_prim_truncate_d, *ahc_prim_int_to_d,
   *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
@@ -6844,6 +6848,9 @@ void ahc_rts_init(void) {
   ahc_prim_sinh_d = mk_prim1(p_sinh_d);
   ahc_prim_cosh_d = mk_prim1(p_cosh_d);
   ahc_prim_tanh_d = mk_prim1(p_tanh_d);
+  ahc_prim_asinh_d = mk_prim1(p_asinh_d);
+  ahc_prim_acosh_d = mk_prim1(p_acosh_d);
+  ahc_prim_atanh_d = mk_prim1(p_atanh_d);
   ahc_prim_floor_d = mk_prim1(p_floor_d);
   ahc_prim_ceiling_d = mk_prim1(p_ceiling_d);
   ahc_prim_round_d = mk_prim1(p_round_d);

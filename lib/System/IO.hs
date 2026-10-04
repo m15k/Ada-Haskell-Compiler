@@ -84,7 +84,7 @@ hGetContents :: Handle -> IO String
 hGetContents (MkHandle i) = primHGetContents i
 
 -- Text IO at a Handle lives HERE, not in Data.Text: MkHandle is
--- private, and the wired-in Text type name needs no import. One
+-- private, and the wired-in Text type comes from the library's whole Prelude. One
 -- fwrite of the packed slice; input normalizes to valid UTF-8.
 hPutText :: Handle -> Text -> IO ()
 hPutText (MkHandle i) t = primTextHPut i t

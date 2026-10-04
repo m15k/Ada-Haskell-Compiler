@@ -39,4 +39,15 @@ package AHC.Paths is
    --  a module absent there still falls through to the other arms).
    --  Returns "" when the module exists nowhere.
 
+   function Stdlib_Candidates (Rel : String) return String;
+   --  Every place Stdlib_File looks for lib/<Rel>, comma separated (for
+   --  the "cannot find module" message).
+
+   function Is_Stdlib_File (Path : String) return Boolean;
+   --  True when Path lies under the compiler's OWN library: $AHC_LIB or
+   --  the installation's lib/ (checkout or prefix) - decided by where
+   --  the file IS, not by how it was found. A user project's own ./lib,
+   --  or a stdlib module reached through another search path, is
+   --  classified by its location alone (M144b).
+
 end AHC.Paths;

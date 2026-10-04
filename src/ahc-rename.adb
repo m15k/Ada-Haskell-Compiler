@@ -155,6 +155,10 @@ package body AHC.Rename is
       --  only the Prelude's export list. Pub is always the public
       --  view: own-vs-Prelude ambiguity is judged against what GHC's
       --  Prelude exports, even inside the library.
+      --  GHCi scoping (the REPL's generated modules): own declarations
+      --  shadow imports and the Prelude, no ambiguity (M144 off).
+      Shadow : constant Boolean := Modular and then Arena.Own_Shadows;
+
       Pre : constant access constant Modules.Iface :=
         (if not Modular then null
          elsif Arena.Is_Library then Reg.Base'Unchecked_Access
@@ -175,6 +179,11 @@ package body AHC.Rename is
       --  Prelude import. Lists and tuples mostly resolve through
       --  dedicated paths; these are the names that reach the maps.
       Main_Name : constant Names.Real_Name_Id := Table.Intern ("Main");
+      --  What this module calls itself in a qualifier: a headerless
+      --  root is `Main` (Report 5.1), so `Main.f` must resolve.
+      Self_Qual : constant Names.Name_Id :=
+        (if Arena.Module_Name = Names.No_Name
+         then Names.Name_Id (Main_Name) else Arena.Module_Name);
       Unit_Name : constant Names.Real_Name_Id := Table.Intern ("()");
       Nil_Name  : constant Names.Real_Name_Id := Table.Intern ("[]");
       Cons_Name : constant Names.Real_Name_Id := Table.Intern (":");
@@ -215,7 +224,7 @@ package body AHC.Rename is
       begin
          if Q.Qualifier = Names.No_Name
            or else Q.Qualifier = Names.Name_Id (Prelude_Name)
-           or else Q.Qualifier = Arena.Module_Name
+           or else Q.Qualifier = Self_Qual
            or else (Modular and then Find_View (Q.Qualifier) /= 0)
          then
             return True;
@@ -237,9 +246,7 @@ package body AHC.Rename is
 
       function Qual_Kind (Q : Names.Name_Id) return Qual_Scope is
         (if Q = Names.No_Name then Unqualified
-         elsif Q = Arena.Module_Name
-           or else (Arena.Module_Name = Names.No_Name
-                    and then Q = Names.Name_Id (Main_Name))
+         elsif Q = Self_Qual
          then This_Module
          elsif Q = Names.Name_Id (Prelude_Name)
            and then not Prelude_Explicit then Implicit_Prelude
@@ -312,6 +319,9 @@ package body AHC.Rename is
                --  at this use (M144, Report 5.5.2). Wired
                --  placeholders the module defines are exempt.
                Found := In_Iface (Own, Q.Name);
+               if Found /= None and then Shadow then
+                  return Found;
+               end if;
                if Found /= None then
                   for V of Imp_Views loop
                      if not V.Qualified then
@@ -319,7 +329,8 @@ package body AHC.Rename is
                            X : constant Id := In_Iface (V.Visible, Q.Name);
                         begin
                            if X /= None and then X /= Found
-                             and then not Shadowable (X)
+                             and then not (Arena.Is_Library
+                                           and then Shadowable (X))
                            then
                               Amb := True;
                            end if;
@@ -331,7 +342,8 @@ package body AHC.Rename is
                         B : constant Id := In_Iface (Pub.all, Q.Name);
                      begin
                         if B /= None and then B /= Found
-                          and then not Shadowable (B)
+                          and then not (Arena.Is_Library
+                                        and then Shadowable (B))
                         then
                            Amb := True;
                         end if;
@@ -485,6 +497,10 @@ package body AHC.Rename is
                Found := Own.Synonyms.Contains (Q.Name);
                return;
             when Unqualified =>
+               if Own.Synonyms.Contains (Q.Name) and then Shadow then
+                  Found := True;
+                  return;
+               end if;
                if Own.Synonyms.Contains (Q.Name) then
                   Found := True;
                   --  M144: ambiguous with an unqualified import's or
@@ -572,6 +588,10 @@ package body AHC.Rename is
                   end if;
                end;
             end if;
+         elsif Shadow
+           and then (Syn.Is_Own or else Own.TyCons.Contains (Q.Name))
+         then
+            Choice := (if Syn.Is_Own then Take_Syn else Take_TyCon);
          elsif M.Info (Core.Real_TyCon_Id (TC)).Is_Builtin then
             --  A synonym beats a wired placeholder it shadows. A
             --  Prelude type proper (Maybe, Either, ...) and a synonym
@@ -579,8 +599,10 @@ package body AHC.Rename is
             --  exports that name (M144); a builtin it does not export
             --  (Int8, ...) is shadowed as before.
             if Modular and then Q.Qualifier = Names.No_Name
-              and then not TyCon_Wired (TC)
               and then Pub.TyCons.Contains (Q.Name)
+              and then (not TyCon_Wired (TC)
+                        or else (Syn.Is_Own
+                                 and then not Arena.Is_Library))
             then
                Choice := Ambiguous;
                Bag.Add (Diagnostics.Error,
@@ -618,6 +640,10 @@ package body AHC.Rename is
          end if;
          Scopes (Scopes.Last_Index).Include (Name, V);
       end Bind_In_Scope;
+
+      --  Set when Lookup_Value reported an ambiguity (even Quiet): a
+      --  caller about to add "unknown field" says the ambiguity instead.
+      Value_Amb_Reported : Boolean := False;
 
       --  Quiet: answer "is this name in scope" without reporting.
       --  The export list's C(..) asks that of every method of a class
@@ -657,7 +683,7 @@ package body AHC.Rename is
             if Q.Qualifier /= Names.No_Name
               and then (Q.Qualifier /= Names.Name_Id (Prelude_Name)
                         or else Prelude_Explicit)
-              and then Q.Qualifier /= Arena.Module_Name
+              and then Q.Qualifier /= Self_Qual
             then
                declare
                   C : Builtins.Var_Maps.Cursor;
@@ -686,7 +712,7 @@ package body AHC.Rename is
             --  of the same bare name (Prelude.filter must not find
             --  a local filter).
             if Q.Qualifier = Names.Name_Id (Prelude_Name)
-              and then Q.Qualifier /= Arena.Module_Name
+              and then Q.Qualifier /= Self_Qual
             then
                declare
                   C : constant Builtins.Var_Maps.Cursor :=
@@ -712,7 +738,7 @@ package body AHC.Rename is
                  Own.Values.Find (Q.Name);
             begin
                if Builtins.Var_Maps.Has_Element (C) then
-                  if Q.Qualifier = Names.No_Name then
+                  if Q.Qualifier = Names.No_Name and then not Shadow then
                      declare
                         Mine : constant Core.Var_Id := Core.Var_Id
                           (Builtins.Var_Maps.Element (C));
@@ -748,14 +774,13 @@ package body AHC.Rename is
                            end;
                         end if;
                         if Amb then
-                           if not Quiet then
-                              Bag.Add
-                                (Diagnostics.Error,
-                                 Diagnostics.Rename_Out_Of_Scope, Span,
-                                 "ambiguous name '" & Text (Q.Name)
-                                 & "' (declared in this module and"
-                                 & " imported)");
-                           end if;
+                           Value_Amb_Reported := True;
+                           Bag.Add
+                             (Diagnostics.Error,
+                              Diagnostics.Rename_Out_Of_Scope, Span,
+                              "ambiguous name '" & Text (Q.Name)
+                              & "' (declared in this module and"
+                              & " imported)");
                            return (Kind => Unresolved);
                         end if;
                      end;
@@ -791,6 +816,7 @@ package body AHC.Rename is
                      end if;
                   end loop;
                   if Amb then
+                     Value_Amb_Reported := True;
                      Bag.Add (Diagnostics.Error,
                               Diagnostics.Rename_Out_Of_Scope, Span,
                               "ambiguous name '" & Text (Q.Name)
@@ -1038,6 +1064,14 @@ package body AHC.Rename is
                begin
                   Set_Pat (Id, R);
                   for F of N.Rec_Fields loop
+                     --  A field label is a name in scope: ambiguous
+                     --  with an import's or the Prelude's (M144).
+                     declare
+                        Ignore : constant Resolution :=
+                          Lookup_Value (F.Field, N.Span, Quiet => True);
+                     begin
+                        null;
+                     end;
                      if R.Kind = Data_Res then
                         declare
                            Fields : constant Core.Name_Id_Vectors.Vector
@@ -1219,6 +1253,7 @@ package body AHC.Rename is
                   Sels : Core.Var_Id_Vectors.Vector;
                begin
                   for F of N.Rec_Fields loop
+                     Value_Amb_Reported := False;
                      declare
                         R : constant Resolution :=
                           Lookup_Value (F.Field, N.Span, Quiet => True);
@@ -1226,6 +1261,8 @@ package body AHC.Rename is
                         if R.Kind = Var_Res and then M.Info (R.Var).Is_Field
                         then
                            Sels.Append (R.Var);
+                        elsif Value_Amb_Reported then
+                           null;   --  the ambiguity was reported
                         else
                            Bag.Add (Diagnostics.Error,
                                     Diagnostics.Rename_Field_Error,
@@ -2581,9 +2618,9 @@ package body AHC.Rename is
                               Found := True;
                            elsif E.Name.Name =
                              Names.Name_Id (Prelude_Name)
-                             and then Pre /= null
+                             and then Pub /= null
                            then
-                              Merge (Pre.all);
+                              Merge (Pub.all);
                               Found := True;
                            else
                               for V of Imp_Views loop

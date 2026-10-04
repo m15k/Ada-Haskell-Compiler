@@ -60,9 +60,9 @@ declarations change rarely, expressions change every line - in a
 single module every entry would recompile everything, split this
 way an expression recompiles only Main. Second, name hygiene: the
 synthesized `main`/`it` live in Main, so a *loaded* program's
-`main` is an ordinary member of Repl that never collides with the
-runner (type `Repl.main` to run a loaded main - the one shadowing
-corner, documented in `:help`).
+`main` is an ordinary member of the session module that never collides
+with the runner (since the M143 review a loaded `main` is simply typed
+as `main`; section 5.0 says how).
 
 Entered declarations append to Repl.hs; entered imports append to
 its import block. Every candidate state is validated with an
@@ -132,6 +132,23 @@ semantics), `:reload`/`:r` (re-run the last `:load`), `:clear`
 generated Repl.hs, where each accepted entry is one line - so the
 N-th entry is line N plus the import block, close enough to be
 useful and documented in `:help`.
+
+### 5.0 Scoping and module names (M143 review)
+
+The session is now THREE generated modules, named so no program imports
+one: `AhcReplSession_` (imports, the loaded file's body, entered
+declarations), `AhcReplExpr_` (`import AhcReplSession_`, the session
+imports, `it = <expr>`) and `Main` (`main = print E.it` over
+`import qualified AhcReplExpr_ as E`). Both session modules carry
+`{-# OPTIONS_AHC_SHADOW #-}`: the module's own top-level names shadow
+imports and the Prelude, GHCi's rule, instead of M144's ambiguity. That is
+what lets the session declare `it`, `main` or `lookup`; the runner `main`
+lives alone in `Main`, so it never collides with a loaded program's.
+The generated files are written as raw bytes (non-ASCII source stays
+UTF-8), `:load` of a directory is a clean error, a leading comment or
+pragma before `module` is skipped (pragmas are hoisted above the
+header), and only real top-level imports - not ones in a block comment -
+become session imports.
 
 ### 5.1 Multi-module programs (M143)
 

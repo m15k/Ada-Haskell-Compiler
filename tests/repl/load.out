@@ -8,9 +8,9 @@ ahc> ***
 ***
 ahc> ahc> 99
 ahc> loaded: tests/repl/fixture.hs
-ahc> /tmp/ahc-repl-test-load/Probe.hs:4:6: error: variable not in scope: extra
+ahc> /tmp/ahc-repl-test-load/AhcReplExpr_.hs:5:6: error: variable not in scope: extra
 ahc> 4
-ahc> ahc> /tmp/ahc-repl-test-load/Probe.hs:3:6: error: variable not in scope: area
+ahc> ahc> /tmp/ahc-repl-test-load/AhcReplExpr_.hs:4:6: error: variable not in scope: area
 ahc> commands:
   :help :h        this text
   :quit :q        leave the repl
@@ -23,6 +23,6 @@ ahc> commands:
 anything else: an import, a declaration, or an
 expression. several declarations fit one line with
 ';' (f :: Int -> Int; f x = x + 1). a loaded main
-runs as the expression Repl.main. IO results are
+runs by typing main. IO results are
 not printed; 'it' is not kept between entries.
 ahc> 

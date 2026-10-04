@@ -1,0 +1,16 @@
+it = 4
+1 + 1
+lookup = 10
+g = lookup + 1
+g
+putStrLn "ünï"
+:! echo hi
+:!echo again
+:! exit 3
+:l tests/repl
+:l tests/repl/fx_comment_import.hs
+x
+:l tests/repl/replsib/Main.hs
+r
+main
+:q

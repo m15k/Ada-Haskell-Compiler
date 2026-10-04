@@ -10,6 +10,6 @@ ahc> Sq :: Int -> Shape
 ahc> loaded: tests/repl/multi/Shapes.hs
 ahc> 10
 ahc> False
-ahc> ahc: cannot find module 'Nowhere' (looked for /tmp/ahc-repl-test-multi/Nowhere.hs)
-ahc> /tmp/ahc-repl-test-multi/Probe.hs:4:6: error: variable not in scope: x
+ahc> ahc: cannot find module 'Nowhere' (looked for tests/repl/Nowhere.hs, /tmp/ahc-repl-test-multi/Nowhere.hs, <repo>/lib/Nowhere.hs, lib/Nowhere.hs, <repo>/lib/Nowhere.hs, <repo>/share/ahc/lib/Nowhere.hs)
+ahc> /tmp/ahc-repl-test-multi/AhcReplExpr_.hs:5:6: error: variable not in scope: x
 ahc> 

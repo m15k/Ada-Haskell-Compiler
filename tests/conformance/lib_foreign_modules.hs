@@ -1,7 +1,8 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 -- M145: the GHC homes of the FFI names - Foreign.Ptr, Foreign.C.Types,
 -- Foreign.C.String, Foreign.Marshal.Alloc - used through imports only.
-import Foreign.C.String (newCString, peekCString)
+import Foreign.C.String (CStringLen, newCString, peekCString, peekCStringLen)
+import Foreign (popCount, shiftL, (.&.), Word8)
 import Foreign.C.Types
 import Foreign.Marshal.Alloc (free, mallocBytes)
 import Foreign.Ptr (Ptr, nullPtr, plusPtr)
@@ -18,4 +19,8 @@ main = do
   s <- newCString "hello ffi"
   t <- peekCString s
   putStrLn t
+  let cl = (s, 5) :: CStringLen
+  u <- peekCStringLen cl
+  putStrLn u
+  print (popCount (255 :: Int), shiftL 1 4 :: Int, (7 :: Word8) .&. 3)
   free s

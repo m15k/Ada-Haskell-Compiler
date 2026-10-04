@@ -1,0 +1,14 @@
+ahc repl - :h for help, :q to quit
+ahc> ahc> 2
+ahc> ahc> ahc> 11
+ahc> ünï
+ahc> hi
+ahc> again
+ahc> *** exit code 3
+ahc> cannot open: tests/repl
+ahc> loaded: tests/repl/fx_comment_import.hs
+ahc> 5
+ahc> loaded: tests/repl/replsib/Main.hs
+ahc> 7
+ahc> 7
+ahc> 

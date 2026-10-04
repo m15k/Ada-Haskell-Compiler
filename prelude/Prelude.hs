@@ -7,7 +7,9 @@
 --
 -- ABSENT-NAMES: MonadFail lex floatRadix floatDigits floatRange decodeFloat
 --   encodeFloat exponent significand scaleFloat isDenormalized isIEEE
--- (the line above is read by scripts/check_prelude_exports.sh). GHC
+-- NOT-METHODS: <$ divMod quotRem mapM sequence sequenceA
+--   (GHC class methods that are plain functions here; EXCLUSIONS)
+-- (the lines above are read by scripts/check_prelude_exports.sh). GHC
 -- exports these, AHC's Prelude does not define them:
 --   MonadFail   (AHC's Monad carries `fail` itself; do-notation's
 --                failing patterns call that method)
@@ -1142,16 +1144,15 @@ cycle xs = xs' where xs' = xs ++ xs'
 -- in the wild and was a type error here (thibaudmichaud/lambda-calculus
 -- folds over Data.Set through the Prelude).
 --
--- Every method has a default in terms of foldr, so an instance need
--- only give foldr - but the containers override the cheap ones
--- (Set.length is its size annotation, not a traversal). The list
--- instance forwards to the list-monomorphic originals, kept under
+-- Minimal definition `foldMap | foldr`, as in base: foldMap defaults to
+-- a foldr, foldr to a foldMap into the (unexported) Endo_ monoid; every
+-- other method defaults to a foldr too. The containers override the
+-- cheap ones (Set.length is its size annotation, not a traversal). The
+-- list instance forwards to the list-monomorphic originals, kept under
 -- *List_ names, so `length someList` costs exactly what it always did
 -- and the desugarer still has a concatMap needing no dictionary.
---  `toList` is NOT here: base keeps it in Data.Foldable, and this
---  Prelude has no export list, so defining it would shadow every
---  program's own toList. toListF_ is the internal spelling; the
---  public name is Data.Foldable's.
+-- `toList` is not exported by GHC's Prelude: toListF_ is the internal
+-- spelling; the public name is Data.Foldable's.
 class Foldable t where
   foldr :: (a -> b -> b) -> b -> t a -> b
   null :: t a -> Bool
@@ -1163,8 +1164,11 @@ class Foldable t where
   maximum :: Ord a => t a -> a
   minimum :: Ord a => t a -> a
   foldMap :: Monoid m => (a -> m) -> t a -> m
+  foldr1 :: (a -> a -> a) -> t a -> a
+  foldl1 :: (a -> a -> a) -> t a -> a
 
   foldMap f t = foldr (\x acc -> mappend (f x) acc) mempty t
+  foldr f z t = appEndo_ (foldMap (\x -> Endo_ (f x)) t) z
   null t = foldr (\_ _ -> False) True t
   length t = foldr (\_ n -> n + 1) 0 t
   foldl f z t = foldlList_ f z (toListF_ t)
@@ -1173,6 +1177,35 @@ class Foldable t where
   product t = productList_ (toListF_ t)
   maximum t = maximumList_ (toListF_ t)
   minimum t = minimumList_ (toListF_ t)
+  foldr1 f t = foldr1Default_ f t
+  foldl1 f t = foldl1Default_ f t
+
+newtype Endo_ b = Endo_ (b -> b)
+
+appEndo_ :: Endo_ b -> b -> b
+appEndo_ (Endo_ f) = f
+
+instance Semigroup (Endo_ b) where
+  Endo_ f <> Endo_ g = Endo_ (\x -> f (g x))
+
+instance Monoid (Endo_ b) where
+  mempty = Endo_ (\x -> x)
+
+foldr1Default_ :: Foldable t => (a -> a -> a) -> t a -> a
+foldr1Default_ f t =
+  case foldr (\x m -> Just (case m of
+                              Nothing -> x
+                              Just y -> f x y)) Nothing t of
+    Just r -> r
+    Nothing -> errorWithoutStackTrace "foldr1: empty structure"
+
+foldl1Default_ :: Foldable t => (a -> a -> a) -> t a -> a
+foldl1Default_ f t =
+  case foldl (\m y -> Just (case m of
+                              Nothing -> y
+                              Just x -> f x y)) Nothing t of
+    Just r -> r
+    Nothing -> errorWithoutStackTrace "foldl1: empty structure"
 
 toListF_ :: Foldable t => t a -> [a]
 toListF_ t = foldr (:) [] t
@@ -1187,6 +1220,8 @@ instance Foldable [] where
   product = productList_
   maximum = maximumList_
   minimum = minimumList_
+  foldr1 = foldr1List_
+  foldl1 = foldl1List_
 
 instance Foldable Maybe where
   foldr _ z Nothing = z
@@ -1229,11 +1264,6 @@ any p t = orList_ (map p (toListF_ t))
 all :: Foldable t => (a -> Bool) -> t a -> Bool
 all p t = andList_ (map p (toListF_ t))
 
-foldr1 :: Foldable t => (a -> a -> a) -> t a -> a
-foldr1 f t = foldr1List_ f (toListF_ t)
-
-foldl1 :: Foldable t => (a -> a -> a) -> t a -> a
-foldl1 f t = foldl1List_ f (toListF_ t)
 
 mapM_ :: (Foldable t, Monad m) => (a -> m b) -> t a -> m ()
 mapM_ f t = mapMList__ f (toListF_ t)
@@ -1798,16 +1828,18 @@ asTypeOf = const
 errorWithoutStackTrace :: String -> a
 errorWithoutStackTrace s = error s
 
--- GHC's class-default definitions (Report 6.3.4); for Double base calls
--- libm instead, so a last-digit difference is possible there.
-asinh :: Floating a => a -> a
-asinh x = log (x + sqrt (1.0 + x * x))
+-- asinh/acosh/atanh are Floating METHODS (wired, like the rest of the
+-- class); at Double/Float they are libm's. A user instance that omits
+-- them gets these formulas (GHC has no default there: the instance is
+-- merely incomplete) through AHC.Elaborate's built-in defaults.
+asinhDefault_ :: Floating a => a -> a
+asinhDefault_ x = log (x + sqrt (x * x + 1.0))
 
-acosh :: Floating a => a -> a
-acosh x = log (x + (x + 1.0) * sqrt ((x - 1.0) / (x + 1.0)))
+acoshDefault_ :: Floating a => a -> a
+acoshDefault_ x = log (x + (x + 1.0) * sqrt ((x - 1.0) / (x + 1.0)))
 
-atanh :: Floating a => a -> a
-atanh x = 0.5 * log ((1.0 + x) / (1.0 - x))
+atanhDefault_ :: Floating a => a -> a
+atanhDefault_ x = 0.5 * log ((1.0 + x) / (1.0 - x))
 
 -- writeFile/appendFile over the handle primitives. The IOError of a
 -- failed open or write is relabelled "withFile" with THIS file's name,

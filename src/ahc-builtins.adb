@@ -719,6 +719,18 @@ package body AHC.Builtins is
                      when others => "tanh"),
                   Poly1 (A, Un, Ctx1 (Cl, TV (A))), False);
             end loop;
+            --  asinh/acosh/atanh are methods, as in GHC; the defaults
+            --  for a user instance come from AHC.Elaborate (the
+            --  Prelude's asinhDefault_ ...), the Double/Float
+            --  dictionaries bind libm's.
+            for Op in 1 .. 3 loop
+               Ignore := Def_Method
+                 (Cl,
+                  (case Op is
+                     when 1 => "asinh", when 2 => "acosh",
+                     when others => "atanh"),
+                  Poly1 (A, Un, Ctx1 (Cl, TV (A))), True);
+            end loop;
             Finish_Class (Cl);
          end;
 

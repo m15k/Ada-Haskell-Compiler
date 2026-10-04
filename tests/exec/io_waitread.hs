@@ -4,7 +4,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 import Control.Concurrent.Scoped
 import AHC.FFI
-import Foreign.C.String
+import Foreign.C.String hiding (peekCStringLen)
 import Foreign.C.Types
 import Foreign.Marshal.Alloc
 import Foreign.Ptr

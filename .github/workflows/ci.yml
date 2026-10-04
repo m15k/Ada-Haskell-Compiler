@@ -77,6 +77,12 @@ jobs:
       - name: Type differential
         run: scripts/run_differential_types.sh
 
+      - name: Prelude export list matches GHC 9.4.8's
+        run: scripts/check_prelude_exports.sh
+
+      - name: Library vs user Prelude view
+        run: scripts/run_userlib.sh
+
       - name: Conformance (byte-identical to GHC)
         run: scripts/run_conformance.sh
 

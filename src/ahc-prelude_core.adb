@@ -224,6 +224,12 @@ package body AHC.Prelude_Core is
         Prim ("primcoshD", "ahc_prim_cosh_d");
       P_TanhD : constant Real_Var_Id :=
         Prim ("primtanhD", "ahc_prim_tanh_d");
+      P_AsinhD : constant Real_Var_Id :=
+        Prim ("primasinhD", "ahc_prim_asinh_d");
+      P_AcoshD : constant Real_Var_Id :=
+        Prim ("primacoshD", "ahc_prim_acosh_d");
+      P_AtanhD : constant Real_Var_Id :=
+        Prim ("primatanhD", "ahc_prim_atanh_d");
       P_FloorD : constant Real_Var_Id :=
         Prim ("primfloorD", "ahc_prim_floor_d");
       P_CeilD : constant Real_Var_Id :=
@@ -1807,6 +1813,9 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_SinhD));
                      Ms.Append (V (P_CoshD));
                      Ms.Append (V (P_TanhD));
+                     Ms.Append (V (P_AsinhD));
+                     Ms.Append (V (P_AcoshD));
+                     Ms.Append (V (P_AtanhD));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.RealFrac_Cl
                     and then (Inst.Head = Env.Double_TC
