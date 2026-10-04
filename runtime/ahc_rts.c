@@ -175,6 +175,19 @@ static int n_workers;    /* live B1 spark workers (grows once) */
 
 static size_t stack_guard_pg;        /* one page, PROT_NONE */
 
+/* Every stack AHC maps (main's, each green thread's) is
+   [guard page | stack | cap page]: the cap page, also PROT_NONE,
+   is what stack_top - the one-past-the-end cold end, kept in
+   main_task / an AhcTask where the collector scans it - points AT.
+   Without it stack_top is the first byte of whatever mapping the
+   kernel puts next, and when that is a Boehm heap section the
+   conservative collector reads stack_top as a pointer to the
+   section's first object and keeps it, and everything it reaches,
+   alive for the whole run (b_sort held its whole input list: +13%
+   live heap, +8% time, after 9 extra startup allocations moved a
+   heap section flush against the main stack). */
+#define STACK_MAP_SIZE(sz) ((sz) + 2 * stack_guard_pg)
+
 static void exc_render(AhcNode *exc, char *buf, size_t cap);
 static size_t exc_put_c(char *buf, size_t n, size_t cap, const char *s);
 
@@ -2724,7 +2737,7 @@ void ahc_run_main(AhcNode *main_io) {
       if (v >= 1024ul * 1024) sz = (size_t)v;
     }
   }
-  base = (char *)mmap(NULL, sz + stack_guard_pg,
+  base = (char *)mmap(NULL, STACK_MAP_SIZE(sz),
                       PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANON, -1, 0);
   if (base == MAP_FAILED) {
@@ -2734,6 +2747,7 @@ void ahc_run_main(AhcNode *main_io) {
     return;
   }
   mprotect(base, stack_guard_pg, PROT_NONE);
+  mprotect(base + stack_guard_pg + sz, stack_guard_pg, PROT_NONE);
   main_task.stack = base;
   main_task.stack_top = base + stack_guard_pg + sz;
   pending_main_io = main_io;
@@ -2924,7 +2938,7 @@ static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
     for (i = 0; i < sc->n; i++) {
       AhcTask *k = sc->kids[i];
       if (k->stack) {
-        munmap(k->stack, AHC_TASK_STACK + stack_guard_pg);
+        munmap(k->stack, STACK_MAP_SIZE(AHC_TASK_STACK));
         k->stack = NULL;
       }
       task_reg[k->id] = NULL;
@@ -2983,11 +2997,13 @@ static AhcNode *io_spawn(AhcNode **env, AhcNode *w) {
   (void)w;
   if (!t) ahc_die("out of memory");
   memset(t, 0, sizeof *t);
-  base = (char *)mmap(NULL, AHC_TASK_STACK + stack_guard_pg,
+  base = (char *)mmap(NULL, STACK_MAP_SIZE(AHC_TASK_STACK),
                       PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANON, -1, 0);
   if (base == MAP_FAILED) ahc_die("spawn: cannot map a task stack");
   mprotect(base, stack_guard_pg, PROT_NONE);
+  mprotect(base + stack_guard_pg + AHC_TASK_STACK, stack_guard_pg,
+           PROT_NONE);
   t->stack = base;
   t->stack_top = base + stack_guard_pg + AHC_TASK_STACK;
   t->action = env[1];
