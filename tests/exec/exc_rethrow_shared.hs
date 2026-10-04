@@ -4,6 +4,7 @@
 -- indirection: quadratic time, an uncollectable chain). 20000
 -- forces here take milliseconds, not seconds; the outputs pin the
 -- semantics and the harness's timeout pins the rest.
+import AHC.Prim
 main :: IO ()
 main = do
   let shared = error "shared boom" :: Int

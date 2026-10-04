@@ -7,6 +7,7 @@
 import Control.Concurrent.Scoped
 import qualified Network.Socket as N
 import qualified Data.Text as T
+import AHC.Prim
 
 server :: N.Socket -> Int -> IO ()
 server lsock n =

@@ -9,6 +9,7 @@
 
 with Ada.Command_Line;
 with Ada.IO_Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -287,6 +288,36 @@ procedure AHC_Main is
          end loop;
       end Collect_Link_Flags;
 
+      --  {-# OPTIONS_AHC_SHADOW #-} anywhere in the module (the REPL's
+      --  generated modules): GHCi scoping, own names shadow.
+      procedure Detect_Shadow
+        (Src   : AHC.Source_Text.Source;
+         Spans : AHC.Lexer.Span_Vectors.Vector;
+         Arena : in out AHC.Syntax.Module_Arena)
+      is
+         Key : constant String := "OPTIONS_AHC_SHADOW";
+      begin
+         for Sp of Spans loop
+            declare
+               From : constant Positive := Positive (Sp.Start) + 3;
+               To   : constant Natural  := Natural (Sp.Stop) - 4;
+            begin
+               if To >= From then
+                  declare
+                     Inner : constant String := AHC.Source_Text.Slice
+                       (Src,
+                        AHC.Source_Text.Byte_Offset (From),
+                        AHC.Source_Text.Byte_Offset (To));
+                  begin
+                     if Ada.Strings.Fixed.Index (Inner, Key) > 0 then
+                        Arena.Own_Shadows := True;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Detect_Shadow;
+
       --  Function contracts (PRE/POST pragmas): collected per
       --  module, signatures injected after the frontend, wrapping
       --  done by AHC.Refine.
@@ -333,9 +364,29 @@ procedure AHC_Main is
       --  CWD's lib/, the installation's lib/ - AHC.Paths). Returns
       --  the first candidate, or the root-relative path for the
       --  error message; on ambiguity sets Failed and returns "".
+      --  A library module is one whose file lies under the compiler's
+      --  own lib directory or $AHC_LIB (M144b) - by LOCATION, so a
+      --  user's ./lib, or a stdlib file reached through AHC_PATH, is
+      --  classified correctly.
+      function Is_Lib_File (File : String) return Boolean
+      is (AHC.Paths.Is_Stdlib_File (File));
+
+      --  Every place the last Module_Path call looked, for the
+      --  "cannot find module" message.
+      Last_Searched : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Note (Where : String) is
+      begin
+         if Ada.Strings.Unbounded.Length (Last_Searched) > 0 then
+            Ada.Strings.Unbounded.Append (Last_Searched, ", ");
+         end if;
+         Ada.Strings.Unbounded.Append (Last_Searched, Where);
+      end Note;
+
       function Module_Path (Name : String) return String is
          P : String := Name;
       begin
+         Last_Searched := Ada.Strings.Unbounded.Null_Unbounded_String;
          for I in P'Range loop
             if P (I) = '.' then
                P (I) := '/';
@@ -344,6 +395,35 @@ procedure AHC_Main is
          declare
             Local : constant String := Root_Dir & "/" & P & ".hs";
          begin
+            --  $AHC_PATH: extra module directories (colon separated,
+            --  GHC's -i), searched BEFORE the root file's own directory
+            --  so a program the REPL :load's finds its siblings ahead of
+            --  anything in the scratch directory.
+            if Ada.Environment_Variables.Exists ("AHC_PATH") then
+               declare
+                  Paths : constant String :=
+                    Ada.Environment_Variables.Value ("AHC_PATH");
+                  Start : Natural := Paths'First;
+               begin
+                  for I in Paths'First .. Paths'Last + 1 loop
+                     if I > Paths'Last or else Paths (I) = ':' then
+                        if I > Start then
+                           declare
+                              Cand : constant String :=
+                                Paths (Start .. I - 1) & "/" & P & ".hs";
+                           begin
+                              Note (Cand);
+                              if Ada.Directories.Exists (Cand) then
+                                 return Cand;
+                              end if;
+                           end;
+                        end if;
+                        Start := I + 1;
+                     end if;
+                  end loop;
+               end;
+            end if;
+            Note (Local);
             if Ada.Directories.Exists (Local) then
                return Local;
             end if;
@@ -357,6 +437,7 @@ procedure AHC_Main is
                      Cand : constant String :=
                        To_String (R.Dir) & "/" & P & ".hs";
                   begin
+                     Note (Cand);
                      if Ada.Directories.Exists (Cand) then
                         if Hit = "" then
                            Hit      := To_Unbounded_String (Cand);
@@ -385,6 +466,7 @@ procedure AHC_Main is
                   return To_String (Hit);
                end if;
             end;
+            Note (AHC.Paths.Stdlib_Candidates (P & ".hs"));
             declare
                Std : constant String :=
                  AHC.Paths.Stdlib_File (P & ".hs");
@@ -424,19 +506,23 @@ procedure AHC_Main is
                          "ahc: cannot find module '"
                          & Table.Text
                              (AHC.Names.Real_Name_Id (Mod_Name))
-                         & "' (looked for " & File & ")");
+                         & "' (looked for "
+                         & Ada.Strings.Unbounded.To_String (Last_Searched)
+                         & ")");
                Failed := True;
                return;
          end;
          L.Name := Mod_Name;
          L.Path := Ada.Strings.Unbounded.To_Unbounded_String (File);
          L.Ref := new AHC.Syntax.Module_Arena;
+         L.Ref.Is_Library := Is_Lib_File (File);
          declare
             L_Pragmas : AHC.Lexer.Span_Vectors.Vector;
          begin
             AHC.Lexer.Scan (L.Text, Table, Bag, L_Stream, L_Pragmas);
             AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
             Collect_Link_Flags (L.Text, L_Pragmas);
+            Detect_Shadow (L.Text, L_Pragmas, L.Ref.all);
             if not Bag.Has_Errors then
                --  PRE/POST contract pragmas become hidden top-level
                --  bindings in this module's arena.
@@ -482,7 +568,14 @@ procedure AHC_Main is
          Order.Append (L);
       end Load;
 
-      --  Snapshot the flat environment as the registry Base.
+      --  What the Prelude's export list named (M144b), filled by the
+      --  Prelude pass; Have_Public is False when there is none.
+      Prelude_Public : AHC.Modules.Iface;
+      Have_Public    : Boolean := False;
+
+      --  Snapshot the flat environment as the registry Base, and the
+      --  public view of it: the Prelude's export list plus builtin
+      --  syntax, which is grammar and not an export.
       procedure Snapshot_Base is
       begin
          Reg.Base.Values := Env.Values;
@@ -490,6 +583,80 @@ procedure AHC_Main is
          Reg.Base.DataCons := Env.DataCons;
          Reg.Base.Classes := Env.Classes;
          Reg.Base.Synonyms := Env.Synonyms;
+         if not Have_Public then
+            Reg.Public_Base := Reg.Base;
+            return;
+         end if;
+         Reg.Public_Base := Prelude_Public;
+         declare
+            Syntax_Names : constant array (1 .. 3) of AHC.Names.Name_Id :=
+              [AHC.Names.Name_Id (Table.Intern ("()")),
+               AHC.Names.Name_Id (Table.Intern ("[]")),
+               AHC.Names.Name_Id (Table.Intern (":"))];
+         begin
+         --  The exported synonyms' records, as Kinds cached them.
+         declare
+            Cached : AHC.Builtins.Syn_Maps.Map;
+         begin
+            for C in Prelude_Public.Synonyms.Iterate loop
+               declare
+                  K : constant AHC.Names.Name_Id :=
+                    AHC.Builtins.Syn_Maps.Key (C);
+               begin
+                  Cached.Include
+                    (K, (if Env.Synonyms.Contains (K)
+                         then Env.Synonyms.Element (K)
+                         else AHC.Builtins.Syn_Maps.Element (C)));
+               end;
+            end loop;
+            Reg.Public_Base.Synonyms := Cached;
+         end;
+         --  Tuples are syntax too: (,), (,,), ... and (->).
+         for C in Env.DataCons.Iterate loop
+            declare
+               K : constant AHC.Names.Name_Id :=
+                 AHC.Builtins.DataCon_Maps.Key (C);
+               T : constant String :=
+                 Table.Text (AHC.Names.Real_Name_Id (K));
+            begin
+               if T'Length >= 2 and then T (T'First) = '('
+                 and then T (T'First + 1) = ','
+               then
+                  Reg.Public_Base.DataCons.Include
+                    (K, AHC.Builtins.DataCon_Maps.Element (C));
+               end if;
+            end;
+         end loop;
+         for C in Env.TyCons.Iterate loop
+            declare
+               K : constant AHC.Names.Name_Id :=
+                 AHC.Builtins.TyCon_Maps.Key (C);
+               T : constant String :=
+                 Table.Text (AHC.Names.Real_Name_Id (K));
+            begin
+               if T'Length >= 2 and then T (T'First) = '('
+                 and then (T (T'First + 1) = ',' or else T = "(->)")
+               then
+                  Reg.Public_Base.TyCons.Include
+                    (K, AHC.Builtins.TyCon_Maps.Element (C));
+               end if;
+            end;
+         end loop;
+         for Syntax_Name of Syntax_Names loop
+            if Env.TyCons.Contains (Syntax_Name) then
+               Reg.Public_Base.TyCons.Include
+                 (Syntax_Name, Env.TyCons.Element (Syntax_Name));
+            end if;
+            if Env.DataCons.Contains (Syntax_Name) then
+               Reg.Public_Base.DataCons.Include
+                 (Syntax_Name, Env.DataCons.Element (Syntax_Name));
+            end if;
+            if Env.Values.Contains (Syntax_Name) then
+               Reg.Public_Base.Values.Include
+                 (Syntax_Name, Env.Values.Element (Syntax_Name));
+            end if;
+         end loop;
+         end;
       end Snapshot_Base;
    begin
       if not Deps_Ok then
@@ -521,6 +688,7 @@ procedure AHC_Main is
             AHC.Parser.Parse_Module (Root_Stream, Table, Bag,
                                      Root.Ref.all);
             Collect_Link_Flags (Text, R_Pragmas);
+            Detect_Shadow (Text, R_Pragmas, Root.Ref.all);
             if not Bag.Has_Errors then
                AHC.Contracts.Collect
                  (Text, R_Pragmas, Table, Bag, Root.Ref.all,
@@ -584,6 +752,10 @@ procedure AHC_Main is
                if not Bag.Has_Errors then
                   AHC.Rename.Resolve_Module
                     (P_Arena, Table, Bag, M, Env, P_Res);
+                  if P_Arena.Has_Export_List then
+                     Prelude_Public := P_Res.Public;
+                     Have_Public := True;
+                  end if;
                   AHC.Kinds.Check_Module
                     (P_Arena, P_Res, Table, Bag, M, Env, Sigs, Annos,
                      P_Preds);

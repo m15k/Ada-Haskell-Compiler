@@ -679,6 +679,26 @@ package body AHC.Elaborate is
                                  when others =>
                                     return No_Expr;
                               end case;
+                           elsif Inst.Of_Class = Env.Floating_Cl
+                             and then MI in 16 .. 18
+                           then
+                              --  asinh/acosh/atanh: GHC's class
+                              --  defaults (Prelude's asinhDefault_
+                              --  ...), applied to this dictionary.
+                              declare
+                                 F : constant Expr_Id :=
+                                   Global_Named
+                                     ((case MI is
+                                         when 16 => "asinhDefault_",
+                                         when 17 => "acoshDefault_",
+                                         when others => "atanhDefault_"));
+                              begin
+                                 if F = No_Expr then
+                                    return No_Expr;
+                                 end if;
+                                 return Expr_Id
+                                   (Ap2E (Real_Expr_Id (F), V2 (Self_D)));
+                              end;
                            end if;
                            return No_Expr;
                         end Builtin_Default;

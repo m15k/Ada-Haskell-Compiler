@@ -7,6 +7,7 @@ with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Ada.Text_IO.Text_Streams;
 
 with GNAT.OS_Lib;
 
@@ -25,13 +26,35 @@ package body AHC.Repl is
    Imports     : Line_Vectors.Vector;   --  entered import lines
    Decls       : Line_Vectors.Vector;   --  entered declarations
    Loaded_Body : Line_Vectors.Vector;   --  :load'ed file, verbatim
+   Pragmas     : Line_Vectors.Vector;   --  its leading {-# ... #-} lines
    Loaded_Path : Unbounded_String;
+   Loaded_Dir  : Unbounded_String;   --  its directory (module search)
+   Orig_Path   : Unbounded_String;   --  $AHC_PATH at startup
 
    Root    : Unbounded_String;   --  compiler tree (bin/..)
    Scratch : Unbounded_String;   --  session working directory
 
    function "+" (S : String) return Unbounded_String
      renames To_Unbounded_String;
+
+   --  The generated modules. Their names are chosen so that no user
+   --  program imports one (a sibling named Repl or Probe used to be
+   --  shadowed by the scratch directory), and they carry GHCi's
+   --  scoping: {-# OPTIONS_AHC_SHADOW #-} makes the module's own names
+   --  shadow imports and the Prelude instead of being ambiguous with
+   --  them (`it = 4`, `lookup = 10`, a loaded `main`).
+   Session_Mod : constant String := "AhcReplSession_";
+   Expr_Mod    : constant String := "AhcReplExpr_";
+   Parse_Mod   : constant String := "AhcReplParse_";
+   Shadow_Pragma : constant String := "{-# OPTIONS_AHC_SHADOW #-}";
+
+   --  Raw bytes OUT: the source is UTF-8 and must stay so (Text_IO's
+   --  Put re-encoded every byte above 127, so "ünï" reached the
+   --  program as mojibake); writing through the file's stream does not.
+   procedure Put_Raw_Line (F : File_Type; T : String) is
+   begin
+      String'Write (Ada.Text_IO.Text_Streams.Stream (F), T & ASCII.LF);
+   end Put_Raw_Line;
 
    function S (U : Unbounded_String) return String renames To_String;
 
@@ -45,6 +68,22 @@ package body AHC.Repl is
    function Starts (T, Prefix : String) return Boolean
    is (T'Length >= Prefix'Length
        and then T (T'First .. T'First + Prefix'Length - 1) = Prefix);
+
+   --  Point the compiler's module search ($AHC_PATH) at Dir (the
+   --  directory of the loaded file) followed by whatever the user
+   --  had set; "" restores the startup value.
+   procedure Set_Module_Path (Dir : String) is
+      Joined : constant String :=
+        (if Dir = "" then S (Orig_Path)
+         elsif Orig_Path = Null_Unbounded_String then Dir
+         else Dir & ":" & S (Orig_Path));
+   begin
+      if Joined = "" then
+         Ada.Environment_Variables.Clear ("AHC_PATH");
+      else
+         Ada.Environment_Variables.Set ("AHC_PATH", Joined);
+      end if;
+   end Set_Module_Path;
 
    --  First whitespace-delimited token of T.
    function First_Word (T : String) return String is
@@ -61,7 +100,7 @@ package body AHC.Repl is
    begin
       Create (F, Out_File, Path);
       for L of Lines loop
-         Put_Line (F, S (L));
+         Put_Raw_Line (F, S (L));
       end loop;
       Close (F);
    end Write_File;
@@ -110,8 +149,9 @@ package body AHC.Repl is
          begin
             if Ada.Strings.Fixed.Index (L, ": error:") > 0
               or else Ada.Strings.Fixed.Index (L, ": warning:") > 0
+              or else Starts (L, "ahc: ")
             then
-               Put_Line (L);
+               Put_Raw_Line (Current_Output, L);
             end if;
          end;
       end loop;
@@ -127,7 +167,7 @@ package body AHC.Repl is
    begin
       Open (F, In_File, Cap);
       while not End_Of_File (F) loop
-         Put_Line (Get_Line (F));
+         Put_Raw_Line (Current_Output, Get_Line (F));
       end loop;
       Close (F);
    exception
@@ -176,7 +216,11 @@ package body AHC.Repl is
    procedure Write_Repl is
       Lines : Line_Vectors.Vector;
    begin
-      Lines.Append (+"module Repl where");
+      for L of Pragmas loop
+         Lines.Append (L);
+      end loop;
+      Lines.Append (+Shadow_Pragma);
+      Lines.Append (+("module " & Session_Mod & " where"));
       for L of Imports loop
          Lines.Append (L);
       end loop;
@@ -186,28 +230,38 @@ package body AHC.Repl is
       for L of Decls loop
          Lines.Append (L);
       end loop;
-      Write_File (Path_Of ("Repl.hs"), Lines);
+      Write_File (Path_Of (Session_Mod & ".hs"), Lines);
    end Write_Repl;
 
-   procedure Write_Expr_Module
-     (Name : String; Expr : String; Runner : String)
-   is
+   --  The expression module: the session's names (shadowing the
+   --  Prelude, as in GHCi) plus the session's imports, and `it`.
+   --  Main only runs it, so a session's own `it` or `main` never
+   --  collides with the runner.
+   procedure Write_Expr_Module (Expr : String) is
       Lines : Line_Vectors.Vector;
    begin
-      Lines.Append (+"module Main where");
-      Lines.Append (+"import Repl");
-      --  Imported names are visible in Repl but not exported by
-      --  it; the expression module needs the same imports.
+      for L of Pragmas loop
+         Lines.Append (L);
+      end loop;
+      Lines.Append (+Shadow_Pragma);
+      Lines.Append (+("module " & Expr_Mod & " where"));
+      Lines.Append (+("import " & Session_Mod));
       for L of Imports loop
          Lines.Append (L);
       end loop;
       Lines.Append (+("it = " & Expr));
-      if Runner /= "" then
-         Lines.Append (+("main :: IO ()"));
-         Lines.Append (+("main = " & Runner));
-      end if;
-      Write_File (Path_Of (Name), Lines);
+      Write_File (Path_Of (Expr_Mod & ".hs"), Lines);
    end Write_Expr_Module;
+
+   procedure Write_Main (Runner : String) is
+      Lines : Line_Vectors.Vector;
+   begin
+      Lines.Append (+"module Main where");
+      Lines.Append (+("import qualified " & Expr_Mod & " as E"));
+      Lines.Append (+"main :: IO ()");
+      Lines.Append (+("main = " & Runner));
+      Write_File (Path_Of ("Main.hs"), Lines);
+   end Write_Main;
 
    ------------------------------------------------------------------
    --  Pipeline steps
@@ -239,11 +293,11 @@ package body AHC.Repl is
       Lines : Line_Vectors.Vector;
       Args  : Line_Vectors.Vector;
    begin
-      Lines.Append (+"module ParseProbe where");
+      Lines.Append (+("module " & Parse_Mod & " where"));
       Lines.Append (+Line);
-      Write_File (Path_Of ("ParseProbe.hs"), Lines);
+      Write_File (Path_Of (Parse_Mod & ".hs"), Lines);
       Args.Append (+"parse");
-      Args.Append (+Path_Of ("ParseProbe.hs"));
+      Args.Append (+Path_Of (Parse_Mod & ".hs"));
       return Spawn_Cap (Ahc, Args, Path_Of ("parse.out")) = 0;
    end Parses_As_Decl;
 
@@ -294,25 +348,26 @@ package body AHC.Repl is
    begin
       Into.Append (+Line);
       Write_Repl;
-      if not Check (Path_Of ("Repl.hs")) then
+      if not Check (Path_Of (Session_Mod & ".hs")) then
          Into := Saved;
          Write_Repl;
       end if;
    end Add_Entry;
 
+   function Img (N : Integer) return String is
+     (Ada.Strings.Fixed.Trim (Integer'Image (N), Ada.Strings.Both));
+
    procedure Eval (Expr : String) is
    begin
       Write_Repl;
-      Write_Expr_Module ("Probe.hs", Expr, "");
-      if not Check (Path_Of ("Probe.hs")) then
+      Write_Expr_Module (Expr);
+      if not Check (Path_Of (Expr_Mod & ".hs")) then
          return;
       end if;
       declare
          Ty : constant String := It_Type (Path_Of (Cap_File));
       begin
-         Write_Expr_Module
-           ("Main.hs", Expr,
-            (if Is_IO (Ty) then "it" else "print it"));
+         Write_Main (if Is_IO (Ty) then "E.it" else "print E.it");
       end;
       if not Build then
          return;
@@ -321,7 +376,7 @@ package body AHC.Repl is
          Rc : constant Integer := Spawn_Plain (Path_Of ("main"));
       begin
          if Rc /= 0 then
-            Put_Line ("*** exit code" & Integer'Image (Rc));
+            Put_Line ("*** exit code " & Img (Rc));
          end if;
       end;
    end Eval;
@@ -329,8 +384,8 @@ package body AHC.Repl is
    procedure Show_Type (Expr : String) is
    begin
       Write_Repl;
-      Write_Expr_Module ("Probe.hs", Expr, "");
-      if Check (Path_Of ("Probe.hs")) then
+      Write_Expr_Module (Expr);
+      if Check (Path_Of (Expr_Mod & ".hs")) then
          declare
             Ty : constant String := It_Type (Path_Of (Cap_File));
          begin
@@ -341,49 +396,136 @@ package body AHC.Repl is
       end if;
    end Show_Type;
 
+   --  Advance the block-comment nesting depth over one line of
+   --  Haskell source, skipping string literals and line comments, so
+   --  an `import` inside {- ... -} is not mistaken for a real one.
+   procedure Scan_Depth (L : String; Depth : in out Natural) is
+      Quote : constant Character := '"';
+      Tick  : constant Character := ''';
+      I : Natural := L'First;
+   begin
+      while I <= L'Last loop
+         if Depth = 0 and then L (I) = Quote then
+            I := I + 1;
+            while I <= L'Last and then L (I) /= Quote loop
+               if L (I) = '\' then
+                  I := I + 1;
+               end if;
+               I := I + 1;
+            end loop;
+         elsif Depth = 0 and then L (I) = Tick
+           and then I + 2 <= L'Last and then L (I + 2) = Tick
+         then
+            I := I + 2;   --  a character literal such as '"'
+         elsif Depth = 0 and then L (I) = '-' and then I < L'Last
+           and then L (I + 1) = '-'
+           and then (I + 1 = L'Last
+                     or else L (I + 2) not in
+                       '!' | '#' | '$' | '%' | '&' | '*' | '+' | '.'
+                       | '/' | '<' | '=' | '>' | '?' | '@' | '\'
+                       | '^' | '|' | '~' | ':')
+         then
+            return;   --  a line comment: the rest is not code
+         elsif L (I) = '{' and then I < L'Last and then L (I + 1) = '-'
+         then
+            Depth := Depth + 1;
+            I := I + 1;
+         elsif Depth > 0 and then L (I) = '-' and then I < L'Last
+           and then L (I + 1) = '}'
+         then
+            Depth := Depth - 1;
+            I := I + 1;
+         end if;
+         I := I + 1;
+      end loop;
+   end Scan_Depth;
+
    procedure Load (Path : String) is
       Saved_I : constant Line_Vectors.Vector := Imports;
       Saved_D : constant Line_Vectors.Vector := Decls;
       Saved_B : constant Line_Vectors.Vector := Loaded_Body;
+      Saved_P : constant Line_Vectors.Vector := Pragmas;
+      Saved_Dir : constant Unbounded_String := Loaded_Dir;
       F       : File_Type;
       In_Header : Boolean := False;
-      First     : Boolean := True;
+      In_Import : Boolean := False;
+      Header_Done : Boolean := False;
+      Code_Seen : Boolean := False;
+      Depth     : Natural := 0;
    begin
       Open (F, In_File, Path);
       Imports.Clear;
       Decls.Clear;
       Loaded_Body.Clear;
+      Pragmas.Clear;
+      --  Sibling modules resolve from the loaded file's directory,
+      --  as in GHCi (the generated session module lives elsewhere).
+      Loaded_Dir := +(if Ada.Strings.Fixed.Index (Path, "/") = 0
+                      then "."
+                      else Ada.Directories.Containing_Directory (Path));
+      Set_Module_Path (S (Loaded_Dir));
       while not End_Of_File (F) loop
          declare
             L : constant String := Get_Line (F);
+            T : constant String := Trim (L);
+            Start_Depth : constant Natural := Depth;
          begin
-            if First and then Starts (Trim (L), "module ") then
-               --  Skip the header (possibly a multi-line export
-               --  list) through its closing 'where'.
-               In_Header :=
-                 Ada.Strings.Fixed.Index (L, "where") = 0;
+            Scan_Depth (L, Depth);
+            if Start_Depth > 0 then
+               In_Import := False;
+               Loaded_Body.Append (+L);   --  inside a block comment
             elsif In_Header then
-               In_Header :=
-                 Ada.Strings.Fixed.Index (L, "where") = 0;
+               --  A (possibly multi-line) export list, through 'where'.
+               In_Header := Ada.Strings.Fixed.Index (L, "where") = 0;
+            elsif not Header_Done and then not Code_Seen
+              and then Starts (T, "module ")
+            then
+               Header_Done := True;
+               In_Header := Ada.Strings.Fixed.Index (L, "where") = 0;
+            elsif not Code_Seen and then Starts (T, "{-#") then
+               Pragmas.Append (+L);   --  must precede the module header
+            elsif Starts (L, "import ") then
+               --  The file's imports are session imports, so the
+               --  expression module sees them (GHCi's *Main> scope).
+               In_Import := True;
+               Code_Seen := True;
+               Imports.Append (+L);
+            elsif In_Import and then L'Length > 0
+              and then (L (L'First) = ' ' or else L (L'First) = ASCII.HT)
+            then
+               Imports.Append (+L);   --  continuation of an import
             else
+               In_Import := False;
+               if T /= "" and then not Starts (T, "--")
+                 and then not Starts (T, "{-")
+               then
+                  Code_Seen := True;
+               end if;
                Loaded_Body.Append (+L);
             end if;
-            First := False;
          end;
       end loop;
       Close (F);
       Write_Repl;
-      if Check (Path_Of ("Repl.hs")) then
+      if Check (Path_Of (Session_Mod & ".hs")) then
          Loaded_Path := +Path;
          Put_Line ("loaded: " & Path);
       else
          Imports := Saved_I;
          Decls := Saved_D;
          Loaded_Body := Saved_B;
+         Pragmas := Saved_P;
+         Loaded_Dir := Saved_Dir;
+         Set_Module_Path (S (Loaded_Dir));
          Write_Repl;
       end if;
    exception
-      when Ada.IO_Exceptions.Name_Error =>
+      when Ada.IO_Exceptions.Name_Error
+         | Ada.IO_Exceptions.Device_Error
+         | Ada.IO_Exceptions.Use_Error =>
+         if Is_Open (F) then
+            Close (F);
+         end if;
          Put_Line ("cannot open: " & Path);
    end Load;
 
@@ -393,22 +535,43 @@ package body AHC.Repl is
       Put_Line ("  :help :h        this text");
       Put_Line ("  :quit :q        leave the repl");
       Put_Line ("  :type E, :t E   show E's inferred type");
-      Put_Line ("  :load P, :l P   load file P (resets the session)");
+      Put_Line ("  :load P, :l P   load file P (resets the session;");
+      Put_Line ("                  its sibling modules are found beside it)");
       Put_Line ("  :reload :r      reload the last :load");
+      Put_Line ("  :! CMD          run a shell command");
       Put_Line ("  :clear          empty the session");
       Put_Line ("anything else: an import, a declaration, or an");
       Put_Line ("expression. several declarations fit one line with");
       Put_Line ("';' (f :: Int -> Int; f x = x + 1). a loaded main");
-      Put_Line ("runs as the expression Repl.main. IO results are");
+      Put_Line ("runs by typing main. IO results are");
       Put_Line ("not printed; 'it' is not kept between entries.");
    end Help;
+
+   --  `:! CMD` / `:!CMD`: a shell command, as in GHCi - the way a
+   --  session edits a sibling module between :reloads.
+   procedure Shell (Cmd : String) is
+      use GNAT.OS_Lib;
+      A  : Argument_List (1 .. 2) :=
+        [new String'("-c"), new String'(Cmd)];
+      Rc : constant Integer := Spawn ("/bin/sh", A);
+   begin
+      Free (A (1));
+      Free (A (2));
+      if Rc /= 0 then
+         Put_Line ("*** exit code " & Img (Rc));
+      end if;
+   end Shell;
 
    procedure Command (Line : String) is
       W    : constant String := First_Word (Line);
       Rest : constant String :=
         Trim (Line (Line'First + W'Length .. Line'Last));
    begin
-      if W = ":help" or else W = ":h" or else W = ":?" then
+      if Starts (Line, ":!") then
+         if Trim (Line (Line'First + 2 .. Line'Last)) /= "" then
+            Shell (Trim (Line (Line'First + 2 .. Line'Last)));
+         end if;
+      elsif W = ":help" or else W = ":h" or else W = ":?" then
          Help;
       elsif W = ":type" or else W = ":t" then
          if Rest /= "" then
@@ -428,7 +591,10 @@ package body AHC.Repl is
          Imports.Clear;
          Decls.Clear;
          Loaded_Body.Clear;
+         Pragmas.Clear;
          Loaded_Path := Null_Unbounded_String;
+         Loaded_Dir := Null_Unbounded_String;
+         Set_Module_Path ("");
          Write_Repl;
       else
          Put_Line ("unknown command " & W & " (:h for help)");
@@ -501,6 +667,9 @@ package body AHC.Repl is
             end loop;
             Scratch := +("/tmp/ahc-repl" & Img);
          end;
+      end if;
+      if Ada.Environment_Variables.Exists ("AHC_PATH") then
+         Orig_Path := +Ada.Environment_Variables.Value ("AHC_PATH");
       end if;
       Ada.Directories.Create_Path (S (Scratch));
       Write_Repl;

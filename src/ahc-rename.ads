@@ -129,6 +129,9 @@ package AHC.Rename is
       Own_Syns   : Builtins.Syn_Maps.Map;     --  this module's, uncached
       Own_Values : Builtins.Var_Maps.Map;     --  this module's top level
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type
+      --  The Prelude pass only (no registry): what its export list
+      --  names, resolved against the flat environment (M144b).
+      Public    : Modules.Iface;
    end record;
 
    --  Reg carries the module registry: Base (builtins + Prelude

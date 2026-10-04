@@ -3,6 +3,7 @@
 -- message. The harness compares output only; the exit code is
 -- asserted by the trailing "unreached".
 import System.Exit
+import AHC.Prim
 
 main :: IO ()
 main = do

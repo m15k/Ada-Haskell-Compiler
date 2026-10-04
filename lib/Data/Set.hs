@@ -6,6 +6,8 @@ module Data.Set
   , filter, map
   ) where
 
+import Prelude hiding (null, filter, map)
+
 --  Constructor names are SBin/STip (not exported) because the
 --  renamer's constructor namespace is flat across modules and
 --  Data.Map owns Bin/Tip; per-module namespaces are the M75 item.

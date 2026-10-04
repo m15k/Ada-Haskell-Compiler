@@ -1,3 +1,263 @@
+-- The export list is what GHC 9.4.8's Prelude exports (`ghc -e ':browse
+-- Prelude'`), and it is the only part of this file a USER module sees:
+-- a module compiled from lib/ or $AHC_LIB resolves the implicit Prelude
+-- through the whole file (library code is base's internals), a user
+-- module through this list. scripts/check_prelude_exports.sh diffs the
+-- list against GHC's and fails on any difference not documented here.
+--
+-- ABSENT-NAMES: MonadFail lex floatRadix floatDigits floatRange decodeFloat
+--   encodeFloat exponent significand scaleFloat isDenormalized isIEEE
+-- NOT-METHODS: <$ divMod quotRem mapM sequence sequenceA
+--   (GHC class methods that are plain functions here; EXCLUSIONS)
+-- (the lines above are read by scripts/check_prelude_exports.sh). GHC
+-- exports these, AHC's Prelude does not define them:
+--   MonadFail   (AHC's Monad carries `fail` itself; do-notation's
+--                failing patterns call that method)
+--   lex         (Report 9's lexer; derived Read uses lexTok_ instead)
+--   the RealFloat internals floatRadix, floatDigits, floatRange,
+--   decodeFloat, encodeFloat, exponent, significand, scaleFloat,
+--   isDenormalized, isIEEE (RealFloat is the useful IEEE subset)
+
+module Prelude
+  ( -- types and classes
+    Applicative
+  , Bool (..)
+  , Bounded
+  , Char
+  , Double
+  , Either (..)
+  , Enum
+  , Eq
+  , FilePath
+  , Float
+  , Floating
+  , Foldable
+  , Fractional
+  , Functor
+  , IO
+  , IOError
+  , Int
+  , Integer
+  , Integral
+  , Maybe (..)
+  , Monad
+  , Monoid
+  , Num
+  , Ord
+  , Ordering (..)
+  , Rational
+  , Read
+  , Real
+  , RealFloat
+  , RealFrac
+  , Semigroup
+  , Show
+  , String
+  , Traversable
+  , ReadS
+  , ShowS
+  , Word
+  , -- values, operators and class methods
+    (!!)
+  , ($)
+  , ($!)
+  , (&&)
+  , (++)
+  , (.)
+  , (<$>)
+  , pure
+  , (<*>)
+  , (*>)
+  , (<*)
+  , minBound
+  , maxBound
+  , succ
+  , pred
+  , toEnum
+  , fromEnum
+  , enumFrom
+  , enumFromThen
+  , enumFromTo
+  , enumFromThenTo
+  , (==)
+  , (/=)
+  , pi
+  , exp
+  , log
+  , sqrt
+  , (**)
+  , logBase
+  , sin
+  , cos
+  , tan
+  , asin
+  , acos
+  , atan
+  , sinh
+  , cosh
+  , tanh
+  , foldr
+  , foldl
+  , foldr1
+  , foldl1
+  , null
+  , length
+  , elem
+  , maximum
+  , minimum
+  , sum
+  , product
+  , (/)
+  , recip
+  , fromRational
+  , fmap
+  , (<$)
+  , quot
+  , rem
+  , div
+  , mod
+  , quotRem
+  , divMod
+  , toInteger
+  , (>>=)
+  , (>>)
+  , return
+  , fail
+  , mempty
+  , mappend
+  , mconcat
+  , (+)
+  , (-)
+  , (*)
+  , negate
+  , abs
+  , signum
+  , fromInteger
+  , compare
+  , (<)
+  , (<=)
+  , (>)
+  , (>=)
+  , max
+  , min
+  , readsPrec
+  , readList
+  , toRational
+  , isNaN
+  , isInfinite
+  , isNegativeZero
+  , atan2
+  , properFraction
+  , truncate
+  , round
+  , ceiling
+  , floor
+  , (<>)
+  , showsPrec
+  , show
+  , showList
+  , traverse
+  , sequenceA
+  , mapM
+  , sequence
+  , (^)
+  , (^^)
+  , all
+  , and
+  , any
+  , break
+  , concat
+  , concatMap
+  , const
+  , curry
+  , cycle
+  , drop
+  , dropWhile
+  , either
+  , error
+  , even
+  , filter
+  , flip
+  , fromIntegral
+  , fst
+  , gcd
+  , getChar
+  , getContents
+  , getLine
+  , head
+  , id
+  , init
+  , interact
+  , ioError
+  , iterate
+  , last
+  , lcm
+  , lines
+  , lookup
+  , map
+  , mapM_
+  , maybe
+  , not
+  , notElem
+  , odd
+  , or
+  , otherwise
+  , print
+  , putChar
+  , putStr
+  , putStrLn
+  , read
+  , readFile
+  , readIO
+  , readLn
+  , readParen
+  , reads
+  , realToFrac
+  , repeat
+  , replicate
+  , reverse
+  , seq
+  , sequence_
+  , showParen
+  , showString
+  , shows
+  , snd
+  , span
+  , splitAt
+  , subtract
+  , tail
+  , take
+  , takeWhile
+  , uncurry
+  , undefined
+  , unlines
+  , until
+  , unwords
+  , unzip
+  , userError
+  , words
+  , zip
+  , zipWith
+  , (||)
+  , scanl
+  , scanl1
+  , scanr
+  , scanr1
+  , zip3
+  , unzip3
+  , zipWith3
+  , writeFile
+  , appendFile
+  , (=<<)
+  , showChar
+  , asTypeOf
+  , foldMap
+  , errorWithoutStackTrace
+  , asinh
+  , acosh
+  , atanh
+  ) where
+
 -- The AHC Prelude (Phase 4): standard definitions compiled by AHC
 -- itself ahead of every user module. Class/type signatures and the
 -- numeric primitives stay wired in AHC.Builtins / AHC.Prelude_Core;
@@ -885,16 +1145,15 @@ cycle xs = xs' where xs' = xs ++ xs'
 -- in the wild and was a type error here (thibaudmichaud/lambda-calculus
 -- folds over Data.Set through the Prelude).
 --
--- Every method has a default in terms of foldr, so an instance need
--- only give foldr - but the containers override the cheap ones
--- (Set.length is its size annotation, not a traversal). The list
--- instance forwards to the list-monomorphic originals, kept under
+-- Minimal definition `foldMap | foldr`, as in base: foldMap defaults to
+-- a foldr, foldr to a foldMap into the (unexported) Endo_ monoid; every
+-- other method defaults to a foldr too. The containers override the
+-- cheap ones (Set.length is its size annotation, not a traversal). The
+-- list instance forwards to the list-monomorphic originals, kept under
 -- *List_ names, so `length someList` costs exactly what it always did
 -- and the desugarer still has a concatMap needing no dictionary.
---  `toList` is NOT here: base keeps it in Data.Foldable, and this
---  Prelude has no export list, so defining it would shadow every
---  program's own toList. toListF_ is the internal spelling; the
---  public name is Data.Foldable's.
+-- `toList` is not exported by GHC's Prelude: toListF_ is the internal
+-- spelling; the public name is Data.Foldable's.
 class Foldable t where
   foldr :: (a -> b -> b) -> b -> t a -> b
   null :: t a -> Bool
@@ -905,7 +1164,12 @@ class Foldable t where
   product :: Num a => t a -> a
   maximum :: Ord a => t a -> a
   minimum :: Ord a => t a -> a
+  foldMap :: Monoid m => (a -> m) -> t a -> m
+  foldr1 :: (a -> a -> a) -> t a -> a
+  foldl1 :: (a -> a -> a) -> t a -> a
 
+  foldMap f t = foldr (\x acc -> mappend (f x) acc) mempty t
+  foldr f z t = appEndo_ (foldMap (\x -> Endo_ (f x)) t) z
   null t = foldr (\_ _ -> False) True t
   length t = foldr (\_ n -> n + 1) 0 t
   foldl f z t = foldlList_ f z (toListF_ t)
@@ -914,6 +1178,35 @@ class Foldable t where
   product t = productList_ (toListF_ t)
   maximum t = maximumList_ (toListF_ t)
   minimum t = minimumList_ (toListF_ t)
+  foldr1 f t = foldr1Default_ f t
+  foldl1 f t = foldl1Default_ f t
+
+newtype Endo_ b = Endo_ (b -> b)
+
+appEndo_ :: Endo_ b -> b -> b
+appEndo_ (Endo_ f) = f
+
+instance Semigroup (Endo_ b) where
+  Endo_ f <> Endo_ g = Endo_ (\x -> f (g x))
+
+instance Monoid (Endo_ b) where
+  mempty = Endo_ (\x -> x)
+
+foldr1Default_ :: Foldable t => (a -> a -> a) -> t a -> a
+foldr1Default_ f t =
+  case foldr (\x m -> Just (case m of
+                              Nothing -> x
+                              Just y -> f x y)) Nothing t of
+    Just r -> r
+    Nothing -> errorWithoutStackTrace "foldr1: empty structure"
+
+foldl1Default_ :: Foldable t => (a -> a -> a) -> t a -> a
+foldl1Default_ f t =
+  case foldl (\m y -> Just (case m of
+                              Nothing -> y
+                              Just x -> f x y)) Nothing t of
+    Just r -> r
+    Nothing -> errorWithoutStackTrace "foldl1: empty structure"
 
 toListF_ :: Foldable t => t a -> [a]
 toListF_ t = foldr (:) [] t
@@ -928,6 +1221,8 @@ instance Foldable [] where
   product = productList_
   maximum = maximumList_
   minimum = minimumList_
+  foldr1 = foldr1List_
+  foldl1 = foldl1List_
 
 instance Foldable Maybe where
   foldr _ z Nothing = z
@@ -970,11 +1265,6 @@ any p t = orList_ (map p (toListF_ t))
 all :: Foldable t => (a -> Bool) -> t a -> Bool
 all p t = andList_ (map p (toListF_ t))
 
-foldr1 :: Foldable t => (a -> a -> a) -> t a -> a
-foldr1 f t = foldr1List_ f (toListF_ t)
-
-foldl1 :: Foldable t => (a -> a -> a) -> t a -> a
-foldl1 f t = foldl1List_ f (toListF_ t)
 
 mapM_ :: (Foldable t, Monad m) => (a -> m b) -> t a -> m ()
 mapM_ f t = mapMList__ f (toListF_ t)
@@ -1476,3 +1766,101 @@ instance Integral Word64 where
 
 instance Read Word64 where
   readsPrec _ s = [(narrowWord64_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+
+
+-- Names GHC's Prelude exports that used to live in lib/ (M144b): the
+-- zip/scan families (moved from Data.List, which re-exports them),
+-- writeFile/appendFile (moved from System.IO), and the small
+-- Report 9 definitions that were simply missing.
+
+zip3 :: [a] -> [b] -> [c] -> [(a, b, c)]
+zip3 (a : as) (b : bs) (c : cs) = (a, b, c) : zip3 as bs cs
+zip3 _ _ _ = []
+
+zipWith3 :: (a -> b -> c -> d) -> [a] -> [b] -> [c] -> [d]
+zipWith3 f (a : as) (b : bs) (c : cs) =
+  f a b c : zipWith3 f as bs cs
+zipWith3 _ _ _ _ = []
+
+unzip3 :: [(a, b, c)] -> ([a], [b], [c])
+unzip3 xs =
+  ( [a | (a, _, _) <- xs]
+  , [b | (_, b, _) <- xs]
+  , [c | (_, _, c) <- xs]
+  )
+
+scanl :: (b -> a -> b) -> b -> [a] -> [b]
+scanl f z xs =
+  z : case xs of
+        []      -> []
+        (x : r) -> scanl f (f z x) r
+
+scanl1 :: (a -> a -> a) -> [a] -> [a]
+scanl1 _ [] = []
+scanl1 f (x : xs) = scanl f x xs
+
+scanr :: (a -> b -> b) -> b -> [a] -> [b]
+scanr _ z [] = [z]
+scanr f z (x : xs) = f x (head qs) : qs
+  where
+    qs = scanr f z xs
+
+scanr1 :: (a -> a -> a) -> [a] -> [a]
+scanr1 _ [] = []
+scanr1 _ [x] = [x]
+scanr1 f (x : xs) = f x (head qs) : qs
+  where
+    qs = scanr1 f xs
+
+
+infixr 1 =<<
+(=<<) :: Monad m => (a -> m b) -> m a -> m b
+f =<< m = m >>= f
+
+type ShowS = String -> String
+type ReadS a = String -> [(a, String)]
+
+showChar :: Char -> ShowS
+showChar = (:)
+
+asTypeOf :: a -> a -> a
+asTypeOf = const
+
+errorWithoutStackTrace :: String -> a
+errorWithoutStackTrace s = error s
+
+-- asinh/acosh/atanh are Floating METHODS (wired, like the rest of the
+-- class); at Double/Float they are libm's. A user instance that omits
+-- them gets these formulas (GHC has no default there: the instance is
+-- merely incomplete) through AHC.Elaborate's built-in defaults.
+asinhDefault_ :: Floating a => a -> a
+asinhDefault_ x = log (x + sqrt (x * x + 1.0))
+
+acoshDefault_ :: Floating a => a -> a
+acoshDefault_ x = log (x + (x + 1.0) * sqrt ((x - 1.0) / (x + 1.0)))
+
+atanhDefault_ :: Floating a => a -> a
+atanhDefault_ x = 0.5 * log ((1.0 + x) / (1.0 - x))
+
+-- writeFile/appendFile over the handle primitives. The IOError of a
+-- failed open or write is relabelled "withFile" with THIS file's name,
+-- as System.IO's withFile (and GHC) report it.
+writeFile :: String -> String -> IO ()
+writeFile path s = withFileP_ path 1 (\i -> primHPutStr i s)
+
+appendFile :: String -> String -> IO ()
+appendFile path s = withFileP_ path 2 (\i -> primHPutStr i s)
+
+withFileP_ :: String -> Int -> (Int -> IO a) -> IO a
+withFileP_ path mode act =
+  primCatch
+    (primHOpen path mode >>= \i ->
+       primCatch (act i >>= \r -> primHClose i >> return r)
+                 (\se -> primHClose i >> primThrowIO se))
+    (\se ->
+       if primExcKind se == 3
+         then let e = primExcIO se
+              in primThrowIO (primExcFromIO
+                   (primMkIOError (primIoeType e) "withFile"
+                                  (primIoeDescription e) (Just path)))
+         else primThrowIO se)

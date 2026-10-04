@@ -15,7 +15,7 @@ for tin in tests/repl/*.in; do
   exp="tests/repl/$base.out"
   dir="/tmp/ahc-repl-test-$base"
   rm -rf "$dir"; mkdir -p "$dir"
-  got=$(AHC_REPL_DIR="$dir" ./bin/ahc repl < "$tin" 2>&1)
+  got=$(AHC_REPL_DIR="$dir" ./bin/ahc repl < "$tin" 2>&1 | sed "s#$PWD/#<repo>/#g")
   rm -rf "$dir"
   if $update; then
     printf '%s\n' "$got" > "$exp"; echo "updated $exp"

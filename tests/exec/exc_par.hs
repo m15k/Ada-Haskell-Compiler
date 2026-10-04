@@ -2,6 +2,7 @@
 -- demands the sparked thunk, on the demanding task, where a catch
 -- receives it - and demanding it again raises again (M137).
 import Control.Parallel
+import AHC.Prim
 
 main :: IO ()
 main = do

@@ -6,6 +6,10 @@
 -- deterministic contract, not an accident.
 {-# LANGUAGE ForeignFunctionInterface #-}
 import Control.Concurrent.Scoped
+import AHC.FFI
+import Foreign.C.Types
+import Foreign.Marshal.Alloc
+import Foreign.Ptr
 
 foreign import ccall "pipe" c_pipe :: Ptr a -> IO CInt
 foreign import ccall "write" c_write :: CInt -> String -> CInt -> IO CInt

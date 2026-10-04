@@ -6,6 +6,7 @@
 -- stayed 3000000000 and died there: "FFI: Int32 argument out of range").
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import Foreign.C.Types
 foreign import ccall "abs" c_abs :: CInt -> CInt
 
 main :: IO ()

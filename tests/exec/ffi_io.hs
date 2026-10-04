@@ -3,6 +3,7 @@
 -- the output is deterministic.
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import Foreign.Ptr
 foreign import ccall getenv :: String -> IO (Ptr Char)
 foreign import ccall "srand" c_srand :: Int -> IO ()
 

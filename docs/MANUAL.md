@@ -76,6 +76,26 @@ stop the pipeline at any point and look at what it produced - and
 the object cache with no second evaluator
 (`docs/repl-design-note.md`).
 
+**The REPL and multi-module programs (M143).** `:load PATH` works
+on a program whose root file imports sibling modules, as in GHCi:
+the loaded file's directory is searched for its imports (through
+`$AHC_PATH`, below), the file's own top-level imports (not ones inside
+a block comment) become session imports - so imported names,
+`Q.qualified` names and a sibling module's types and constructors are
+usable at the prompt - and `:reload` re-reads every module from disk,
+so editing a sibling and typing `:r` takes effect. A type error in a
+sibling is reported with that sibling's file name; a missing module
+lists every place that was searched. `:! CMD` (or `:!CMD`) runs a shell
+command. Session scoping follows GHCi: the generated session modules
+(`AhcReplSession_`, `AhcReplExpr_`; names no program imports) carry
+`{-# OPTIONS_AHC_SHADOW #-}`, which makes a module's own declarations
+shadow imports and the Prelude instead of being ambiguous with them -
+so `it = 4`, `lookup = 10` followed by `g = lookup + 1`, and a loaded
+file's `main` typed at the prompt all behave as in GHCi.
+`$AHC_PATH` is a colon-separated list of extra module directories
+(GHC's `-i`), searched BEFORE the root file's own directory, then dependencies
+and the stdlib; `ahc check`/`ahc build` honour it too.
+
 **The decision** to use many small stages instead of a few big ones
 was made at the very start and never regretted. Small stages mean
 each one can state precisely what it guarantees about its output —
@@ -403,11 +423,36 @@ shared environment by name - desugaring `==` for literal patterns,
 `>>` for `do` - now gets the Prelude's entity, which is what it
 always meant.
 
-One deliberate difference from GHC remains: a module's own
-declaration wins over a same-named import or Prelude entity at an
-unqualified use, where GHC reports "Ambiguous occurrence". Values
-always behaved that way here; types now match them. Qualify the name
-if the code must also build under GHC.
+**Own declaration versus import (M144).** A module's own top-level
+declaration is one entity among the others in scope, as in GHC (Report
+5.5.2): at an *unqualified use* (or an export-list entry), a same-named
+entity from an unqualified import - or from the implicit Prelude - is
+"ambiguous name 'x'" / "ambiguous type 'T'" / constructor / class, at
+the use site. Declaring is never an error, only using; `M.x` and
+`Prelude.x` are never ambiguous; let, where and lambda bindings shadow
+everything; one entity re-exported along two paths is one entity;
+`import Prelude hiding (x)` frees the name. The standard library
+follows the rule too: `Data.Map` and `Data.Set` say `import Prelude
+hiding (...)`. Still looser than GHC: an unqualified import and the
+implicit Prelude naming two different *values* resolve to the import
+rather than being ambiguous.
+
+**The Prelude has an export list (M144b).** `prelude/Prelude.hs` begins
+`module Prelude (...)` and names exactly what GHC 9.4.8's Prelude
+exports, so a *user* module's implicit Prelude is that list: `fromMaybe`,
+`swap`, the FFI pointer operations and the `prim*` primitives are not
+in scope without the import GHC would also require (`Data.Maybe`,
+`Data.Tuple`, `Foreign.Ptr`, ...). A module compiled from the compiler's
+`lib/` directory or `$AHC_LIB` is base's internals and still sees the
+whole file, which is how `Data.Maybe` re-exports `fromMaybe` and
+`AHC.Prim` re-exports the primitives; the driver knows where each
+module's file came from and records it once, on the module. Own-versus-
+Prelude ambiguity is judged against the public list for everyone.
+`scripts/check_prelude_exports.sh` (part of `run_gate.sh`) diffs the list
+against `ghc -e ':browse Prelude'`; the names GHC exports that AHC does
+not define are documented at the top of the file (`MonadFail` - AHC's
+`Monad` carries `fail` itself - `lex`, and the RealFloat internals
+`floatRadix` ... `isIEEE`).
 
 **Restricting the Prelude.** The snapshot fallback is exactly the
 Report's *implicit* `import Prelude` — and Report 5.6.1 says an
@@ -1112,7 +1157,7 @@ interface-file world — at a cost of ~0.3 seconds per build.
 
 ### foreign import ccall
 
-The prims boundary (chapter 9) is compiler-internal; the **FFI** (Report
+The prims boundary (chapter 9) is compiler-internal (the exception and IOError primitives the compiler's own tests drive are re-exported by the INTERNAL, UNSTABLE module `AHC.Prim`; no `prim*` name is in the Prelude); the **FFI** (Report
 chapter 8) is the same idea opened to user programs:
 
     foreign import ccall unsafe "labs" c_labs :: Int -> Int
@@ -1155,6 +1200,25 @@ forced and range-checked BEFORE any marshal buffer is allocated,
 so an argument that dies cannot leak the buffers of its
 neighbours.
 | `Ptr a`            | `void *`       | phantom `a`; `Eq`/`Ord`      |
+
+**Imports (M145).** The pointer and C-type names are not in the
+Prelude, as they are not in GHC's; they live in GHC's modules, which
+are facades over the wired entities: `Foreign.Ptr` (`Ptr`, `FunPtr`,
+`nullPtr`, `castPtr`, `plusPtr`, `nullFunPtr`, `freeHaskellFunPtr`),
+`Foreign.C.Types` (`CChar`, `CInt`, `CUInt`, `CLong`, `CULong`,
+`CSize`), `Foreign.C.String` (`CString` = `Ptr Char`, `CStringLen`,
+`newCString`, `peekCString`, `peekCStringLen`), `Foreign.Marshal.Alloc`
+(`mallocBytes`, `free`), the umbrellas `Foreign` (which, as in GHC,
+re-exports `Data.Bits`, `Data.Int`, `Data.Word`, `Foreign.Ptr` and
+`Foreign.Marshal`), `Foreign.C` and `Foreign.Marshal`. `CStringLen` is
+GHC's pair and `peekCStringLen` takes it; the curried primitive is
+`AHC.FFI.peekCStringLen`.
+The byte-offset `peekInt8`..`pokeDouble`/`peekPtr`/`pokePtr` family
+has no GHC home (GHC's is the `Storable` class) and lives in the
+AHC-only module `AHC.FFI`. Absent from GHC's modules: `Storable`,
+`alloca`/`allocaBytes`/`malloc`, `ForeignPtr`, `StablePtr`, `minusPtr`,
+`withCString`. `foreign import`/`foreign export` declarations are syntax
+and need no import.
 
 `nullPtr :: Ptr a` and `peekCString :: Ptr Char -> IO String` make
 nullable C results (like `getenv`) expressible. Direct `String` and
@@ -1496,8 +1560,9 @@ armed, so the state after landing is consistent.
 its *kind* — ErrorCall, ArithException, IOException, ExitCode — and
 whose fields the library reads through the `primExc*`/`primIoe*`
 primitives. `SomeException` and `IOException` are wired opaque types
-like `Text`: no Haskell constructor ever spells the shape, so the
-Prelude (which has no export list) stays free of names like `EOF`,
+like `Text` (import them from `Control.Exception` / `System.IO.Error`):
+no Haskell constructor ever spells the shape, so the Prelude stays
+free of names like `EOF`,
 and the runtime can build an `IOException` at a `fopen` failure
 without knowing any library. One C renderer (`exc_render`) produces
 the text an uncaught exception prints after `ahc: `, what
@@ -2448,8 +2513,8 @@ raises.
 `Data.Text` is the one library module backed by a dedicated runtime
 representation rather than by ordinary Haskell — the packed
 `AHC_BYTES` slice of chapter 14 — and the one whose *type* name is
-wired in like `Int`, so it needs no import to appear in a
-signature (the functions still do). Its exported surface is the
+wired in underneath, but since M144b it needs `import Data.Text (Text)`
+to appear in a signature, as in GHC. Its exported surface is the
 common subset of GHC's `text`, oracled function by function
 against the real package.
 

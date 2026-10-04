@@ -41,7 +41,10 @@ package AHC.Modules is
      (Positive, Module_Entry, "=" => Never_Eq);
 
    type Registry is record
-      Base : Iface;                    --  builtins + Prelude snapshot
+      Base : aliased Iface;                    --  builtins + Prelude snapshot
+      --  Only what the Prelude's export list names, plus builtin
+      --  syntax: the implicit Prelude of a USER module (M144b).
+      Public_Base : aliased Iface;
       Mods : Entry_Vectors.Vector;     --  compiled modules' exports
    end record;
 

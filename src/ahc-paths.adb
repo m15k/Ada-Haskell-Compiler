@@ -1,6 +1,7 @@
 with Ada.Command_Line;
 with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 
 with GNAT.OS_Lib;
 
@@ -99,5 +100,52 @@ package body AHC.Paths is
       end if;
       return "";
    end Stdlib_File;
+
+   function Stdlib_Candidates (Rel : String) return String is
+      Res : Ada.Strings.Unbounded.Unbounded_String;
+      use Ada.Strings.Unbounded;
+      procedure Add (P : String) is
+      begin
+         if Res /= Null_Unbounded_String then
+            Append (Res, ", ");
+         end if;
+         Append (Res, P);
+      end Add;
+   begin
+      if Ada.Environment_Variables.Exists ("AHC_LIB") then
+         Add (Ada.Environment_Variables.Value ("AHC_LIB") & "/" & Rel);
+      end if;
+      Add ("lib/" & Rel);
+      if Install_Root /= "" then
+         Add (Install_Root & "/lib/" & Rel);
+         Add (Install_Root & Share & "lib/" & Rel);
+      end if;
+      return To_String (Res);
+   end Stdlib_Candidates;
+
+   function Under (Path, Dir : String) return Boolean is
+      D : constant String := GNAT.OS_Lib.Normalize_Pathname (Dir);
+   begin
+      return Path'Length > D'Length + 1
+        and then Path (Path'First .. Path'First + D'Length - 1) = D
+        and then Path (Path'First + D'Length) = '/';
+   end Under;
+
+   function Is_Stdlib_File (Path : String) return Boolean is
+      P : constant String := GNAT.OS_Lib.Normalize_Pathname (Path);
+   begin
+      if Ada.Environment_Variables.Exists ("AHC_LIB")
+        and then Ada.Directories.Exists
+                   (Ada.Environment_Variables.Value ("AHC_LIB"))
+        and then Under (P, Ada.Environment_Variables.Value ("AHC_LIB"))
+      then
+         return True;
+      end if;
+      if Install_Root /= "" then
+         return Under (P, Install_Root & "/lib")
+           or else Under (P, Install_Root & Share & "lib");
+      end if;
+      return False;
+   end Is_Stdlib_File;
 
 end AHC.Paths;

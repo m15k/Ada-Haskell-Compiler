@@ -3,6 +3,7 @@
 -- is a synonym of Int32; CSize of Word64.
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import Foreign.C.Types
 foreign import ccall "abs" c_abs :: CInt -> CInt
 foreign import ccall "toupper" c_toupper :: CInt -> CInt
 foreign import ccall "strlen" c_strlen :: String -> CSize

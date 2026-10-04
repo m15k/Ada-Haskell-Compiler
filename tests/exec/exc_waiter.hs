@@ -3,6 +3,7 @@
 -- forcing the same thunk afterwards observes the same exception -
 -- never a dead blackhole, never a deadlock report (M137).
 import Control.Concurrent.Scoped
+import AHC.Prim
 
 main :: IO ()
 main = do

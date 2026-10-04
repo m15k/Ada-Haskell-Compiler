@@ -6,6 +6,10 @@
 -- and the longjmp skipped qsort's frames.
 {-# LANGUAGE ForeignFunctionInterface #-}
 
+import AHC.Prim
+import Foreign.C.Types
+import Foreign.Marshal.Alloc
+import Foreign.Ptr
 foreign import ccall "qsort" c_qsort
   :: Ptr a -> CSize -> CSize
   -> FunPtr (Ptr a -> Ptr a -> IO CInt) -> IO ()

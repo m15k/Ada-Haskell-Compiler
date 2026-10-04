@@ -6,6 +6,8 @@ module Data.Map
   , map, filter, foldrWithKey, foldlWithKey, keysSet
   ) where
 
+import Prelude hiding (filter, lookup, map, null)
+
 import qualified Data.Set as Set
 
 --  A weight-balanced binary search tree (Adams' algorithm, the same

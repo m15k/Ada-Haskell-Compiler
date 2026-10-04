@@ -55,6 +55,10 @@ has exec        && run_suite exec        ./scripts/run_exec.sh
 #  else), so the own-GC pass is not optional.
 has exec-own    && AHC_GC=own run_suite exec-own ./scripts/run_exec.sh
 has golden      && run_suite golden      ./scripts/run_golden.sh
+#  The Prelude's export list against GHC's (about a second).
+has prelude-exports && run_suite prelude-exports ./scripts/check_prelude_exports.sh
+#  Which Prelude a module sees depends on which FILE it is.
+has userlib     && run_suite userlib     ./scripts/run_userlib.sh
 
 if [ $fail -eq 0 ]; then
   echo "GATE ok"

@@ -1,5 +1,6 @@
 -- An uncaught IOException prints GHC's show text after "ahc: " -
 -- the one renderer the Show instance in the Prelude mirrors.
+import AHC.Prim
 main :: IO ()
 main = do
   putStrLn "before"
