@@ -912,6 +912,12 @@ package body AHC.Builtins is
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.Show_Cl), TCn (Env.Ordering_TC));
          Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Ordering_TC));
+         --  Ord/Enum/Bounded Ordering, as base has them (M142 review:
+         --  `maxBound :: (Bool, Ordering)` had no instance); bodied
+         --  by Prelude_Core like any nullary enumeration.
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Ordering_TC));
+         Def_Instance (Cl (Env.Enum_Cl), TCn (Env.Ordering_TC));
+         Def_Instance (Cl (Env.Bounded_Cl), TCn (Env.Ordering_TC));
          --  Text: Eq/Ord ride the generic poly_cmp fallback (its
          --  AHC_BYTES case is byte order == code-point order); Show
          --  gets a prim body in Prelude_Core.
@@ -1736,5 +1742,40 @@ package body AHC.Builtins is
          pragma Unreferenced (Ignore);
       end;
    end Install;
+
+   function Is_Arrow_Spine
+     (M : Core.Core_Module; Env : Global_Env; T : Core.Real_Type_Id)
+      return Boolean
+   is
+      N : constant Type_Node := M.Node (T);
+   begin
+      if N.Kind /= TApp_T then
+         return False;
+      end if;
+      declare
+         F : constant Type_Node := M.Node (N.T_Fun);
+      begin
+         return F.Kind = TApp_T
+           and then M.Node (F.T_Fun).Kind = TCon_T
+           and then TyCon_Id (M.Node (F.T_Fun).Con) = Env.Arrow_TC;
+      end;
+   end Is_Arrow_Spine;
+
+   function Make_App
+     (M   : in out Core.Core_Module;
+      Env : Global_Env;
+      F, A : Core.Real_Type_Id) return Core.Real_Type_Id
+   is
+      NF : constant Type_Node := M.Node (F);
+   begin
+      if NF.Kind = TApp_T
+        and then M.Node (NF.T_Fun).Kind = TCon_T
+        and then TyCon_Id (M.Node (NF.T_Fun).Con) = Env.Arrow_TC
+      then
+         return M.Add (Type_Node'
+           (Kind => TFun_T, From => NF.T_Arg, To => A));
+      end if;
+      return M.Add (Type_Node'(Kind => TApp_T, T_Fun => F, T_Arg => A));
+   end Make_App;
 
 end AHC.Builtins;

@@ -73,9 +73,96 @@ package body AHC.Elaborate is
            and then NA.Tv = NB.Tv;
       end Same_Head_Arg;
 
+      --  T with the instance head variables replaced (Subst maps
+      --  Vars (I) to Args (I)); applications are rebuilt canonically.
+      function Subst_Head
+        (T : Real_Type_Id;
+         Vars : TyVar_Id_Vectors.Vector;
+         Args : Type_Id_Vectors.Vector) return Real_Type_Id
+      is
+         N : constant Type_Node := M.Node (T);
+      begin
+         case N.Kind is
+            when TVar_T =>
+               for I in 1 .. Vars.Last_Index loop
+                  if Vars (I) = N.Tv and then I <= Args.Last_Index then
+                     return Args (I);
+                  end if;
+               end loop;
+               return T;
+            when TApp_T =>
+               return Builtins.Make_App
+                 (M, Env, Subst_Head (N.T_Fun, Vars, Args),
+                  Subst_Head (N.T_Arg, Vars, Args));
+            when TFun_T =>
+               return M.Add (Type_Node'
+                 (Kind => TFun_T,
+                  From => Subst_Head (N.From, Vars, Args),
+                  To => Subst_Head (N.To, Vars, Args)));
+            when others =>
+               return T;
+         end case;
+      end Subst_Head;
+
+      --  Does a dictionary for class From contain (through superclass
+      --  selectors, transitively) one for class To?
+      function Entails (From, To : Real_Class_Id; Depth : Natural)
+        return Boolean
+      is
+      begin
+         if From = To then
+            return True;
+         end if;
+         if Depth > 63 then
+            return False;
+         end if;
+         for S of M.Info (From).Supers loop
+            if Entails (S, To, Depth + 1) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Entails;
+
+      --  The superclass-selector path from a From dictionary Ev down
+      --  to a To dictionary. Pre: Entails (From, To).
+      function Super_Path
+        (From, To : Real_Class_Id; Ev : Real_Expr_Id;
+         Span : Diagnostics.Source_Span; Depth : Natural)
+         return Real_Expr_Id
+        with Pre => Entails (From, To, Depth)
+      is
+         Info : constant Class_Info := M.Info (From);
+      begin
+         if From = To then
+            return Ev;
+         end if;
+         for I in 1 .. Info.Supers.Last_Index loop
+            if Entails (Info.Supers (I), To, Depth + 1) then
+               return Super_Path
+                 (Info.Supers (I), To,
+                  (if I <= Info.Super_Sels.Last_Index
+                   then M.Add (Expr_Node'
+                     (Kind => App_C, Span => Span,
+                      Fun => M.Add (Expr_Node'
+                        (Kind => Var_C, Span => Span,
+                         V => Info.Super_Sels (I))),
+                      Arg => Ev))
+                   else Ev),
+                  Span, Depth + 1);
+            end if;
+         end loop;
+         raise Program_Error;   --  unreachable under the Pre
+      end Super_Path;
+
       --  Solve C to a dictionary expression using Givens and the
       --  instance table (head-shape matching only: the typechecker
-      --  already established solvability).
+      --  already established solvability). Mirrors the typechecker's
+      --  Solve: a given entails its superclasses (Assume), and an
+      --  instance's context is instantiated at the constraint's head
+      --  arguments before it is solved (M142 review: both were
+      --  missing, so superclass dictionaries of instances with
+      --  contexts came out $dMISSING at run time).
       function Solve_Ev
         (C : Constraint; Givens : Given_Vectors.Vector;
          Span : Diagnostics.Source_Span; Depth : Natural)
@@ -99,30 +186,63 @@ package body AHC.Elaborate is
             end if;
          end loop;
 
+         --  A given entails its superclasses: `Ord a` gives `Eq a`.
+         for G of Givens loop
+            if Same_Head_Arg (M, G.C.Arg, C.Arg)
+              and then Entails (G.C.Class, C.Class, 0)
+            then
+               return Super_Path
+                 (G.C.Class, C.Class,
+                  M.Add (Expr_Node'
+                    (Kind => Var_C, Span => Span, V => G.D)),
+                  Span, 0);
+            end if;
+         end loop;
+
          --  Head-directed instance lookup.
          declare
             Head : TyCon_Id := No_TyCon;
-            T : Real_Type_Id := C.Arg;
+            Args : Type_Id_Vectors.Vector;
+
+            procedure Head_Of (T : Real_Type_Id) is
+               N : constant Type_Node := M.Node (T);
+            begin
+               case N.Kind is
+                  when TCon_T =>
+                     Head := TyCon_Id (N.Con);
+                     --  The wired Rational placeholder is Data.Ratio's
+                     --  `Ratio Integer` (as in the typechecker's
+                     --  Head_Of).
+                     if Head = Env.Rational_TC then
+                        declare
+                           SC : constant Builtins.Syn_Maps.Cursor :=
+                             Env.Synonyms.Find
+                               (Table.Intern ("Rational"));
+                        begin
+                           if Builtins.Syn_Maps.Has_Element (SC)
+                             and then Builtins.Syn_Maps.Element (SC)
+                                        .Core_Rhs /= No_Type
+                           then
+                              Head_Of (Real_Type_Id
+                                (Builtins.Syn_Maps.Element (SC)
+                                   .Core_Rhs));
+                           end if;
+                        end;
+                     end if;
+                  when TApp_T =>
+                     Head_Of (N.T_Fun);
+                     Args.Append (N.T_Arg);
+                  when TFun_T =>
+                     --  An arrow instance's evidence (M142).
+                     Head := Env.Arrow_TC;
+                     Args.Append (N.From);
+                     Args.Append (N.To);
+                  when others =>
+                     Head := No_TyCon;
+               end case;
+            end Head_Of;
          begin
-            loop
-               declare
-                  N : constant Type_Node := M.Node (T);
-               begin
-                  case N.Kind is
-                     when TCon_T =>
-                        Head := TyCon_Id (N.Con);
-                        exit;
-                     when TApp_T =>
-                        T := N.T_Fun;
-                     when TFun_T =>
-                        --  An arrow instance's evidence (M142).
-                        Head := Env.Arrow_TC;
-                        exit;
-                     when others =>
-                        exit;
-                  end case;
-               end;
-            end loop;
+            Head_Of (C.Arg);
 
             if Head /= No_TyCon then
                for I of M.Info (C.Class).Instances loop
@@ -142,7 +262,12 @@ package body AHC.Elaborate is
                                 (Kind => App_C, Span => Span,
                                  Fun => Result,
                                  Arg => Solve_Ev
-                                   (IC, Givens, Span, Depth + 1)));
+                                   (Constraint'
+                                      (Class => IC.Class,
+                                       Arg => Subst_Head
+                                         (IC.Arg, Inst.Head_Vars, Args),
+                                       Span => IC.Span),
+                                    Givens, Span, Depth + 1)));
                            end loop;
                            return Result;
                         end;
@@ -229,10 +354,9 @@ package body AHC.Elaborate is
                           Refine => No_Refinement));
                   begin
                      for HV of Inst.Head_Vars loop
-                        Head_T := M.Add (Type_Node'
-                          (Kind => TApp_T, T_Fun => Head_T,
-                           T_Arg => M.Add (Type_Node'
-                             (Kind => TVar_T, Tv => HV))));
+                        Head_T := Builtins.Make_App
+                          (M, Env, Head_T, M.Add (Type_Node'
+                             (Kind => TVar_T, Tv => HV)));
                      end loop;
                      for Super of Cl_Info.Supers loop
                         Supers.Append
@@ -642,13 +766,11 @@ package body AHC.Elaborate is
                                           end if;
                                           for HV of Inst.Head_Vars
                                           loop
-                                             H := M.Add (Type_Node'
-                                               (Kind => TApp_T,
-                                                T_Fun => H,
-                                                T_Arg => M.Add
+                                             H := Builtins.Make_App
+                                               (M, Env, H, M.Add
                                                   (Type_Node'
                                                     (Kind => TVar_T,
-                                                     Tv => HV))));
+                                                     Tv => HV)));
                                           end loop;
                                           return Expr_Id
                                             (Ap2E (Real_Expr_Id

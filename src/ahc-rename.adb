@@ -1121,6 +1121,24 @@ package body AHC.Rename is
          Scopes.Delete_Last;
       end Pop_Scope;
 
+      --  Each binding statement of a do block, comprehension or
+      --  pattern guard opens a NEW scope over the statements after it
+      --  (Report 3.14: `do {p <- e; stmts}` = `e >>= \p -> do {stmts}`),
+      --  so `x <- a; x <- b` shadows rather than clashing (M142
+      --  review); only a name bound twice by ONE pattern or let group
+      --  is an error. The caller pops the scopes this pushed, after
+      --  renaming whatever the binders scope over.
+      Stmt_Scopes : Natural := 0;
+
+      --  Pop the statement scopes pushed since Mark.
+      procedure Pop_Stmt_Scopes (Mark : Natural) is
+      begin
+         while Stmt_Scopes > Mark loop
+            Pop_Scope;
+            Stmt_Scopes := Stmt_Scopes - 1;
+         end loop;
+      end Pop_Stmt_Scopes;
+
       procedure Rename_Stmt (Id : Real_Stmt_Id);
 
       procedure Rename_Rhs (R : Rhs) is
@@ -1129,12 +1147,17 @@ package body AHC.Rename is
             --  Pattern-guard binders scope over the later qualifiers
             --  and the alternative's body (Report 3.13).
             for G of R.Guards loop
-               Push_Scope;
-               for Q of G.Quals loop
-                  Rename_Stmt (Q);
-               end loop;
-               Rename_Expr (G.G_Body);
-               Pop_Scope;
+               declare
+                  Mark : constant Natural := Stmt_Scopes;
+               begin
+                  Push_Scope;
+                  for Q of G.Quals loop
+                     Rename_Stmt (Q);
+                  end loop;
+                  Rename_Expr (G.G_Body);
+                  Pop_Stmt_Scopes (Mark);
+                  Pop_Scope;
+               end;
             end loop;
          else
             Rename_Expr (R.Plain);
@@ -1148,14 +1171,19 @@ package body AHC.Rename is
             when Bind_S =>
                --  The expression cannot see the pattern's binders.
                Rename_Expr (N.Bind_Expr);
+               Push_Scope;
+               Stmt_Scopes := Stmt_Scopes + 1;
                Rename_Pat (N.Bind_Pat);
             when Let_S =>
+               Push_Scope;
+               Stmt_Scopes := Stmt_Scopes + 1;
                Declare_Group (N.Let_Binds, Global => False);
                Rename_Group_Bodies (N.Let_Binds);
             when Syntax.Expr_S =>
                Rename_Expr (N.Expr);
          end case;
       end Rename_Stmt;
+
 
       procedure Rename_Expr (Id : Real_Expr_Id) is
          N : constant Expr_Node := Arena.Node (Id);
@@ -1206,11 +1234,16 @@ package body AHC.Rename is
                   end;
                end loop;
             when Do_E =>
-               Push_Scope;
-               for S of N.Stmts loop
-                  Rename_Stmt (S);
-               end loop;
-               Pop_Scope;
+               declare
+                  Mark : constant Natural := Stmt_Scopes;
+               begin
+                  Push_Scope;
+                  for S of N.Stmts loop
+                     Rename_Stmt (S);
+                  end loop;
+                  Pop_Stmt_Scopes (Mark);
+                  Pop_Scope;
+               end;
             when Tuple_E | List_E =>
                for E of N.Items loop
                   Rename_Expr (E);
@@ -1224,12 +1257,17 @@ package body AHC.Rename is
                   Rename_Expr (N.Seq_To);
                end if;
             when List_Comp_E =>
-               Push_Scope;
-               for S of N.Comp_Quals loop
-                  Rename_Stmt (S);
-               end loop;
-               Rename_Expr (N.Comp_Expr);
-               Pop_Scope;
+               declare
+                  Mark : constant Natural := Stmt_Scopes;
+               begin
+                  Push_Scope;
+                  for S of N.Comp_Quals loop
+                     Rename_Stmt (S);
+                  end loop;
+                  Rename_Expr (N.Comp_Expr);
+                  Pop_Stmt_Scopes (Mark);
+                  Pop_Scope;
+               end;
             when Left_Section_E | Right_Section_E =>
                --  The section's own resolution slot carries its
                --  operator (the node has no other use for it).

@@ -69,6 +69,12 @@ package body AHC.Typechecker is
          Dict  : Var_Id := No_Var;      --  By_Param dictionary param
          Inst  : Instance_Id := 0;      --  By_Instance
          Subs  : Nat_Vectors.Vector;    --  wanted indices for Inst ctx
+         --  The module the constraint arose in. Residuals are judged
+         --  after EVERY group and instance (Try_Default and the
+         --  could-not-deduce sweep), when the bag's origin is
+         --  whichever module came last - a library module's error was
+         --  rendered against another file's text (M142 review).
+         Origin : Natural := Diagnostics.Current_Origin (Bag);
       end record;
 
       package Wanted_Vectors is new Ada.Containers.Vectors
@@ -194,6 +200,17 @@ package body AHC.Typechecker is
       --  rebuilt application that turns out to be `(->)` applied to
       --  two arguments becomes TFun again, so inferred types, error
       --  messages and those peelers see an ordinary arrow (M142).
+      function Is_Arrow_Spine (T : Real_Type_Id) return Boolean is
+        (M.Node (Repr (T)).Kind = TApp_T
+         and then M.Node (Repr (M.Node (Repr (T)).T_Fun)).Kind = TApp_T
+         and then M.Node (Repr (M.Node (Repr (M.Node (Repr (T)).T_Fun))
+                                  .T_Fun)).Kind = TCon_T
+         and then TyCon_Id (M.Node (Repr (M.Node (Repr (M.Node
+                    (Repr (T)).T_Fun)).T_Fun)).Con) = Env.Arrow_TC);
+
+      function Make_App (F, A : Real_Type_Id) return Real_Type_Id
+        with Post => not Is_Arrow_Spine (Make_App'Result);
+
       function Make_App (F, A : Real_Type_Id) return Real_Type_Id is
          NF : constant Type_Node := M.Node (Repr (F));
       begin
@@ -214,6 +231,11 @@ package body AHC.Typechecker is
       --  The TApp spine `(->) a b` of a function type, for unifying
       --  it against a type-constructor variable applied to two
       --  arguments (`k a b`, as in `instance Cat (->)`).
+      --  The ONE place a two-argument (->) spine is built, and it never
+      --  escapes Unify: it exists only to be matched against `k a b`.
+      function Arrow_Spine (A, B : Real_Type_Id) return Real_Type_Id
+        with Post => Is_Arrow_Spine (Arrow_Spine'Result);
+
       function Arrow_Spine (A, B : Real_Type_Id) return Real_Type_Id is
          Arr : constant Real_Type_Id := M.Add (Type_Node'
            (Kind => TCon_T, Con => Real_TyCon_Id (Env.Arrow_TC),
@@ -223,6 +245,23 @@ package body AHC.Typechecker is
       begin
          return M.Add (Type_Node'(Kind => TApp_T, T_Fun => F, T_Arg => B));
       end Arrow_Spine;
+
+      --  May the application T (a TApp) be `(->) a b`? Only when the
+      --  head of its spine is a meta or type variable, or (->) itself.
+      function Spine_May_Be_Arrow (T : Real_Type_Id) return Boolean is
+         Cur : Real_Type_Id := Repr (T);
+      begin
+         while M.Node (Cur).Kind = TApp_T loop
+            Cur := Repr (M.Node (Cur).T_Fun);
+         end loop;
+         declare
+            H : constant Type_Node := M.Node (Cur);
+         begin
+            return H.Kind in TMeta_T | TVar_T
+              or else (H.Kind = TCon_T
+                       and then TyCon_Id (H.Con) = Env.Arrow_TC);
+         end;
+      end Spine_May_Be_Arrow;
 
       function Zonk_With
         (T : Real_Type_Id; Subst : Meta_Type_Maps.Map)
@@ -374,11 +413,25 @@ package body AHC.Typechecker is
          --  (`k a b ~ (a -> b)` binds k := (->)): compare the arrow as
          --  its TApp spine (M142: instance Cat (->), PT (a -> r),
          --  Functor ((->) r)).
+         --  Only an application whose HEAD is a variable (or (->)
+         --  itself) can be an arrow; `Maybe Int` or `Either e a`
+         --  against a function type is an immediate mismatch, reported
+         --  on the two ORIGINAL types with no partial bindings made
+         --  (M142 review: decomposing first printed "couldn't match
+         --  '(->) ?3' with 'Maybe'" and bound metas along the way).
          if NA.Kind = TFun_T and then NB.Kind = TApp_T then
-            Unify (Arrow_Spine (NA.From, NA.To), ZB, Span);
+            if Spine_May_Be_Arrow (ZB) then
+               Unify (Arrow_Spine (NA.From, NA.To), ZB, Span);
+            else
+               Mismatch;
+            end if;
             return;
          elsif NA.Kind = TApp_T and then NB.Kind = TFun_T then
-            Unify (ZA, Arrow_Spine (NB.From, NB.To), Span);
+            if Spine_May_Be_Arrow (ZA) then
+               Unify (ZA, Arrow_Spine (NB.From, NB.To), Span);
+            else
+               Mismatch;
+            end if;
             return;
          end if;
 
@@ -554,6 +607,31 @@ package body AHC.Typechecker is
             end;
          end loop;
       end Assume;
+
+      --  GHC's Monad has Applicative and Functor above it; AHC's (the
+      --  2010 shape) does not. A residual Functor/Applicative-like
+      --  constraint on a variable that the instance context gives
+      --  Monad is therefore satisfiable in GHC (`instance Monad m =>
+      --  Applicative (StateT s m)` beside `instance Functor m =>
+      --  Functor (StateT s m)`) and must not be rejected here.
+      function Monad_Entails_In_GHC (C : Constraint) return Boolean is
+         Functorish : constant Boolean :=
+           Class_Id (C.Class) = Env.Functor_Cl
+           or else (for some S of M.Info (C.Class).Supers =>
+                      Class_Id (S) = Env.Functor_Cl);
+      begin
+         if not Functorish then
+            return False;
+         end if;
+         for G of Givens loop
+            if Class_Id (G.C.Class) = Env.Monad_Cl
+              and then Same_Tv_Arg (G.C.Arg, C.Arg)
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Monad_Entails_In_GHC;
 
       procedure Head_Of
         (T : Real_Type_Id;
@@ -742,6 +820,7 @@ package body AHC.Typechecker is
             begin
                for J in 1 .. W_List.Last_Index loop
                   if W_List (J).Sol = Unsolved then
+                     Bag.Set_Origin (W_List (J).Origin);
                      Solve (J, 0);
                      if W_List (J).Sol /= Unsolved then
                         Progress := True;
@@ -763,6 +842,7 @@ package body AHC.Typechecker is
          for Pass in 1 .. 2 loop
          for I in 1 .. W_List.Last_Index loop
             if W_List (I).Sol = Unsolved then
+               Bag.Set_Origin (W_List (I).Origin);
                declare
                   Z : constant Real_Type_Id :=
                     Repr (W_List (I).C.Arg);
@@ -1677,6 +1757,95 @@ package body AHC.Typechecker is
          end loop;
       end;
 
+
+      --  Every superclass of a source instance's class must have an
+      --  instance at the same head, given the instance's context
+      --  (Report 4.3.2): `instance Ord T` without `Eq T` is a compile
+      --  error in GHC, and AHC used to build the dictionary with a
+      --  $dMISSING superclass that crashed at run time (M142 review).
+      --  The wanteds are solved in isolation and dropped again: they
+      --  rewrite no occurrence.
+      for II in 1 .. M.Last_Instance loop
+         declare
+            Inst : constant Instance_Info :=
+              M.Info (Real_Instance_Id (II));
+         begin
+            if Inst.From_Source
+              and then Inst.Of_Class /= No_Class
+              and then Inst.Head /= No_TyCon
+              and then Inst.Dict_Global /= No_Var
+              --  Num keeps the Report's (Eq a, Show a) superclasses,
+              --  which GHC dropped (7.4): `instance Num D` without
+              --  Eq D is legal there, so it is not checked here.
+              and then Inst.Of_Class /= Env.Num_Cl
+              and then not M.Info (Real_Class_Id (Inst.Of_Class))
+                             .Supers.Is_Empty
+            then
+               if Natural (II) <= Inst_Origins.Last_Index then
+                  Bag.Set_Origin (Inst_Origins (Natural (II)));
+               end if;
+               declare
+                  Head_T : Real_Type_Id :=
+                    M.Add (Type_Node'
+                      (Kind => TCon_T,
+                       Con => Real_TyCon_Id (Inst.Head),
+                       Refine => No_Refinement));
+                  Givens_Mark : constant Natural := Givens.Last_Index;
+                  W_Mark : constant Natural := W_List.Last_Index;
+               begin
+                  for HV of Inst.Head_Vars loop
+                     Head_T := Make_App (Head_T, M.Add (Type_Node'
+                       (Kind => TVar_T, Tv => HV)));
+                  end loop;
+                  --  The evidence is never used (the wanteds are
+                  --  dropped below), so no variable is minted for it:
+                  --  minting would renumber every later entity.
+                  for C of Inst.Context loop
+                     Assume (C, M.Add (Expr_Node'
+                       (Kind => Var_C, Span => Inst.Span,
+                        V => Real_Var_Id (Inst.Dict_Global))));
+                  end loop;
+                  for Super of M.Info (Real_Class_Id (Inst.Of_Class))
+                                 .Supers
+                  loop
+                     W_List.Append
+                       (Wanted_Rec'
+                          (C => Constraint'
+                             (Class => Super, Arg => Head_T,
+                              Span => Inst.Span),
+                           others => <>));
+                     Solve (W_List.Last_Index, 0);
+                  end loop;
+                  --  A context constraint the instance's own context
+                  --  does not give (`instance Ord (T a)` beside
+                  --  `instance Eq a => Eq (T a)`) stays a residual.
+                  for I in W_Mark + 1 .. W_List.Last_Index loop
+                     if W_List (I).Sol = Unsolved
+                       and then not Monad_Entails_In_GHC (W_List (I).C)
+                     then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Class_No_Instance,
+                                 Inst.Span,
+                                 "no instance for '"
+                                 & Table.Text
+                                     (M.Info (W_List (I).C.Class).Name)
+                                 & " " & Type_Str (W_List (I).C.Arg)
+                                 & "', required by the superclasses"
+                                 & " of an instance declaration");
+                        exit;
+                     end if;
+                  end loop;
+                  while W_List.Last_Index > W_Mark loop
+                     W_List.Delete_Last;
+                  end loop;
+                  while Givens.Last_Index > Givens_Mark loop
+                     Givens.Delete_Last;
+                  end loop;
+               end;
+            end if;
+         end;
+      end loop;
+
       --  Instance method bodies against instance-substituted schemes,
       --  with the instance context as given evidence via Param_Vars.
       for II in 1 .. M.Last_Instance loop
@@ -1701,10 +1870,8 @@ package body AHC.Typechecker is
                     Givens.Last_Index;
                begin
                   for HV of Inst.Head_Vars loop
-                     Head_T := M.Add (Type_Node'
-                       (Kind => TApp_T, T_Fun => Head_T,
-                        T_Arg => M.Add (Type_Node'
-                          (Kind => TVar_T, Tv => HV))));
+                     Head_T := Make_App (Head_T, M.Add (Type_Node'
+                       (Kind => TVar_T, Tv => HV)));
                   end loop;
                   for C of Inst.Context loop
                      declare
@@ -1933,6 +2100,7 @@ package body AHC.Typechecker is
                Z : constant Real_Type_Id := Repr (W_List (I).C.Arg);
                N : constant Type_Node := M.Node (Z);
             begin
+               Bag.Set_Origin (W_List (I).Origin);
                if N.Kind = TVar_T then
                   Bag.Add (Diagnostics.Error,
                            Diagnostics.Type_Signature_Too_General,

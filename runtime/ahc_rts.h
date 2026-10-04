@@ -65,6 +65,7 @@ AhcNode *ahc_mk_double(double v);
 AhcNode *ahc_mk_char(long v);
 AhcNode *ahc_mk_con(int contag, int arity);    /* fields set after    */
 AhcNode *ahc_mk_confun(int contag, int arity); /* curried worker      */
+AhcNode *ahc_mk_confun_strict(int contag, int arity, long mask);
 AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
@@ -166,6 +167,8 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_truncate_d, *ahc_prim_int_to_d,
   *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
   *ahc_prim_succ_int, *ahc_prim_pred_int,
+  *ahc_prim_succ_integer, *ahc_prim_pred_integer,
+  *ahc_prim_enum_from_integer, *ahc_prim_enum_from_then_integer,
   *ahc_prim_show_string, *ahc_prim_shows_list,
   *ahc_prim_showsprec_int, *ahc_prim_showsprec_d,
   *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,

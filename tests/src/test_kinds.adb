@@ -118,9 +118,46 @@ package body Test_Kinds is
       return To_String (Out_Buf);
    end K;
 
+   --  Builtins.Make_App is the one canonical application: `(->) a`
+   --  applied to b is the TFun node, never a two-argument spine (M142
+   --  review: a synonym's surplus argument built the raw spine).
+   procedure Test_Make_App is
+      use AHC.Core;
+      Table : AHC.Names.Name_Table;
+      M     : AHC.Core.Core_Module;
+      Env   : AHC.Builtins.Global_Env;
+   begin
+      AHC.Builtins.Install (M, Table, Env);
+      declare
+         Arr : constant Real_Type_Id := M.Add (Type_Node'
+           (Kind => TCon_T, Con => Real_TyCon_Id (Env.Arrow_TC),
+            Refine => No_Refinement));
+         Int_T : constant Real_Type_Id := M.Add (Type_Node'
+           (Kind => TCon_T, Con => Real_TyCon_Id (Env.Int_TC),
+            Refine => No_Refinement));
+         Part : constant Real_Type_Id :=
+           AHC.Builtins.Make_App (M, Env, Arr, Int_T);
+         Full : constant Real_Type_Id :=
+           AHC.Builtins.Make_App (M, Env, Part, Int_T);
+         Raw : constant Real_Type_Id := M.Add (Type_Node'
+           (Kind => TApp_T, T_Fun => Part, T_Arg => Int_T));
+      begin
+         Check (M.Node (Part).Kind = TApp_T,
+                "(->) Int stays a one-argument application");
+         Check (M.Node (Full).Kind = TFun_T
+                  and then M.Node (Full).From = Int_T
+                  and then M.Node (Full).To = Int_T,
+                "(->) Int Int is built as the arrow Int -> Int");
+         Check (not AHC.Builtins.Is_Arrow_Spine (M, Env, Full)
+                  and then AHC.Builtins.Is_Arrow_Spine (M, Env, Raw),
+                "Is_Arrow_Spine tells the raw spine from the arrow");
+      end;
+   end Test_Make_App;
+
    procedure Run is
    begin
       Start_Suite ("Kinds");
+      Test_Make_App;
 
       Check_Equal (K ("data W = W"), "W::*", "nullary data type");
 

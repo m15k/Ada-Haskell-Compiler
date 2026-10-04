@@ -85,6 +85,9 @@ package AHC.Diagnostics is
 
    procedure Set_Origin (Bag : in out Diagnostic_Bag; Tag : Natural);
 
+   --  The tag Add would stamp now.
+   function Current_Origin (Bag : Diagnostic_Bag) return Natural;
+
    function Origin_Of
      (Bag : Diagnostic_Bag; Index : Positive) return Natural
      with Pre => Index <= Bag.Count;

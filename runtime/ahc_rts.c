@@ -1191,6 +1191,52 @@ AhcNode *ahc_mk_confun(int contag, int arity) {
   return ahc_mk_fun(con_collect, e);
 }
 
+/* A constructor with STRICT fields (Report 4.2.1: `data T = T !Int`
+   forces its argument when applied). env = [tagbox, aritybox,
+   maskbox, collected...]; bit i of the mask marks field i strict.
+   At saturation the strict arguments are forced BEFORE the cell is
+   allocated (components before owner - the collector's invariant),
+   and the fields hold the forced values. M142 review: strictness
+   annotations were parsed and then ignored. */
+static AhcNode *con_collect_strict(AhcNode **env, AhcNode *arg) {
+  long contag = env[0]->u.i, arity = env[1]->u.i, mask = env[2]->u.i;
+  long have = 0;
+  while (env[3 + have] != NULL) have++;
+  if (have + 1 == arity) {
+    AhcNode *c;
+    /* The env may be a shared partial application: force through
+       it, never write into it (an old env must not gain a young
+       pointer without a barrier). */
+    for (long i = 0; i < have; i++)
+      if (i < 63 && (mask >> i) & 1) ahc_eval(env[3 + i]);
+    if (have < 63 && (mask >> have) & 1) arg = ahc_eval(arg);
+    c = ahc_mk_con((int)contag, (int)arity);
+    /* already evaluated: ahc_eval only follows the indirection */
+    for (long i = 0; i < have; i++)
+      c->u.con.fields[i] = (i < 63 && (mask >> i) & 1)
+                             ? ahc_eval(env[3 + i]) : env[3 + i];
+    c->u.con.fields[have] = arg;
+    return c;
+  }
+  AhcNode **e2 = ahc_env((int)(3 + arity));
+  e2[0] = env[0]; e2[1] = env[1]; e2[2] = env[2];
+  for (long i = 0; i < have; i++) e2[3 + i] = env[3 + i];
+  e2[3 + have] = arg;
+  for (long i = have + 1; i < arity; i++) e2[3 + i] = NULL;
+  return ahc_mk_fun(con_collect_strict, e2);
+}
+
+AhcNode *ahc_mk_confun_strict(int contag, int arity, long mask) {
+  if (arity == 0) return ahc_mk_con(contag, 0);
+  AhcNode *tagn = ahc_mk_int(contag);       /* children first */
+  AhcNode *arn = ahc_mk_int(arity);
+  AhcNode *mkn = ahc_mk_int(mask);
+  AhcNode **e = ahc_env(3 + arity);
+  e[0] = tagn; e[1] = arn; e[2] = mkn;
+  for (int i = 0; i < arity; i++) e[3 + i] = NULL;
+  return ahc_mk_fun(con_collect_strict, e);
+}
+
 /* Dictionary field selector. */
 static AhcNode *sel_fn(AhcNode **env, AhcNode *arg) {
   AhcNode *d = ahc_eval(arg);
@@ -2255,7 +2301,12 @@ static AhcNode *p_show_bool(AhcNode *a) {
 
 /* Structural equality/ordering over WHNF-forced values: covers Eq
  * and Ord for Int/Integer/Char/Bool and every first-order ADT
- * (deriving-friendly). */
+ * (deriving-friendly). Answers -1/0/1, or POLY_UNORDERED when a
+ * Double/Float pair is unordered (a NaN): == is then False (IEEE),
+ * and compare answers GT, as GHC's Ord Double does (`compare nan 1`
+ * and `compare 1 nan` are both GT). The first unequal field decides,
+ * so an unordered field propagates out of a constructor. */
+#define POLY_UNORDERED 2
 static int poly_cmp(AhcNode *a, AhcNode *b) {
   a = ahc_eval(a); b = ahc_eval(b);
   if ((a->tag == AHC_INT || a->tag == AHC_BIGINT) &&
@@ -2266,6 +2317,7 @@ static int poly_cmp(AhcNode *a, AhcNode *b) {
   case AHC_INT:
     return (a->u.i > b->u.i) - (a->u.i < b->u.i);
   case AHC_DOUBLE:
+    if (a->u.d != a->u.d || b->u.d != b->u.d) return POLY_UNORDERED;
     return (a->u.d > b->u.d) - (a->u.d < b->u.d);
   case AHC_CHAR:
     return (a->u.c > b->u.c) - (a->u.c < b->u.c);
@@ -2338,7 +2390,9 @@ static AhcNode *p_enum_from(AhcNode *a) {
 
 /* Stepped enumerations (Report 3.10 / 6.3.4). enumFromThen is a
    lazy infinite structure with the given stride; enumFromThenTo is
-   finite (empty when the stride points away from the bound). */
+   finite (empty when the stride points away from the bound). The
+   unbounded generator is Integer's (whose values here are machine
+   words; a bignum enumeration is a documented gap). */
 static AhcNode *enum_ft_code(AhcNode **env);
 
 static AhcNode *mk_enum_ft(long n, long step) {
@@ -2365,42 +2419,141 @@ static AhcNode *p_enum_from_then(AhcNode *a, AhcNode *b) {
   return mk_enum_ft(n, ahc_eval(b)->u.i - n);
 }
 
+/* The BOUNDED lazy generator: n, n+step, ... while within lim (above
+   it for a negative step), never computing past the machine word -
+   so Int enumerations stop at maxBound/minBound as GHC's do instead
+   of wrapping (M142 review: `take 5 [maxBound-2 :: Int ..]` wrapped
+   to minBound). Precondition: n is within lim. step 0 repeats n
+   forever (Report 6.3.4). */
+static AhcNode *enum_ftl_code(AhcNode **env);
+
+static AhcNode *mk_enum_ftl(long n, long step, long lim) {
+  AhcNode *v = ahc_mk_int(n);               /* children first */
+  AhcNode *st = ahc_mk_int(step);
+  AhcNode *li = ahc_mk_int(lim);
+  AhcNode **e = ahc_env(3);
+  e[0] = v;
+  e[1] = st;
+  e[2] = li;
+  return ahc_mk_thunk(enum_ftl_code, e);
+}
+
+static AhcNode *enum_ftl_code(AhcNode **env) {
+  long n = env[0]->u.i, step = env[1]->u.i, lim = env[2]->u.i;
+  long next;
+  AhcNode *hd = ahc_mk_int(n);              /* children first */
+  AhcNode *tl;
+  AhcNode *c;
+  if (__builtin_add_overflow(n, step, &next)
+      || (step > 0 && next > lim) || (step < 0 && next < lim))
+    tl = ahc_mk_con(NIL_TAG, 0);
+  else
+    tl = mk_enum_ftl(next, step, lim);
+  c = ahc_mk_con(CONS_TAG, 2);
+  c->u.con.fields[0] = hd;
+  c->u.con.fields[1] = tl;
+  return c;
+}
+
+/* enumFrom / enumFromThen at Int: bounded by maxBound (minBound for
+   a descending stride), as GHC's. */
+static AhcNode *p_enum_from_intb(AhcNode *a) {
+  return mk_enum_ftl(ahc_eval(a)->u.i, 1, LONG_MAX);
+}
+
+static AhcNode *p_enum_from_then_intb(AhcNode *a, AhcNode *b) {
+  long n = ahc_eval(a)->u.i, m = ahc_eval(b)->u.i, step;
+  if (__builtin_sub_overflow(m, n, &step)) {
+    /* A stride wider than a word: the list is [n, m]. */
+    AhcNode *tl = ahc_mk_con(NIL_TAG, 0);   /* children first */
+    AhcNode *mv = ahc_mk_int(m);
+    AhcNode *c2 = ahc_mk_con(CONS_TAG, 2);
+    AhcNode *nv, *c1;
+    c2->u.con.fields[0] = mv;
+    c2->u.con.fields[1] = tl;
+    nv = ahc_mk_int(n);
+    c1 = ahc_mk_con(CONS_TAG, 2);
+    c1->u.con.fields[0] = nv;
+    c1->u.con.fields[1] = c2;
+    return c1;
+  }
+  return mk_enum_ftl(n, step, m >= n ? LONG_MAX : LONG_MIN);
+}
+
 static AhcNode *p_enum_from_then_to(AhcNode *a, AhcNode *b,
                                     AhcNode *t) {
   long lo = ahc_eval(a)->u.i;
-  long step = ahc_eval(b)->u.i - lo;
+  long nx = ahc_eval(b)->u.i;
   long hi = ahc_eval(t)->u.i;
-  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
-  long count = 0;
-  if (step > 0) count = hi >= lo ? (hi - lo) / step + 1 : 0;
-  else if (step < 0) count = hi <= lo ? (lo - hi) / (-step) + 1 : 0;
-  else return mk_enum_ft(lo, 0);   /* infinite repeat per Report */
-  for (long i = count - 1; i >= 0; i--) {
-    AhcNode *v = ahc_mk_int(lo + i * step);  /* child first */
-    AhcNode *cc = ahc_mk_con(CONS_TAG, 2);
-    cc->u.con.fields[0] = v;
-    cc->u.con.fields[1] = acc;
-    acc = cc;
+  long step;
+  if (__builtin_sub_overflow(nx, lo, &step)) {
+    /* A stride wider than a word reaches at most the second element. */
+    AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
+    int up = nx > lo;
+    if (up ? lo > hi : lo < hi) return acc;
+    if (up ? nx <= hi : nx >= hi) {
+      AhcNode *mv = ahc_mk_int(nx);         /* child first */
+      AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+      c->u.con.fields[0] = mv;
+      c->u.con.fields[1] = acc;
+      acc = c;
+    }
+    {
+      AhcNode *nv = ahc_mk_int(lo);         /* child first */
+      AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+      c->u.con.fields[0] = nv;
+      c->u.con.fields[1] = acc;
+      return c;
+    }
   }
-  return acc;
+  if (step == 0)
+    return lo <= hi ? mk_enum_ft(lo, 0)    /* infinite repeat */
+                    : ahc_mk_con(NIL_TAG, 0);
+  if (step > 0 ? lo > hi : lo < hi) return ahc_mk_con(NIL_TAG, 0);
+  return mk_enum_ftl(lo, step, hi);
 }
 
+static void enum_bound_error(const char *msg) {
+  fflush(stdout);   /* output already produced must precede the raise */
+  ahc_throw(exc_error_call(ahc_mk_string(msg)));
+}
+
+/* succ/pred at Int: GHC's bound checks and messages. */
 static AhcNode *p_succ_int(AhcNode *a) {
-  return ahc_mk_int(ahc_eval(a)->u.i + 1);
+  long v = ahc_eval(a)->u.i;
+  if (v == LONG_MAX)
+    enum_bound_error(
+      "Prelude.Enum.succ{Int}: tried to take `succ' of maxBound");
+  return ahc_mk_int(v + 1);
 }
 static AhcNode *p_pred_int(AhcNode *a) {
+  long v = ahc_eval(a)->u.i;
+  if (v == LONG_MIN)
+    enum_bound_error(
+      "Prelude.Enum.pred{Int}: tried to take `pred' of minBound");
+  return ahc_mk_int(v - 1);
+}
+/* ... and at Integer, unbounded. */
+static AhcNode *p_succ_integer(AhcNode *a) {
+  return ahc_mk_int(ahc_eval(a)->u.i + 1);
+}
+static AhcNode *p_pred_integer(AhcNode *a) {
   return ahc_mk_int(ahc_eval(a)->u.i - 1);
 }
 
 static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
   long lo = ahc_eval(a)->u.i, hi = ahc_eval(b)->u.i;
   AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
-  for (long i = hi; i >= lo; i--) {
+  if (lo > hi) return acc;
+  /* Counting down from hi stops AT lo - never decrements past it,
+     which wrapped forever when lo was minBound. */
+  for (long i = hi;; i--) {
     AhcNode *v = ahc_mk_int(i);                 /* child first */
     AhcNode *c = ahc_mk_con(CONS_TAG, 2);
     c->u.con.fields[0] = v;
     c->u.con.fields[1] = acc;
     acc = c;
+    if (i == lo) break;
   }
   return acc;
 }
@@ -2538,6 +2691,15 @@ AhcNode *ahc_run_io(AhcNode *io) {
 
 static AhcNode *pending_main_io;
 
+/* Run main for its effects. Applying an action to the world RUNS it
+   (ahc_apply is strict application, as io_then relies on); the
+   value it returns is main's RESULT, which GHC never demands -
+   `main = return undefined` exits 0. Forcing it here made that die
+   (M142 review). */
+static void run_main_action(AhcNode *main_io) {
+  (void)ahc_apply(main_io, the_world);
+}
+
 static void run_main_on_big_stack(void) {
 #ifdef AHC_USE_BOEHM
   /* First thing, before any allocation on this stack: tell the
@@ -2548,7 +2710,7 @@ static void run_main_on_big_stack(void) {
   sb.mem_base = main_task.stack_top;
   GC_set_stackbottom(NULL, &sb);
 #endif
-  ahc_eval(ahc_apply(pending_main_io, the_world));
+  run_main_action(pending_main_io);
 }
 
 void ahc_run_main(AhcNode *main_io) {
@@ -2567,7 +2729,7 @@ void ahc_run_main(AhcNode *main_io) {
   if (base == MAP_FAILED) {
     /* No reservation to be had: run on the OS stack rather than
        refuse - small programs never notice the difference. */
-    ahc_eval(ahc_apply(main_io, the_world));
+    run_main_action(main_io);
     return;
   }
   mprotect(base, stack_guard_pg, PROT_NONE);
@@ -2578,7 +2740,7 @@ void ahc_run_main(AhcNode *main_io) {
     ucontext_t big, back;
     if (getcontext(&big) != 0) {
       main_task.stack = NULL;
-      ahc_eval(ahc_apply(main_io, the_world));
+      run_main_action(main_io);
       return;
     }
     big.uc_stack.ss_sp = base + stack_guard_pg;
@@ -7176,6 +7338,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_truncate_d, *ahc_prim_int_to_d,
   *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
   *ahc_prim_succ_int, *ahc_prim_pred_int,
+  *ahc_prim_succ_integer, *ahc_prim_pred_integer,
+  *ahc_prim_enum_from_integer, *ahc_prim_enum_from_then_integer,
   *ahc_prim_show_string, *ahc_prim_shows_list,
   *ahc_prim_showsprec_int, *ahc_prim_showsprec_d,
   *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
@@ -7279,8 +7443,12 @@ void ahc_rts_init(void) {
   ahc_prim_show_char = mk_prim1(p_show_char);
   ahc_prim_show_bool = mk_prim1(p_show_bool);
   ahc_prim_enum_from_to_int = mk_prim2(p_enum_from_to);
-  ahc_prim_enum_from_int = mk_prim1(p_enum_from);
-  ahc_prim_enum_from_then = mk_prim2(p_enum_from_then);
+  ahc_prim_enum_from_int = mk_prim1(p_enum_from_intb);
+  ahc_prim_enum_from_then = mk_prim2(p_enum_from_then_intb);
+  ahc_prim_enum_from_integer = mk_prim1(p_enum_from);
+  ahc_prim_enum_from_then_integer = mk_prim2(p_enum_from_then);
+  ahc_prim_succ_integer = mk_prim1(p_succ_integer);
+  ahc_prim_pred_integer = mk_prim1(p_pred_integer);
   ahc_prim_enum_from_then_to = mk_prim3(p_enum_from_then_to);
   ahc_prim_succ_int = mk_prim1(p_succ_int);
   ahc_prim_pred_int = mk_prim1(p_pred_int);

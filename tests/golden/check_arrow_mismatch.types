@@ -1,0 +1,3 @@
+tests/golden/check_arrow_mismatch.hs:11:1: error: couldn't match type 'Int -> Int' with 'Maybe Int'
+tests/golden/check_arrow_mismatch.hs:14:1: error: couldn't match type 'Bool -> Bool' with '[Bool]'
+tests/golden/check_arrow_mismatch.hs:17:1: error: couldn't match type 'Bool -> Bool -> Bool' with 'Either Bool Char'

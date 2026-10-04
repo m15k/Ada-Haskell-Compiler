@@ -101,6 +101,25 @@ package AHC.Builtins is
       Error_V, Otherwise_V : Core.Var_Id := Core.No_Var;
    end record;
 
+   --  `a -> b` IS `(->) a b` (Report 4.1.2), but AHC keeps one
+   --  canonical form for it: the dedicated TFun node, which the arity,
+   --  contract and FFI peelers look for. A TApp spine `(->) a b` is
+   --  never built; every pass that applies one Core type to another
+   --  goes through Make_App (M142 review: a raw spine made a synonym
+   --  `type P a = (->) a` "not marshallable" across the FFI).
+   function Is_Arrow_Spine
+     (M : Core.Core_Module; Env : Global_Env; T : Core.Real_Type_Id)
+      return Boolean
+     with Pre => Core."<=" (T, M.Last_Type);
+
+   function Make_App
+     (M   : in out Core.Core_Module;
+      Env : Global_Env;
+      F, A : Core.Real_Type_Id) return Core.Real_Type_Id
+     with Pre  => Core."<=" (F, M.Last_Type)
+                  and then Core."<=" (A, M.Last_Type),
+          Post => not Is_Arrow_Spine (M, Env, Make_App'Result);
+
    --  Populate M with the wired-in signature and fill Env. Must run on
    --  a fresh Core_Module, before renaming.
    procedure Install

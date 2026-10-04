@@ -221,6 +221,15 @@ package body AHC.Discharge is
                X : constant Long_Long_Integer := Int_Of (A (1));
                R : Long_Long_Integer;
             begin
+               --  minBound has no negation, and pred minBound is a
+               --  run-time error (GHC's message): leave both to run
+               --  time rather than overflow here.
+               if X = Long_Long_Integer'First
+                 and then Sym in "ahc_prim_neg_int" | "ahc_prim_abs_int"
+                               | "ahc_prim_pred_int"
+               then
+                  return Stuck;
+               end if;
                if Sym = "ahc_prim_neg_int" then
                   R := -X;
                elsif Sym = "ahc_prim_abs_int" then
