@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.16 (unreleased)
+## v1.16 (2026-10-04)
 
 **M142 - the library round.** Hackage-style modules are the first
 reason real GitHub Haskell does not build under AHC, by a wide margin.

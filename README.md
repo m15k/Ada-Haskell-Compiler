@@ -578,6 +578,18 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.16** — the library round (M142–M145): `Debug.Trace`,
+  `Data.Map.Strict` with containers' everyday Map API,
+  `Control.Monad.State`, `Text.Printf`, `System.Random` (bit-for-bit
+  random-1.2.1.2), `System.Directory` and `System.Process`, each
+  byte-identical to GHC 9.4.8 and the heavy ones transcribed from
+  their sources rather than reconstructed. The REPL loads multi-module
+  programs, an own declaration is ambiguous with a same-named import as
+  in GHC, and the Prelude exports exactly GHC's list. The review found
+  older compiler and runtime bugs along the way (superclass
+  dictionaries, strict fields, NaN, instance identity by span, Boehm
+  retention through stack ends); `b_map` is 52% faster.
+  `supermacro/hangman` builds now.
 - **v1.15** — the namespaces release (M75): every namespace is
   per-module. Two modules may declare the same type, constructor,
   class, synonym, record field or function, and a qualified import
