@@ -1,0 +1,13 @@
+main :: IO ()
+main = do
+  print (fromInteger (2 ^ 70 + 5) :: Int, fromInteger (-(2 ^ 64) - 1) :: Int)
+  print (fromIntegral (2 ^ 63 :: Integer) :: Int, fromIntegral (maxBound :: Int) + (1 :: Integer))
+  print (9223372036854775808 :: Int, 18446744073709551615 :: Int, -9223372036854775809 :: Int)
+  print (read "18446744073709551617" :: Int, read "-9223372036854775809" :: Int)
+  print (toEnum 5 :: Int, fromEnum (maxBound :: Int), toInteger (minBound :: Int) - 1)
+  print (fromInteger (truncate (1.0e19 :: Double)) :: Int, fromInteger (round (-1.0e19 :: Double)) :: Int)
+  print (case (9223372036854775808 :: Int) of { -9223372036854775808 -> "pattern narrows"; _ -> "no" })
+  print (truncate (1.0e19 :: Double) :: Integer, round (-1.0e19 :: Double) :: Integer)
+  print (floor (1.5e30 :: Double) :: Integer, ceiling (-2.5e300 :: Double) :: Integer)
+  print (truncate (9.2233720368547758e18 :: Double) :: Integer, truncate (-9.2233720368547758e18 :: Double) :: Integer)
+  print (truncate (1 / 0 :: Double) :: Integer)

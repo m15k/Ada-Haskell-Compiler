@@ -574,6 +574,12 @@ static void throw_div_zero(void) {
   fflush(stdout);
   ahc_throw(exc_arith(ARITH_DIVIDE_BY_ZERO));
 }
+#define ARITH_OVERFLOW 0             /* Control.Exception's index */
+static void throw_overflow(void) __attribute__((noreturn));
+static void throw_overflow(void) {
+  fflush(stdout);
+  ahc_throw(exc_arith(ARITH_OVERFLOW));
+}
 
 #ifdef AHC_GC_OWN
 /* ----- the own allocator, stage C1 (leak mode) -------------------
@@ -2028,8 +2034,33 @@ AhcNode *ahc_mk_primn(int arity, AhcPrimN f) {
   return ahc_mk_fun(primn_collect, e);
 }
 
+/* An evaluated integer node as a machine word: an AHC_INT's value,
+   or a bignum's low 64 bits in two's complement - GHC's
+   integerToInt. Int's wrapping primitives read every operand through
+   this, so a bignum that reaches Int is narrowed, never misread
+   through u.i. Limbs are 32 bits, little-endian. */
+static long int_word(const AhcNode *e) {
+  unsigned long mag;
+  if (e->tag == AHC_INT) return e->u.i;
+  mag = e->u.big.n > 0 ? (unsigned long)e->u.big.d[0] : 0;
+  if (e->u.big.n > 1) mag |= (unsigned long)e->u.big.d[1] << 32;
+  return (long)(e->u.big.sign < 0 ? 0UL - mag : mag);
+}
+
+/* An Int argument of a range/succ/pred primitive. Since M146 Int
+   arithmetic never yields a bignum and Integer's enumerations are
+   Prelude source, so a bignum here is a compiler bug - die loudly
+   rather than misread u.i (pre-M146 `[2^70 ..]` printed garbage). */
+static long int_arg(AhcNode *a) {
+  AhcNode *e = ahc_eval(a);
+  if (e->tag != AHC_INT)
+    ahc_die("internal: a bignum reached an Int-only primitive");
+  return e->u.i;
+}
+
 /* Integer arithmetic: fast long path, promoting to bignum on
-   overflow; every prim accepts either representation. */
+   overflow; every prim accepts either representation. Int has its
+   own wrapping primitives below (M146). */
 
 static AhcNode *p_add(AhcNode *a, AhcNode *b) {
   AhcNode *ea = ahc_eval(a), *eb = ahc_eval(b);
@@ -2181,6 +2212,75 @@ static AhcNode *p_signum(AhcNode *a) {
    overflow behavior is undefined per the Report; we keep the exact
    value). */
 static AhcNode *p_from_integer(AhcNode *a) { return a; }
+
+/* Int arithmetic (M146): a 64-bit machine integer, wrapping modulo
+   2^64 as GHC's. Computed in unsigned long - signed overflow is
+   undefined in C. Integer and the fixed-width carrier keep the
+   promoting p_add family above; Int never shares a dictionary with
+   them again. */
+static AhcNode *p_add_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  return ahc_mk_int((long)((unsigned long)x + (unsigned long)y));
+}
+static AhcNode *p_sub_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  return ahc_mk_int((long)((unsigned long)x - (unsigned long)y));
+}
+static AhcNode *p_mul_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  return ahc_mk_int((long)((unsigned long)x * (unsigned long)y));
+}
+static AhcNode *p_neg_w(AhcNode *a) {
+  long x = int_word(ahc_eval(a));
+  return ahc_mk_int((long)(0UL - (unsigned long)x));
+}
+static AhcNode *p_abs_w(AhcNode *a) {
+  long x = int_word(ahc_eval(a));
+  return ahc_mk_int(x < 0 ? (long)(0UL - (unsigned long)x) : x);
+}
+/* A zero divisor raises divide by zero first, as GHC's; quot/div of
+   minBound by -1 raise Overflow; rem/mod by -1 are 0 (computing them
+   with % would trap on x86). */
+static AhcNode *p_quot_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  if (y == 0) throw_div_zero();
+  if (y == -1) {
+    if (x == LONG_MIN) throw_overflow();
+    return ahc_mk_int(-x);
+  }
+  return ahc_mk_int(x / y);
+}
+static AhcNode *p_rem_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  if (y == 0) throw_div_zero();
+  if (y == -1) return ahc_mk_int(0);
+  return ahc_mk_int(x % y);
+}
+static AhcNode *p_div_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  if (y == 0) throw_div_zero();
+  if (y == -1) {
+    if (x == LONG_MIN) throw_overflow();
+    return ahc_mk_int(-x);
+  }
+  return ahc_mk_int((x % y != 0 && ((x < 0) != (y < 0))) ? x / y - 1
+                                                         : x / y);
+}
+static AhcNode *p_mod_w(AhcNode *a, AhcNode *b) {
+  long x = int_word(ahc_eval(a)), y = int_word(ahc_eval(b));
+  long r;
+  if (y == 0) throw_div_zero();
+  if (y == -1) return ahc_mk_int(0);
+  r = x % y;                 /* floor-adjust only on opposite signs, */
+  if (r != 0 && ((r < 0) != (y < 0))) r += y;   /* which can't overflow */
+  return ahc_mk_int(r);
+}
+/* fromInteger at Int narrows (GHC's integerToInt): literals,
+   fromIntegral, read and toEnum all reach Int through here. */
+static AhcNode *p_from_integer_w(AhcNode *a) {
+  AhcNode *e = ahc_eval(a);
+  return e->tag == AHC_INT ? e : ahc_mk_int(int_word(e));
+}
 static AhcNode *p_ord(AhcNode *a) { return ahc_mk_int(ahc_eval(a)->u.c); }
 static AhcNode *p_chr(AhcNode *a) {
   long v = ahc_eval(a)->u.i;
@@ -3570,13 +3670,7 @@ static AhcNode *p_narrow(AhcNode *bits_n, AhcNode *signed_n, AhcNode *v) {
   AhcNode *e = ahc_eval(v);
   unsigned long low;
   if (bits < 1 || bits > 64) ahc_die("primNarrow: width must be 1..64");
-  if (e->tag == AHC_INT) {
-    low = (unsigned long)e->u.i;
-  } else {                       /* bignum: little-endian 32-bit limbs */
-    unsigned long mag = e->u.big.n > 0 ? (unsigned long)e->u.big.d[0] : 0;
-    if (e->u.big.n > 1) mag |= (unsigned long)e->u.big.d[1] << 32;
-    low = e->u.big.sign < 0 ? 0UL - mag : mag;
-  }
+  low = (unsigned long)int_word(e);
   if (bits < 64) {
     unsigned long mask = (1UL << bits) - 1;
     low &= mask;
@@ -7265,19 +7359,36 @@ static AhcNode *p_pow_d(AhcNode *a, AhcNode *b) {
 static AhcNode *p_logbase_d(AhcNode *a, AhcNode *b) {
   return ahc_mk_double(log(ahc_eval(b)->u.d) / log(ahc_eval(a)->u.d));
 }
+/* An integral-valued double as an exact Integer (M146). A (long)
+   cast is undefined outside the word and saturated in practice:
+   `truncate 1.0e19 :: Integer` was minBound. Beyond 2^63 the value is
+   decodeFloat's m * 2^e with e > 0, built exactly; infinities and
+   NaNs decode like any other bits, as GHC's integerFromDouble does
+   (+Inf is 2^1024). */
+static AhcNode *integer_of_double(double d) {
+  unsigned long bits;
+  long ef, m;
+  if (d > -9223372036854775808.0 && d < 9223372036854775808.0)
+    return ahc_mk_int((long)d);
+  memcpy(&bits, &d, sizeof bits);
+  ef = (long)((bits >> 52) & 0x7FFUL);
+  m = (long)((bits & 0xFFFFFFFFFFFFFUL) | (1UL << 52));
+  if (bits >> 63) m = -m;
+  return node_shl(ahc_mk_int(m), (int)(ef - 1075));
+}
 static AhcNode *p_floor_d(AhcNode *a) {
-  return ahc_mk_int((long)floor(ahc_eval(a)->u.d));
+  return integer_of_double(floor(ahc_eval(a)->u.d));
 }
 static AhcNode *p_ceiling_d(AhcNode *a) {
-  return ahc_mk_int((long)ceil(ahc_eval(a)->u.d));
+  return integer_of_double(ceil(ahc_eval(a)->u.d));
 }
 /* Report: round is to nearest even (rint under the default rounding
    mode). */
 static AhcNode *p_round_d(AhcNode *a) {
-  return ahc_mk_int((long)rint(ahc_eval(a)->u.d));
+  return integer_of_double(rint(ahc_eval(a)->u.d));
 }
 static AhcNode *p_truncate_d(AhcNode *a) {
-  return ahc_mk_int((long)ahc_eval(a)->u.d);
+  return integer_of_double(trunc(ahc_eval(a)->u.d));
 }
 static AhcNode *p_int_to_d(AhcNode *a) {
   return ahc_mk_double((double)ahc_eval(a)->u.i);
@@ -7779,6 +7890,10 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_enum_from_int,
   *ahc_prim_show_int, *ahc_prim_show_char, *ahc_prim_show_bool,
   *ahc_prim_from_integer,
+  *ahc_prim_add_w, *ahc_prim_sub_w, *ahc_prim_mul_w,
+  *ahc_prim_neg_w, *ahc_prim_abs_w, *ahc_prim_quot_w,
+  *ahc_prim_rem_w, *ahc_prim_div_w, *ahc_prim_mod_w,
+  *ahc_prim_from_integer_w,
   *ahc_prim_enum_from_to_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
@@ -7922,6 +8037,16 @@ void ahc_rts_init(void) {
   ahc_prim_abs_int = mk_prim1(p_abs);
   ahc_prim_signum_int = mk_prim1(p_signum);
   ahc_prim_from_integer = mk_prim1(p_from_integer);
+  ahc_prim_add_w = mk_prim2(p_add_w);
+  ahc_prim_sub_w = mk_prim2(p_sub_w);
+  ahc_prim_mul_w = mk_prim2(p_mul_w);
+  ahc_prim_neg_w = mk_prim1(p_neg_w);
+  ahc_prim_abs_w = mk_prim1(p_abs_w);
+  ahc_prim_quot_w = mk_prim2(p_quot_w);
+  ahc_prim_rem_w = mk_prim2(p_rem_w);
+  ahc_prim_div_w = mk_prim2(p_div_w);
+  ahc_prim_mod_w = mk_prim2(p_mod_w);
+  ahc_prim_from_integer_w = mk_prim1(p_from_integer_w);
   ahc_prim_show_int = mk_prim1(p_show_int);
   ahc_prim_show_char = mk_prim1(p_show_char);
   ahc_prim_show_bool = mk_prim1(p_show_bool);

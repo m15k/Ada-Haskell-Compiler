@@ -167,6 +167,21 @@ package body AHC.Prelude_Core is
         Prim ("primsignum", "ahc_prim_signum_int");
       P_FromI : constant Real_Var_Id :=
         Prim ("primfromInteger", "ahc_prim_from_integer");
+      --  Int's own arithmetic (M146): wraps modulo 2^64 and narrows
+      --  fromInteger; Integer and the wired fixed-width branch keep
+      --  the promoting P_Add family.
+      P_AddW  : constant Real_Var_Id := Prim ("primaddW", "ahc_prim_add_w");
+      P_SubW  : constant Real_Var_Id := Prim ("primsubW", "ahc_prim_sub_w");
+      P_MulW  : constant Real_Var_Id := Prim ("primmulW", "ahc_prim_mul_w");
+      P_NegW  : constant Real_Var_Id := Prim ("primnegW", "ahc_prim_neg_w");
+      P_AbsW  : constant Real_Var_Id := Prim ("primabsW", "ahc_prim_abs_w");
+      P_QuotW : constant Real_Var_Id :=
+        Prim ("primquotW", "ahc_prim_quot_w");
+      P_RemW  : constant Real_Var_Id := Prim ("primremW", "ahc_prim_rem_w");
+      P_DivW  : constant Real_Var_Id := Prim ("primdivW", "ahc_prim_div_w");
+      P_ModW  : constant Real_Var_Id := Prim ("primmodW", "ahc_prim_mod_w");
+      P_FromIW : constant Real_Var_Id :=
+        Prim ("primfromIntegerW", "ahc_prim_from_integer_w");
       P_AddD  : constant Real_Var_Id :=
         Prim ("primaddD", "ahc_prim_add_d");
       P_SubD  : constant Real_Var_Id :=
@@ -1798,8 +1813,18 @@ package body AHC.Prelude_Core is
                      Ms.Append (Max_Min (False));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Num_Cl
-                    and then (Inst.Head = Env.Int_TC
-                              or else Inst.Head = Env.Integer_TC
+                    and then Inst.Head = Env.Int_TC
+                  then
+                     Ms.Append (V (P_AddW));
+                     Ms.Append (V (P_SubW));
+                     Ms.Append (V (P_MulW));
+                     Ms.Append (V (P_NegW));
+                     Ms.Append (V (P_AbsW));
+                     Ms.Append (V (P_Sig));
+                     Ms.Append (V (P_FromIW));
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Num_Cl
+                    and then (Inst.Head = Env.Integer_TC
                               or else Is_Fix (Inst.Head))
                   then
                      Ms.Append (V (P_Add));
@@ -1823,13 +1848,28 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (P_FromID));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Integral_Cl
-                    and then (Inst.Head = Env.Int_TC
-                              or else Inst.Head = Env.Integer_TC
+                    and then Inst.Head = Env.Int_TC
+                  then
+                     --  Int is always a machine word (M146), so
+                     --  toInteger is still the identity; its
+                     --  quot/rem/div/mod wrap and raise Overflow at
+                     --  minBound by -1.
+                     declare
+                        X : constant Real_Var_Id := Fresh ("x");
+                     begin
+                        Ms.Append (V (P_QuotW));
+                        Ms.Append (V (P_RemW));
+                        Ms.Append (V (P_DivW));
+                        Ms.Append (V (P_ModW));
+                        Ms.Append (Lam (X, V (X)));
+                     end;
+                     Give_Dict (Real_Instance_Id (II), Ms);
+                  elsif Cl_Id = Env.Integral_Cl
+                    and then (Inst.Head = Env.Integer_TC
                               or else Is_Fix (Inst.Head))
                   then
-                     --  Canonical bignum representation: Int and
-                     --  Integer share nodes, so both instances bind
-                     --  the same promoting prims, and toInteger is
+                     --  Integer and the wired fixed-width branch share
+                     --  the canonical promoting prims; toInteger is
                      --  the identity.
                      declare
                         X : constant Real_Var_Id := Fresh ("x");

@@ -438,14 +438,18 @@ sequenceList__ :: Monad m => [m a] -> m ()
 sequenceList__ [] = return ()
 sequenceList__ (m : ms) = m >> sequenceList__ ms
 
+-- Report 6.4.2, transcribed: gcd works on the absolute values with
+-- rem, and lcm divides before it multiplies - with a wrapping Int the
+-- order shows (gcd minBound 6 is -2, as GHC's).
 gcd :: Integral a => a -> a -> a
-gcd a 0 = abs a
-gcd a b = gcd b (mod a b)
+gcd x y = gcd' (abs x) (abs y)
+  where gcd' a 0 = a
+        gcd' a b = gcd' b (a `rem` b)
 
 lcm :: Integral a => a -> a -> a
 lcm _ 0 = 0
 lcm 0 _ = 0
-lcm a b = abs (div (a * b) (gcd a b))
+lcm x y = abs ((x `quot` (gcd x y)) * y)
 
 even :: Integral a => a -> Bool
 even n = n `mod` 2 == 0
