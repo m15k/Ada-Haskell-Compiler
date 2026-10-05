@@ -1090,8 +1090,22 @@ AhcNode *ahc_eval(AhcNode *n) {
         ef.node = n;
         ef.prev = self->eval_top;
         self->eval_top = &ef;
-        v = ahc_eval(code(env));
+        v = code(env);
         self->eval_top = ef.prev;
+        /* M146: v is NOT forced recursively here - that cost one C
+           frame per link of a thunk-returns-thunk chain, so
+           `z' `seq` foldl' f z' xs` overflowed the 1 GB stack at
+           3*10^7 elements. n becomes an indirection to v now and the
+           loop continues on v: a value makes this the old update
+           exactly; a thunk is claimed by the next iteration under its
+           own frame, so an exception raised while forcing v rethrows
+           through v, and forcing n again follows the IND to it. v's
+           own indirections are chased first - a chain leading back to
+           n (`a = b; b = a`) would otherwise become an IND cycle that
+           spins instead of reporting <<loop>>. */
+        while (__atomic_load_n(&v->tag, __ATOMIC_ACQUIRE) == AHC_IND)
+          v = (AhcNode *)__atomic_load_n(&v->u.ind, __ATOMIC_ACQUIRE);
+        if (v == n) ahc_die("<<loop>>");
         /* wake tasks parked on this thunk (FIFO), then update.
            Waiters exist only on green-owned blackholes, and green
            tasks share one OS thread - reading the list before the

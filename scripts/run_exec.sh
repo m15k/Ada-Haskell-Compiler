@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end execution tests: compile tests/exec/*.hs with the full
 # AHC pipeline (Haskell -> C -> clang) and compare stdout against the
-# checked-in .out goldens. --update regenerates.
+# checked-in .out goldens. --update regenerates. A tests/exec/NAME.env
+# sidecar (VAR=value per line) sets the program's environment - e.g.
+# AHC_MAIN_STACK for a constant-stack test (M146).
 set -u
 cd "$(dirname "$0")/.."
 update=false
@@ -15,10 +17,14 @@ for hs in tests/exec/*.hs; do
   if ! scripts/ahc-build.sh "$hs" "$tmp/$base" >/dev/null 2>"$tmp/err"; then
     echo "BUILD-FAIL $hs"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
   fi
+  envs=()
+  if [ -f "tests/exec/$base.env" ]; then
+    while IFS= read -r kv; do [ -n "$kv" ] && envs+=("$kv"); done < "tests/exec/$base.env"
+  fi
   if [ -f "tests/exec/$base.stdin" ]; then
-    got=$("$tmp/$base" < "tests/exec/$base.stdin" 2>&1)
+    got=$(env ${envs[@]+"${envs[@]}"} "$tmp/$base" < "tests/exec/$base.stdin" 2>&1)
   else
-    got=$("$tmp/$base" 2>&1)
+    got=$(env ${envs[@]+"${envs[@]}"} "$tmp/$base" 2>&1)
   fi
   if $update; then
     printf '%s\n' "$got" > "$exp"; echo "updated $exp"
