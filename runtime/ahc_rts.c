@@ -2478,35 +2478,12 @@ static AhcNode *p_compare_poly(AhcNode *a, AhcNode *b) {
   return ahc_mk_con(c < 0 ? LT_TAG : (c == 0 ? EQ_TAG : GT_TAG), 0);
 }
 
-/* enumFrom n = n : enumFrom (n+1), lazily. */
-static AhcNode *enum_from_code(AhcNode **env);
-
-static AhcNode *mk_enum_from(long n) {
-  AhcNode *v = ahc_mk_int(n);               /* child first */
-  AhcNode **e = ahc_env(1);
-  e[0] = v;
-  return ahc_mk_thunk(enum_from_code, e);
-}
-
-static AhcNode *enum_from_code(AhcNode **env) {
-  long n = env[0]->u.i;
-  AhcNode *hd = ahc_mk_int(n);              /* children first */
-  AhcNode *tl = mk_enum_from(n + 1);
-  AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-  c->u.con.fields[0] = hd;
-  c->u.con.fields[1] = tl;
-  return c;
-}
-
-static AhcNode *p_enum_from(AhcNode *a) {
-  return mk_enum_from(ahc_eval(a)->u.i);
-}
-
 /* Stepped enumerations (Report 3.10 / 6.3.4). enumFromThen is a
    lazy infinite structure with the given stride; enumFromThenTo is
    finite (empty when the stride points away from the bound). The
-   unbounded generator is Integer's (whose values here are machine
-   words; a bignum enumeration is a documented gap). */
+   unbounded generator below serves only enumFromThenTo's zero stride
+   (an infinite repeat); Integer's enumerations are Prelude source
+   since M146. */
 static AhcNode *enum_ft_code(AhcNode **env);
 
 static AhcNode *mk_enum_ft(long n, long step) {
@@ -2528,10 +2505,6 @@ static AhcNode *enum_ft_code(AhcNode **env) {
   return c;
 }
 
-static AhcNode *p_enum_from_then(AhcNode *a, AhcNode *b) {
-  long n = ahc_eval(a)->u.i;
-  return mk_enum_ft(n, ahc_eval(b)->u.i - n);
-}
 
 /* The BOUNDED lazy generator: n, n+step, ... while within lim (above
    it for a negative step), never computing past the machine word -
@@ -2572,11 +2545,11 @@ static AhcNode *enum_ftl_code(AhcNode **env) {
 /* enumFrom / enumFromThen at Int: bounded by maxBound (minBound for
    a descending stride), as GHC's. */
 static AhcNode *p_enum_from_intb(AhcNode *a) {
-  return mk_enum_ftl(ahc_eval(a)->u.i, 1, LONG_MAX);
+  return mk_enum_ftl(int_arg(a), 1, LONG_MAX);
 }
 
 static AhcNode *p_enum_from_then_intb(AhcNode *a, AhcNode *b) {
-  long n = ahc_eval(a)->u.i, m = ahc_eval(b)->u.i, step;
+  long n = int_arg(a), m = int_arg(b), step;
   if (__builtin_sub_overflow(m, n, &step)) {
     /* A stride wider than a word: the list is [n, m]. */
     AhcNode *tl = ahc_mk_con(NIL_TAG, 0);   /* children first */
@@ -2596,9 +2569,9 @@ static AhcNode *p_enum_from_then_intb(AhcNode *a, AhcNode *b) {
 
 static AhcNode *p_enum_from_then_to(AhcNode *a, AhcNode *b,
                                     AhcNode *t) {
-  long lo = ahc_eval(a)->u.i;
-  long nx = ahc_eval(b)->u.i;
-  long hi = ahc_eval(t)->u.i;
+  long lo = int_arg(a);
+  long nx = int_arg(b);
+  long hi = int_arg(t);
   long step;
   if (__builtin_sub_overflow(nx, lo, &step)) {
     /* A stride wider than a word reaches at most the second element. */
@@ -2634,42 +2607,29 @@ static void enum_bound_error(const char *msg) {
 
 /* succ/pred at Int: GHC's bound checks and messages. */
 static AhcNode *p_succ_int(AhcNode *a) {
-  long v = ahc_eval(a)->u.i;
+  long v = int_arg(a);
   if (v == LONG_MAX)
     enum_bound_error(
       "Prelude.Enum.succ{Int}: tried to take `succ' of maxBound");
   return ahc_mk_int(v + 1);
 }
 static AhcNode *p_pred_int(AhcNode *a) {
-  long v = ahc_eval(a)->u.i;
+  long v = int_arg(a);
   if (v == LONG_MIN)
     enum_bound_error(
       "Prelude.Enum.pred{Int}: tried to take `pred' of minBound");
   return ahc_mk_int(v - 1);
 }
-/* ... and at Integer, unbounded. */
-static AhcNode *p_succ_integer(AhcNode *a) {
-  return ahc_mk_int(ahc_eval(a)->u.i + 1);
-}
-static AhcNode *p_pred_integer(AhcNode *a) {
-  return ahc_mk_int(ahc_eval(a)->u.i - 1);
-}
 
+/* enumFromTo at Int: lazy, one cell at a time, through the bounded
+   generator [a..] and [a,b..c] already use (M146 - the eager loop
+   built every cell first: `take 3 [1..10^9]` took seconds and a GB).
+   lo <= hi is mk_enum_ftl's precondition; its overflow check stops at
+   hi == maxBound without wrapping. */
 static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
-  long lo = ahc_eval(a)->u.i, hi = ahc_eval(b)->u.i;
-  AhcNode *acc = ahc_mk_con(NIL_TAG, 0);
-  if (lo > hi) return acc;
-  /* Counting down from hi stops AT lo - never decrements past it,
-     which wrapped forever when lo was minBound. */
-  for (long i = hi;; i--) {
-    AhcNode *v = ahc_mk_int(i);                 /* child first */
-    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
-    c->u.con.fields[0] = v;
-    c->u.con.fields[1] = acc;
-    acc = c;
-    if (i == lo) break;
-  }
-  return acc;
+  long lo = int_arg(a), hi = int_arg(b);
+  if (lo > hi) return ahc_mk_con(NIL_TAG, 0);
+  return mk_enum_ftl(lo, 1, hi);
 }
 
 /* seq: force the first argument to WHNF, yield the second
@@ -7936,8 +7896,6 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_truncate_d, *ahc_prim_int_to_d,
   *ahc_prim_enum_from_then, *ahc_prim_enum_from_then_to,
   *ahc_prim_succ_int, *ahc_prim_pred_int,
-  *ahc_prim_succ_integer, *ahc_prim_pred_integer,
-  *ahc_prim_enum_from_integer, *ahc_prim_enum_from_then_integer,
   *ahc_prim_show_string, *ahc_prim_shows_list,
   *ahc_prim_showsprec_int, *ahc_prim_showsprec_d,
   *ahc_prim_check_range, *ahc_prim_check_pred, *ahc_prim_wrap_mod,
@@ -8053,10 +8011,6 @@ void ahc_rts_init(void) {
   ahc_prim_enum_from_to_int = mk_prim2(p_enum_from_to);
   ahc_prim_enum_from_int = mk_prim1(p_enum_from_intb);
   ahc_prim_enum_from_then = mk_prim2(p_enum_from_then_intb);
-  ahc_prim_enum_from_integer = mk_prim1(p_enum_from);
-  ahc_prim_enum_from_then_integer = mk_prim2(p_enum_from_then);
-  ahc_prim_succ_integer = mk_prim1(p_succ_integer);
-  ahc_prim_pred_integer = mk_prim1(p_pred_integer);
   ahc_prim_enum_from_then_to = mk_prim3(p_enum_from_then_to);
   ahc_prim_succ_int = mk_prim1(p_succ_int);
   ahc_prim_pred_int = mk_prim1(p_pred_int);

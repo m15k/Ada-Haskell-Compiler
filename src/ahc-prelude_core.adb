@@ -270,17 +270,6 @@ package body AHC.Prelude_Core is
         Prim ("primsucc", "ahc_prim_succ_int");
       P_Pred : constant Real_Var_Id :=
         Prim ("primpred", "ahc_prim_pred_int");
-      --  Integer's are unbounded; Int's stop at (and succ/pred check)
-      --  maxBound/minBound, as GHC's (M142 review).
-      P_SuccZ : constant Real_Var_Id :=
-        Prim ("primsuccInteger", "ahc_prim_succ_integer");
-      P_PredZ : constant Real_Var_Id :=
-        Prim ("primpredInteger", "ahc_prim_pred_integer");
-      P_EnumFZ : constant Real_Var_Id :=
-        Prim ("primenumFromInteger", "ahc_prim_enum_from_integer");
-      P_EnumFThZ : constant Real_Var_Id :=
-        Prim ("primenumFromThenInteger",
-              "ahc_prim_enum_from_then_integer");
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
@@ -2139,17 +2128,16 @@ package body AHC.Prelude_Core is
                      Ms.Append (V (Lookup ("dblEFThT_")));
                      Give_Dict (Real_Instance_Id (II), Ms);
                   elsif Cl_Id = Env.Enum_Cl
-                    and then (Inst.Head = Env.Int_TC
-                              or else Inst.Head =
-                                        Env.Integer_TC)
+                    and then Inst.Head = Env.Int_TC
                   then
+                     --  Int's stop at (and succ/pred check) maxBound/
+                     --  minBound, as GHC's (M142 review); the range
+                     --  primitives are lazy (M146).
                      declare
                         Fill : Expr_Id_Vectors.Vector;
                      begin
-                        Fill.Append (V (if Inst.Head = Env.Int_TC
-                                        then P_Succ else P_SuccZ));
-                        Fill.Append (V (if Inst.Head = Env.Int_TC
-                                        then P_Pred else P_PredZ));
+                        Fill.Append (V (P_Succ));
+                        Fill.Append (V (P_Pred));
                         declare
                            N : constant Real_Var_Id := Fresh ("n");
                         begin
@@ -2162,12 +2150,35 @@ package body AHC.Prelude_Core is
                            Fill.Append (Lam (N, V (Var_Id (N))));
                            --  ... and so is fromEnum.
                         end;
-                        Fill.Append (V (if Inst.Head = Env.Int_TC
-                                        then P_EnumF else P_EnumFZ));
-                        Fill.Append (V (if Inst.Head = Env.Int_TC
-                                        then P_EnumFTh else P_EnumFThZ));
+                        Fill.Append (V (P_EnumF));
+                        Fill.Append (V (P_EnumFTh));
                         Fill.Append (V (P_EnumFT));
                         Fill.Append (V (P_EnumFTT));
+                        Give_Dict (Real_Instance_Id (II), Fill);
+                     end;
+                  elsif Cl_Id = Env.Enum_Cl
+                    and then Inst.Head = Env.Integer_TC
+                  then
+                     --  Integer's enumeration is Prelude source (M146):
+                     --  lazy and exact for bignums, where the C range
+                     --  primitives read one machine word.
+                     declare
+                        Fill : Expr_Id_Vectors.Vector;
+                     begin
+                        Fill.Append (V (Lookup ("integerSucc_")));
+                        Fill.Append (V (Lookup ("integerPred_")));
+                        declare
+                           N : constant Real_Var_Id := Fresh ("n");
+                        begin
+                           Fill.Append (Lam (N, V (Var_Id (N))));
+                           --  toEnum: an Int is a valid Integer ...
+                        end;
+                        --  ... and fromEnum narrows, GHC's integerToInt.
+                        Fill.Append (V (P_FromIW));
+                        Fill.Append (V (Lookup ("integerEF_")));
+                        Fill.Append (V (Lookup ("integerEFTh_")));
+                        Fill.Append (V (Lookup ("integerEFT_")));
+                        Fill.Append (V (Lookup ("integerEFThT_")));
                         Give_Dict (Real_Instance_Id (II), Fill);
                      end;
                   elsif Cl_Id = Env.Monad_Cl

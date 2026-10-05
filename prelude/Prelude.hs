@@ -509,6 +509,37 @@ charEFT_ a b = map chr [ord a .. ord b]
 charEFThT_ :: Char -> Char -> Char -> [Char]
 charEFThT_ a b c = map chr (enumFromThenTo (ord a) (ord b) (ord c))
 
+-- Integer enumeration (M146): Prelude source, so it is lazy and exact
+-- for bignums; the C range primitives are Int-only. The stepped forms
+-- follow base's numericEnumFromThenTo for Integral types: stop past
+-- the bound in the stride's direction; a zero stride repeats while
+-- n <= m, as the Report's enumFromThenTo does.
+integerSucc_ :: Integer -> Integer
+integerSucc_ n = n + 1
+
+integerPred_ :: Integer -> Integer
+integerPred_ n = n - 1
+
+integerEF_ :: Integer -> [Integer]
+integerEF_ n = n : integerEF_ (n + 1)
+
+integerEFTh_ :: Integer -> Integer -> [Integer]
+integerEFTh_ n m = go n
+  where d = m - n
+        go x = x : go (x + d)
+
+integerEFT_ :: Integer -> Integer -> [Integer]
+integerEFT_ n m = if n > m then [] else go n
+  where go x = x : (if x == m then [] else go (x + 1))
+
+integerEFThT_ :: Integer -> Integer -> Integer -> [Integer]
+integerEFThT_ n n' m
+  | d >= 0    = if n > m then [] else up n
+  | otherwise = if n < m then [] else down n
+  where d = n' - n
+        up x = x : (let y = x + d in if y > m then [] else up y)
+        down x = x : (let y = x + d in if y < m then [] else down y)
+
 dblSucc_ :: Double -> Double
 dblSucc_ x = x + 1.0
 
