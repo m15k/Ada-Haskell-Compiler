@@ -10,9 +10,10 @@
 -- so an AHC rejection or output divergence on a generated program is
 -- a real finding, never menu noise. Known-divergent territory from
 -- tests/conformance/EXCLUSIONS.md is avoided by construction:
--- Int arithmetic stays small (AHC promotes on overflow, the Report
--- leaves it undefined), partial functions are never emitted
--- (division is guarded, maximum/minimum get a consed head,
+-- Int arithmetic wraps at 64 bits on both compilers (M146), so Int
+-- literals and products reach the bounds; partial functions are never
+-- emitted (division is guarded against 0, and at Int against -1,
+-- whose quotient of minBound overflows, maximum/minimum get a consed head,
 -- recursion is structural on the tail). Text literals range over
 -- Unicode incl. cased letters (Data.Char is table-exact vs GHC).
 module Main where
@@ -150,7 +151,10 @@ recOf env t = case erec env of
 -- ===== literals ===================================================
 
 lit :: Ty -> R String
-lit TInt = fmap show (rnd 100)
+lit TInt = freq
+  [ (6, fmap show (rnd 100))
+  , (1, pick [ "9223372036854775807", "(-9223372036854775808)"
+             , "4611686018427387904", "(-3037000500)" ]) ]
 lit TInteger = freq
   [ (3, fmap show (rnd 1000))
   , (2, do k  <- rnd 16                    -- 15..30 digit bignum
@@ -333,14 +337,18 @@ node sz env t = freq (common sz env t ++ own)
     bin ty op = do a <- sub ty
                    b <- sub ty
                    return (binOp op a b)
-    -- x `op` y with y guarded away from zero, sharing y via let
+    -- x `op` y with y guarded away from zero (and at Int from -1:
+    -- minBound `div` (-1) overflows), sharing y via let
     guarded ty zero one ops = do
       op <- pick ops
       a  <- sub ty
       b  <- sub ty
       d  <- fresh
+      let negOne = case ty of
+            TInt -> " || " ++ d ++ " == (-1)"
+            _    -> ""
       return ("(" ++ a ++ " `" ++ op ++ "` (let " ++ d ++ " = " ++ b
-              ++ " in (if (" ++ d ++ " == " ++ zero ++ ") then "
+              ++ " in (if (" ++ d ++ " == " ++ zero ++ negOne ++ ") then "
               ++ one ++ " else " ++ d ++ ")))")
     unary ty fs = do f <- pick fs
                      a <- sub ty
@@ -354,7 +362,9 @@ node sz env t = freq (common sz env t ++ own)
     intSection = pick ["(+ 3)", "(* 2)", "(subtract 1)", "(`div` 2)"]
     own = case t of
       TInt ->
-        [ (3, bin TInt "+"), (3, bin TInt "-")
+        [ (3, bin TInt "+"), (3, bin TInt "-"), (1, bin TInt "*")
+        , (1, do e <- sub TInteger
+                 return ("(fromIntegral " ++ e ++ " :: Int)"))
         , (2, do a <- sub TInt
                  l <- rnd 8
                  return (binOp "*" a (show (l + 2))))
