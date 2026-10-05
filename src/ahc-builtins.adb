@@ -657,13 +657,53 @@ package body AHC.Builtins is
             Finish_Class (Cl);
          end;
 
-         --  Integral (Num, Ord) - the Report routes Ord through the
-         --  Real superclass; AHC skips Real in the chain but keeps
-         --  Ord so (^)'s exponent test and friends typecheck.
+         --  Enum
+         declare
+            Cl : constant Real_Class_Id := Def_Class ("Enum", Star_K);
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            LA : constant Real_Type_Id := LST (TV (A));
+         begin
+            Env.Enum_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "succ", Poly1 (A, FN (TV (A), TV (A)),
+                                  Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "pred", Poly1 (A, FN (TV (A), TV (A)),
+                                  Ctx1 (Cl, TV (A))), True);
+            Ignore := Def_Method
+              (Cl, "toEnum", Poly1 (A, FN (Int_T, TV (A)),
+                                    Ctx1 (Cl, TV (A))), False);
+            Ignore := Def_Method
+              (Cl, "fromEnum", Poly1 (A, FN (TV (A), Int_T),
+                                      Ctx1 (Cl, TV (A))), False);
+            Env.Enum_From_V := Var_Id (Def_Method
+              (Cl, "enumFrom", Poly1 (A, FN (TV (A), LA),
+                                      Ctx1 (Cl, TV (A))), True));
+            Env.Enum_From_Then_V := Var_Id (Def_Method
+              (Cl, "enumFromThen",
+               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
+               True));
+            Env.Enum_From_To_V := Var_Id (Def_Method
+              (Cl, "enumFromTo",
+               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
+               True));
+            Env.Enum_From_Then_To_V := Var_Id (Def_Method
+              (Cl, "enumFromThenTo",
+               Poly1 (A, FN (TV (A), FN (TV (A), TV (A), LA)),
+                      Ctx1 (Cl, TV (A))),
+               True));
+            Finish_Class (Cl);
+         end;
+
+         --  Integral: Report 6.4, class (Real a, Enum a) => Integral a
+         --  (M146; was (Num, Ord), so `Integral a` gave neither
+         --  `Real a` nor `Enum a` - `[1 .. n]` and realToFrac at an
+         --  Integral type variable were rejected). Enum is declared
+         --  first for that reason.
          declare
             Cl : constant Real_Class_Id :=
               Def_Class ("Integral", Star_K,
-                         Sup2 (Env.Num_Cl, Env.Ord_Cl));
+                         Sup2 (Env.Real_Cl, Env.Enum_Cl));
             A   : constant Real_TyVar_Id := New_Tv ("a");
             Bin : constant Real_Type_Id := FN (TV (A), TV (A), TV (A));
          begin
@@ -787,44 +827,6 @@ package body AHC.Builtins is
               (Cl, "atan2",
                Poly1 (A, FN (TV (A), TV (A), TV (A)),
                       Ctx1 (Cl, TV (A))), False);
-            Finish_Class (Cl);
-         end;
-
-         --  Enum
-         declare
-            Cl : constant Real_Class_Id := Def_Class ("Enum", Star_K);
-            A  : constant Real_TyVar_Id := New_Tv ("a");
-            LA : constant Real_Type_Id := LST (TV (A));
-         begin
-            Env.Enum_Cl := Class_Id (Cl);
-            Ignore := Def_Method
-              (Cl, "succ", Poly1 (A, FN (TV (A), TV (A)),
-                                  Ctx1 (Cl, TV (A))), True);
-            Ignore := Def_Method
-              (Cl, "pred", Poly1 (A, FN (TV (A), TV (A)),
-                                  Ctx1 (Cl, TV (A))), True);
-            Ignore := Def_Method
-              (Cl, "toEnum", Poly1 (A, FN (Int_T, TV (A)),
-                                    Ctx1 (Cl, TV (A))), False);
-            Ignore := Def_Method
-              (Cl, "fromEnum", Poly1 (A, FN (TV (A), Int_T),
-                                      Ctx1 (Cl, TV (A))), False);
-            Env.Enum_From_V := Var_Id (Def_Method
-              (Cl, "enumFrom", Poly1 (A, FN (TV (A), LA),
-                                      Ctx1 (Cl, TV (A))), True));
-            Env.Enum_From_Then_V := Var_Id (Def_Method
-              (Cl, "enumFromThen",
-               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
-               True));
-            Env.Enum_From_To_V := Var_Id (Def_Method
-              (Cl, "enumFromTo",
-               Poly1 (A, FN (TV (A), TV (A), LA), Ctx1 (Cl, TV (A))),
-               True));
-            Env.Enum_From_Then_To_V := Var_Id (Def_Method
-              (Cl, "enumFromThenTo",
-               Poly1 (A, FN (TV (A), FN (TV (A), TV (A), LA)),
-                      Ctx1 (Cl, TV (A))),
-               True));
             Finish_Class (Cl);
          end;
 

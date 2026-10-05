@@ -1344,9 +1344,10 @@ instance Traversable (Either a) where
 
 
 -- Fixed-width integers (Data.Int / Data.Word, M139) -----------------
--- Int8..Word64 share Int's runtime representation - an exact, promoting
--- integer - so every arithmetic result is Int's result NARROWED to the
--- width by primNarrow, which is what makes them wrap like GHC's; the
+-- Int8..Word64 compute in Integer - exact and promoting - and every
+-- arithmetic result is NARROWED to the width by primNarrow, which is
+-- what makes them wrap like GHC's (M146: the carrier was Int until Int
+-- itself started to wrap; a Word64 above 2^63 needs the exact value); the
 -- literal `200 :: Int8` is -56 and `read "300" :: Word8` is 44. Eq, Ord
 -- and Show are wired (Int's, correct on narrowed values). Enumeration
 -- goes through Integer, since a Word64 above 2^63 is a bignum that
@@ -1396,10 +1397,10 @@ divMod a b = (div a b, mod a b)
 realToFrac :: (Real a, Fractional b) => a -> b
 realToFrac x = fromRational (toRational x)
 
-narrowInt8_ :: Int -> Int8
-narrowInt8_ x = primFixCast (primNarrow 8 1 x)
+narrowInt8_ :: Integer -> Int8
+narrowInt8_ x = primFixCast (primNarrow 8 1 (primFixCast x))
 
-toInt8_ :: Int8 -> Int
+toInt8_ :: Int8 -> Integer
 toInt8_ = primFixCast
 
 instance Num Int8 where
@@ -1409,22 +1410,22 @@ instance Num Int8 where
   negate a = narrowInt8_ (negate (toInt8_ a))
   abs a = narrowInt8_ (abs (toInt8_ a))
   signum a = narrowInt8_ (signum (toInt8_ a))
-  fromInteger i = narrowInt8_ (fromInteger i)
+  fromInteger i = narrowInt8_ i
 
 instance Bounded Int8 where
   minBound = narrowInt8_ (-128)
   maxBound = narrowInt8_ (127)
 
 instance Real Int8 where
-  toRational a = toRational (toInteger (toInt8_ a))
+  toRational a = toRational (toInt8_ a)
 
 instance Enum Int8 where
   toEnum i =
     if i < -128 || i > 127
       then error ("Enum.toEnum{Int8}: tag (" ++ show i
                   ++ ") is outside of bounds (-128,127)")
-      else narrowInt8_ i
-  fromEnum a = toInt8_ a
+      else narrowInt8_ (toInteger i)
+  fromEnum a = fromInteger (toInt8_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Int8}: tried to take `succ' of maxBound"
              else a + 1
@@ -1443,15 +1444,15 @@ instance Integral Int8 where
   div a b = overflowQuot_ (a == minBound) (b == narrowInt8_ (-1))
               (narrowInt8_ (div (toInt8_ a) (toInt8_ b)))
   mod a b = narrowInt8_ (mod (toInt8_ a) (toInt8_ b))
-  toInteger a = toInteger (toInt8_ a)
+  toInteger a = toInt8_ a
 
 instance Read Int8 where
-  readsPrec _ s = [(narrowInt8_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowInt8_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowInt16_ :: Int -> Int16
-narrowInt16_ x = primFixCast (primNarrow 16 1 x)
+narrowInt16_ :: Integer -> Int16
+narrowInt16_ x = primFixCast (primNarrow 16 1 (primFixCast x))
 
-toInt16_ :: Int16 -> Int
+toInt16_ :: Int16 -> Integer
 toInt16_ = primFixCast
 
 instance Num Int16 where
@@ -1461,22 +1462,22 @@ instance Num Int16 where
   negate a = narrowInt16_ (negate (toInt16_ a))
   abs a = narrowInt16_ (abs (toInt16_ a))
   signum a = narrowInt16_ (signum (toInt16_ a))
-  fromInteger i = narrowInt16_ (fromInteger i)
+  fromInteger i = narrowInt16_ i
 
 instance Bounded Int16 where
   minBound = narrowInt16_ (-32768)
   maxBound = narrowInt16_ (32767)
 
 instance Real Int16 where
-  toRational a = toRational (toInteger (toInt16_ a))
+  toRational a = toRational (toInt16_ a)
 
 instance Enum Int16 where
   toEnum i =
     if i < -32768 || i > 32767
       then error ("Enum.toEnum{Int16}: tag (" ++ show i
                   ++ ") is outside of bounds (-32768,32767)")
-      else narrowInt16_ i
-  fromEnum a = toInt16_ a
+      else narrowInt16_ (toInteger i)
+  fromEnum a = fromInteger (toInt16_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Int16}: tried to take `succ' of maxBound"
              else a + 1
@@ -1495,15 +1496,15 @@ instance Integral Int16 where
   div a b = overflowQuot_ (a == minBound) (b == narrowInt16_ (-1))
               (narrowInt16_ (div (toInt16_ a) (toInt16_ b)))
   mod a b = narrowInt16_ (mod (toInt16_ a) (toInt16_ b))
-  toInteger a = toInteger (toInt16_ a)
+  toInteger a = toInt16_ a
 
 instance Read Int16 where
-  readsPrec _ s = [(narrowInt16_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowInt16_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowInt32_ :: Int -> Int32
-narrowInt32_ x = primFixCast (primNarrow 32 1 x)
+narrowInt32_ :: Integer -> Int32
+narrowInt32_ x = primFixCast (primNarrow 32 1 (primFixCast x))
 
-toInt32_ :: Int32 -> Int
+toInt32_ :: Int32 -> Integer
 toInt32_ = primFixCast
 
 instance Num Int32 where
@@ -1513,22 +1514,22 @@ instance Num Int32 where
   negate a = narrowInt32_ (negate (toInt32_ a))
   abs a = narrowInt32_ (abs (toInt32_ a))
   signum a = narrowInt32_ (signum (toInt32_ a))
-  fromInteger i = narrowInt32_ (fromInteger i)
+  fromInteger i = narrowInt32_ i
 
 instance Bounded Int32 where
   minBound = narrowInt32_ (-2147483648)
   maxBound = narrowInt32_ (2147483647)
 
 instance Real Int32 where
-  toRational a = toRational (toInteger (toInt32_ a))
+  toRational a = toRational (toInt32_ a)
 
 instance Enum Int32 where
   toEnum i =
     if i < -2147483648 || i > 2147483647
       then error ("Enum.toEnum{Int32}: tag (" ++ show i
                   ++ ") is outside of bounds (-2147483648,2147483647)")
-      else narrowInt32_ i
-  fromEnum a = toInt32_ a
+      else narrowInt32_ (toInteger i)
+  fromEnum a = fromInteger (toInt32_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Int32}: tried to take `succ' of maxBound"
              else a + 1
@@ -1547,15 +1548,15 @@ instance Integral Int32 where
   div a b = overflowQuot_ (a == minBound) (b == narrowInt32_ (-1))
               (narrowInt32_ (div (toInt32_ a) (toInt32_ b)))
   mod a b = narrowInt32_ (mod (toInt32_ a) (toInt32_ b))
-  toInteger a = toInteger (toInt32_ a)
+  toInteger a = toInt32_ a
 
 instance Read Int32 where
-  readsPrec _ s = [(narrowInt32_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowInt32_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowInt64_ :: Int -> Int64
-narrowInt64_ x = primFixCast (primNarrow 64 1 x)
+narrowInt64_ :: Integer -> Int64
+narrowInt64_ x = primFixCast (primNarrow 64 1 (primFixCast x))
 
-toInt64_ :: Int64 -> Int
+toInt64_ :: Int64 -> Integer
 toInt64_ = primFixCast
 
 instance Num Int64 where
@@ -1565,22 +1566,22 @@ instance Num Int64 where
   negate a = narrowInt64_ (negate (toInt64_ a))
   abs a = narrowInt64_ (abs (toInt64_ a))
   signum a = narrowInt64_ (signum (toInt64_ a))
-  fromInteger i = narrowInt64_ (fromInteger i)
+  fromInteger i = narrowInt64_ i
 
 instance Bounded Int64 where
   minBound = narrowInt64_ (-9223372036854775808)
   maxBound = narrowInt64_ (9223372036854775807)
 
 instance Real Int64 where
-  toRational a = toRational (toInteger (toInt64_ a))
+  toRational a = toRational (toInt64_ a)
 
 instance Enum Int64 where
   toEnum i =
     if i < -9223372036854775808 || i > 9223372036854775807
       then error ("Enum.toEnum{Int64}: tag (" ++ show i
                   ++ ") is outside of bounds (-9223372036854775808,9223372036854775807)")
-      else narrowInt64_ i
-  fromEnum a = toInt64_ a
+      else narrowInt64_ (toInteger i)
+  fromEnum a = fromInteger (toInt64_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Int64}: tried to take `succ' of maxBound"
              else a + 1
@@ -1599,15 +1600,15 @@ instance Integral Int64 where
   div a b = overflowQuot_ (a == minBound) (b == narrowInt64_ (-1))
               (narrowInt64_ (div (toInt64_ a) (toInt64_ b)))
   mod a b = narrowInt64_ (mod (toInt64_ a) (toInt64_ b))
-  toInteger a = toInteger (toInt64_ a)
+  toInteger a = toInt64_ a
 
 instance Read Int64 where
-  readsPrec _ s = [(narrowInt64_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowInt64_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowWord8_ :: Int -> Word8
-narrowWord8_ x = primFixCast (primNarrow 8 0 x)
+narrowWord8_ :: Integer -> Word8
+narrowWord8_ x = primFixCast (primNarrow 8 0 (primFixCast x))
 
-toWord8_ :: Word8 -> Int
+toWord8_ :: Word8 -> Integer
 toWord8_ = primFixCast
 
 instance Num Word8 where
@@ -1617,22 +1618,22 @@ instance Num Word8 where
   negate a = narrowWord8_ (negate (toWord8_ a))
   abs a = narrowWord8_ (abs (toWord8_ a))
   signum a = narrowWord8_ (signum (toWord8_ a))
-  fromInteger i = narrowWord8_ (fromInteger i)
+  fromInteger i = narrowWord8_ i
 
 instance Bounded Word8 where
   minBound = narrowWord8_ (0)
   maxBound = narrowWord8_ (255)
 
 instance Real Word8 where
-  toRational a = toRational (toInteger (toWord8_ a))
+  toRational a = toRational (toWord8_ a)
 
 instance Enum Word8 where
   toEnum i =
     if i < 0 || i > 255
       then error ("Enum.toEnum{Word8}: tag (" ++ show i
                   ++ ") is outside of bounds (0,255)")
-      else narrowWord8_ i
-  fromEnum a = toWord8_ a
+      else narrowWord8_ (toInteger i)
+  fromEnum a = fromInteger (toWord8_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Word8}: tried to take `succ' of maxBound"
              else a + 1
@@ -1651,15 +1652,15 @@ instance Integral Word8 where
   div a b = overflowQuot_ (False) (b == narrowWord8_ (-1))
               (narrowWord8_ (div (toWord8_ a) (toWord8_ b)))
   mod a b = narrowWord8_ (mod (toWord8_ a) (toWord8_ b))
-  toInteger a = toInteger (toWord8_ a)
+  toInteger a = toWord8_ a
 
 instance Read Word8 where
-  readsPrec _ s = [(narrowWord8_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowWord8_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowWord16_ :: Int -> Word16
-narrowWord16_ x = primFixCast (primNarrow 16 0 x)
+narrowWord16_ :: Integer -> Word16
+narrowWord16_ x = primFixCast (primNarrow 16 0 (primFixCast x))
 
-toWord16_ :: Word16 -> Int
+toWord16_ :: Word16 -> Integer
 toWord16_ = primFixCast
 
 instance Num Word16 where
@@ -1669,22 +1670,22 @@ instance Num Word16 where
   negate a = narrowWord16_ (negate (toWord16_ a))
   abs a = narrowWord16_ (abs (toWord16_ a))
   signum a = narrowWord16_ (signum (toWord16_ a))
-  fromInteger i = narrowWord16_ (fromInteger i)
+  fromInteger i = narrowWord16_ i
 
 instance Bounded Word16 where
   minBound = narrowWord16_ (0)
   maxBound = narrowWord16_ (65535)
 
 instance Real Word16 where
-  toRational a = toRational (toInteger (toWord16_ a))
+  toRational a = toRational (toWord16_ a)
 
 instance Enum Word16 where
   toEnum i =
     if i < 0 || i > 65535
       then error ("Enum.toEnum{Word16}: tag (" ++ show i
                   ++ ") is outside of bounds (0,65535)")
-      else narrowWord16_ i
-  fromEnum a = toWord16_ a
+      else narrowWord16_ (toInteger i)
+  fromEnum a = fromInteger (toWord16_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Word16}: tried to take `succ' of maxBound"
              else a + 1
@@ -1703,15 +1704,15 @@ instance Integral Word16 where
   div a b = overflowQuot_ (False) (b == narrowWord16_ (-1))
               (narrowWord16_ (div (toWord16_ a) (toWord16_ b)))
   mod a b = narrowWord16_ (mod (toWord16_ a) (toWord16_ b))
-  toInteger a = toInteger (toWord16_ a)
+  toInteger a = toWord16_ a
 
 instance Read Word16 where
-  readsPrec _ s = [(narrowWord16_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowWord16_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowWord32_ :: Int -> Word32
-narrowWord32_ x = primFixCast (primNarrow 32 0 x)
+narrowWord32_ :: Integer -> Word32
+narrowWord32_ x = primFixCast (primNarrow 32 0 (primFixCast x))
 
-toWord32_ :: Word32 -> Int
+toWord32_ :: Word32 -> Integer
 toWord32_ = primFixCast
 
 instance Num Word32 where
@@ -1721,22 +1722,22 @@ instance Num Word32 where
   negate a = narrowWord32_ (negate (toWord32_ a))
   abs a = narrowWord32_ (abs (toWord32_ a))
   signum a = narrowWord32_ (signum (toWord32_ a))
-  fromInteger i = narrowWord32_ (fromInteger i)
+  fromInteger i = narrowWord32_ i
 
 instance Bounded Word32 where
   minBound = narrowWord32_ (0)
   maxBound = narrowWord32_ (4294967295)
 
 instance Real Word32 where
-  toRational a = toRational (toInteger (toWord32_ a))
+  toRational a = toRational (toWord32_ a)
 
 instance Enum Word32 where
   toEnum i =
     if i < 0 || i > 4294967295
       then error ("Enum.toEnum{Word32}: tag (" ++ show i
                   ++ ") is outside of bounds (0,4294967295)")
-      else narrowWord32_ i
-  fromEnum a = toWord32_ a
+      else narrowWord32_ (toInteger i)
+  fromEnum a = fromInteger (toWord32_ a)
   succ a = if a == maxBound
              then error "Enum.succ{Word32}: tried to take `succ' of maxBound"
              else a + 1
@@ -1755,15 +1756,15 @@ instance Integral Word32 where
   div a b = overflowQuot_ (False) (b == narrowWord32_ (-1))
               (narrowWord32_ (div (toWord32_ a) (toWord32_ b)))
   mod a b = narrowWord32_ (mod (toWord32_ a) (toWord32_ b))
-  toInteger a = toInteger (toWord32_ a)
+  toInteger a = toWord32_ a
 
 instance Read Word32 where
-  readsPrec _ s = [(narrowWord32_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowWord32_ i, r) | (i, r) <- readsInteger_ s]
 
-narrowWord64_ :: Int -> Word64
-narrowWord64_ x = primFixCast (primNarrow 64 0 x)
+narrowWord64_ :: Integer -> Word64
+narrowWord64_ x = primFixCast (primNarrow 64 0 (primFixCast x))
 
-toWord64_ :: Word64 -> Int
+toWord64_ :: Word64 -> Integer
 toWord64_ = primFixCast
 
 instance Num Word64 where
@@ -1773,22 +1774,27 @@ instance Num Word64 where
   negate a = narrowWord64_ (negate (toWord64_ a))
   abs a = narrowWord64_ (abs (toWord64_ a))
   signum a = narrowWord64_ (signum (toWord64_ a))
-  fromInteger i = narrowWord64_ (fromInteger i)
+  fromInteger i = narrowWord64_ i
 
 instance Bounded Word64 where
   minBound = narrowWord64_ (0)
   maxBound = narrowWord64_ (18446744073709551615)
 
 instance Real Word64 where
-  toRational a = toRational (toInteger (toWord64_ a))
+  toRational a = toRational (toWord64_ a)
 
 instance Enum Word64 where
   toEnum i =
     if i < 0 || i > 18446744073709551615
       then error ("Enum.toEnum{Word64}: tag (" ++ show i
                   ++ ") is outside of bounds (0,18446744073709551615)")
-      else narrowWord64_ i
-  fromEnum a = toWord64_ a
+      else narrowWord64_ (toInteger i)
+  fromEnum a =
+    let i = toWord64_ a
+    in if i > 9223372036854775807
+         then errorWithoutStackTrace ("Enum.fromEnum{Word64}: value (" ++ show i
+                     ++ ") is outside of Int's bounds (-9223372036854775808,9223372036854775807)")
+         else fromInteger i
   succ a = if a == maxBound
              then error "Enum.succ{Word64}: tried to take `succ' of maxBound"
              else a + 1
@@ -1807,10 +1813,10 @@ instance Integral Word64 where
   div a b = overflowQuot_ (False) (b == narrowWord64_ (-1))
               (narrowWord64_ (div (toWord64_ a) (toWord64_ b)))
   mod a b = narrowWord64_ (mod (toWord64_ a) (toWord64_ b))
-  toInteger a = toInteger (toWord64_ a)
+  toInteger a = toWord64_ a
 
 instance Read Word64 where
-  readsPrec _ s = [(narrowWord64_ (integerToInt_ i), r) | (i, r) <- readsInteger_ s]
+  readsPrec _ s = [(narrowWord64_ i, r) | (i, r) <- readsInteger_ s]
 
 
 -- Names GHC's Prelude exports that used to live in lib/ (M144b): the
