@@ -2539,21 +2539,37 @@ static AhcNode *mk_enum_ftl(long n, long step, long lim) {
   return ahc_mk_thunk(enum_ftl_code, e);
 }
 
+/* One forcing yields a CHUNK of up to ENUM_CHUNK cells and a thunk
+   for the rest (M146): a thunk + env per cell made the lazy
+   enumFromTo 40% slower than the eager loop it replaced, and an Int
+   enumeration has no bottoms, so computing a few cells ahead is
+   unobservable. Built tail-first - children before their owner, the
+   own collector's allocation-order invariant. */
+#define ENUM_CHUNK 128
 static AhcNode *enum_ftl_code(AhcNode **env) {
   long n = env[0]->u.i, step = env[1]->u.i, lim = env[2]->u.i;
-  long next;
-  AhcNode *hd = ahc_mk_int(n);              /* children first */
-  AhcNode *tl;
-  AhcNode *c;
-  if (__builtin_add_overflow(n, step, &next)
-      || (step > 0 && next > lim) || (step < 0 && next < lim))
-    tl = ahc_mk_con(NIL_TAG, 0);
-  else
-    tl = mk_enum_ftl(next, step, lim);
-  c = ahc_mk_con(CONS_TAG, 2);
-  c->u.con.fields[0] = hd;
-  c->u.con.fields[1] = tl;
-  return c;
+  long last = n, next = 0, cnt = 1;
+  int more = 0;
+  AhcNode *acc;
+  for (;;) {
+    if (__builtin_add_overflow(last, step, &next)
+        || (step > 0 && next > lim) || (step < 0 && next < lim))
+      break;                               /* the list ends at last */
+    if (cnt == ENUM_CHUNK) { more = 1; break; }   /* next starts the rest */
+    last = next;
+    cnt++;
+  }
+  acc = more ? mk_enum_ftl(next, step, lim) : ahc_mk_con(NIL_TAG, 0);
+  for (long i = 0, cur = last;; i++) {
+    AhcNode *v = ahc_mk_int(cur);          /* child first */
+    AhcNode *c = ahc_mk_con(CONS_TAG, 2);
+    c->u.con.fields[0] = v;
+    c->u.con.fields[1] = acc;
+    acc = c;
+    if (i == cnt - 1) break;
+    cur -= step;          /* stays within [n, last]: cannot overflow */
+  }
+  return acc;
 }
 
 /* enumFrom / enumFromThen at Int: bounded by maxBound (minBound for

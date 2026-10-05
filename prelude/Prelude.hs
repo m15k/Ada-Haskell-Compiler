@@ -528,12 +528,25 @@ integerEFTh_ n m = go n
   where d = m - n
         go x = x : go (x + d)
 
+-- A range whose bounds fit a machine word runs on Int's chunked C
+-- generator: a small Integer and an Int are the same node, so the
+-- cast is exact (and keeps [1 .. n] :: [Integer] as fast as before
+-- M146 moved Integer's enumeration here).
 integerEFT_ :: Integer -> Integer -> [Integer]
-integerEFT_ n m = if n > m then [] else go n
+integerEFT_ n m
+  | integerIsWord_ n && integerIsWord_ m =
+      primFixCast (enumFromTo (primFixCast n :: Int) (primFixCast m :: Int))
+  | otherwise = if n > m then [] else go n
   where go x = x : (if x == m then [] else go (x + 1))
+
+integerIsWord_ :: Integer -> Bool
+integerIsWord_ x = x >= -9223372036854775808 && x <= 9223372036854775807
 
 integerEFThT_ :: Integer -> Integer -> Integer -> [Integer]
 integerEFThT_ n n' m
+  | integerIsWord_ n && integerIsWord_ n' && integerIsWord_ m =
+      primFixCast (enumFromThenTo (primFixCast n :: Int) (primFixCast n' :: Int)
+                                  (primFixCast m :: Int))
   | d >= 0    = if n > m then [] else up n
   | otherwise = if n < m then [] else down n
   where d = n' - n
