@@ -1139,6 +1139,17 @@ AhcNode *ahc_eval(AhcNode *n) {
 #ifdef AHC_GC_OWN
         own_write_barrier(n);
 #endif
+        /* Keep the entry node pointing at the chain's head as it
+           advances: n0 is live in this frame for the whole loop, and
+           pointing at the first link it would keep every link alive
+           (123 MB instead of 6 on b_strictfold). */
+        if (n0 != n
+            && __atomic_load_n(&n0->tag, __ATOMIC_ACQUIRE) == AHC_IND) {
+          __atomic_store_n(&n0->u.ind, v, __ATOMIC_RELEASE);
+#ifdef AHC_GC_OWN
+          own_write_barrier(n0);
+#endif
+        }
         while (w) {
           AhcTask *nx = w->qnext;
           wake(w);

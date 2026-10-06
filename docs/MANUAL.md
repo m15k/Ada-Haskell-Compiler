@@ -814,6 +814,16 @@ overwrite is the "need" in call-by-need — the memoization. The
 demands *itself* (`let x = x + 1 in x`) is detected as `<<loop>>`
 instead of hanging.
 
+One refinement since M146: when a thunk's code returns *another*
+unevaluated thunk — exactly what `` z' `seq` foldl' f z' xs ``
+returns at every step — `ahc_eval` updates the first thunk to an
+indirection to the second **at once** and loops, instead of
+recursing on the C stack. A strict loop of any length therefore runs
+in constant C stack (before M146, `foldl'` over 3·10^7 elements
+overflowed a 1 GB stack). The chain of indirections this leaves is
+compressed on the way out: the node `ahc_eval` was handed is
+re-pointed at the final value, so forcing it again is one hop.
+
 Functions are **curried**: every function takes exactly one
 argument. `f a b` is `(f a) b` — applying `f` yields a new closure
 holding `a`, which is then applied to `b`. Simple, uniform, and
@@ -1180,7 +1190,7 @@ The v1 marshallable types, and what they become in C:
 
 | Haskell            | C              | notes                        |
 |--------------------|----------------|------------------------------|
-| `Int`              | `long`         | bignum-range values die clean |
+| `Int`              | `long`         | always a machine word (M146) |
 | `Double`           | `double`       |                              |
 | `Char`             | `long`         | the code point               |
 | `Bool`             | `int`          | 0/1                          |
@@ -1231,20 +1241,20 @@ carry the exact C width: `Int8/16/32/64`, `Word8/16/32/64`, and the
 familiar names as synonyms — `CChar=Int8`, `CInt=Int32`,
 `CUInt=Word32`, `CLong=Int64`, `CULong=CSize=Word64` (LP64
 targets). `int isalpha(int)` is honestly `CInt -> CInt`. At runtime
-they are ordinary `AHC_INT` nodes with Int's own
-`Num`/`Integral`/`Eq`/`Ord`/`Show` dictionaries — arithmetic is
-exact and promoting (AHC never wraps, unlike GHC's `CInt`); **the
-declared width is enforced only at the boundary**, where an
-out-of-range value dies (`FFI: Int32 argument out of range`) rather
-than truncating. A `Word64` coming back from C above `2^63-1` boxes
+they are ordinary `AHC_INT` nodes. Since M139 their arithmetic wraps
+at the declared width like GHC's (computed in `Integer` and narrowed,
+since M146), and **the declared width is also enforced at the
+boundary**, where an out-of-range value dies (`FFI: Int32 argument
+out of range`) rather than truncating. A `Word64` coming back from C above `2^63-1` boxes
 as a bignum; passing one back out again is the one asymmetry — the
 Haskell-to-C direction accepts `0..2^63-1` in v1.
 
-Two rules keep it honest. **Types must match the C definition**
+One rule keeps it honest: **types must match the C definition**
 under the tables above — the fixed-width types exist precisely so
-they can. **An `Int` that has silently promoted to bignum dies at
-the boundary** (`FFI: Int argument out of range`) rather than
-truncating.
+they can. (Before M146 an `Int` could silently promote to a bignum,
+and the boundary refused it with `FFI: Int argument out of range`;
+an `Int` is now always a machine word, so that check is a guard
+that Int can no longer reach.)
 
 An IO-typed import gets the world-passing shape — the wrapper packs
 its arguments and returns a `FUN` that performs the call only when
@@ -1293,8 +1303,8 @@ one caller-facing difference: an exported `String` result comes
 back as a malloc'd `char *` the C caller frees. The generated entry
 function marshals C arguments to nodes, builds the application
 spine, evaluates (or runs the IO action through the world token),
-and unboxes — a bignum-promoted `Int` result dies cleanly, exactly
-like an argument would. The exported C name must be a plain C
+and unboxes, checking a fixed-width result against its declared
+width exactly as it checks an argument. The exported C name must be a plain C
 identifier that isn't a C keyword; exporting Haskell's `double`
 without a `"c_name"` is caught in the frontend, not by clang.
 
@@ -1716,11 +1726,17 @@ With that invariant, the implementation became small:
   bits pay one branch.
 - Because `Num Int` and `Num Integer` had always shared their
   primitive functions, **no dictionary changed** — the shared prims
-  just became promoting. `Int` overflow therefore *promotes* rather
-  than wrapping. That differs from GHC (which wraps), but the Report
-  leaves overflow undefined, so both are conformant — and an exact
-  answer beats silent corruption. The conformance suite simply never
-  probes Int wraparound.
+  just became promoting. `Int` overflow therefore *promoted* rather
+  than wrapping — conformant, since the Report leaves overflow
+  undefined, but different from GHC, which wraps. **M146 reversed
+  this**: an exact answer at `Int` turned out to be the wrong answer
+  wherever a program relies on 64-bit wraparound (hashes, PRNGs,
+  `maxBound + 1`), and keeping Int and Integer in one representation
+  let bignums leak into Int-only primitives, which read garbage
+  (`[2^70 ..] :: [Integer]` printed one 11-digit number). `Int` now
+  has its own primitives that wrap modulo 2^64, `fromInteger` at `Int`
+  narrows to the low 64 bits as GHC's `integerToInt` does, and
+  `Integer` keeps the promoting ones.
 - Division is the classic hard part of bignum. AHC uses binary long
   division (shift-and-subtract) — the simplest correct algorithm,
   quadratic but fine for a teaching compiler. `div`/`mod` floor
@@ -1755,11 +1771,12 @@ Two more Double decisions: `round` is round-half-to-EVEN (`round 2.5`
 is `2`, `round 3.5` is `4`) — the Report says so, and C's `rint`
 under default rounding mode provides it; and — as of the numeric
 tower milestone — `Integral`, `Floating` and `RealFrac` are **real
-classes** with real dictionaries. `Integral` (superclasses Num and
-Ord) has instances at both `Int` and `Integer`, and here the
-canonical bignum representation (chapter 12 above) pays a dividend:
-both instances bind the *same* promoting runtime primitives, and
-`toInteger` is the identity function. `Floating` and `RealFrac`
+classes** with real dictionaries. `Integral` has instances at both
+`Int` and `Integer`, and `toInteger` is the identity function: an
+`Int` is always a valid `Integer` node. (Until M146 both instances
+bound the *same* promoting primitives, and `Integral`'s superclasses
+were Num and Ord rather than the Report's Real and Enum, so
+`Integral a` alone did not give `[1 .. n]` or `realToFrac`.) `Floating` and `RealFrac`
 have their instances at `Double`, wrapping the same C math
 primitives the old monomorphic vocabulary used — so `sqrt` didn't
 change at runtime, it changed *type*: `Floating a => a -> a`, an
@@ -2371,9 +2388,10 @@ construct and library function it can emit was pinned
 byte-identical on both compilers before entering the menu, so
 "AHC rejects a generated program" is a finding, not noise. Second,
 known-undefined territory is avoided by construction — Int
-arithmetic stays far from overflow (the Report leaves it
-undefined; AHC promotes) and no partial function is ever emitted
-(division is guarded, `maximum` gets a consed head, recursion is
+arithmetic used to stay far from overflow while AHC promoted; since
+M146 both compilers wrap, so the generator's Int literals reach the
+64-bit bounds. No partial function is ever emitted (division is
+guarded against 0 and, at Int, against -1, `maximum` gets a consed head, recursion is
 structural). Text used to be held to ASCII for the same reason;
 it now ranges over Unicode, cased letters included, because
 `Data.Char`'s tables are generated from the oracle itself
@@ -2463,8 +2481,9 @@ through the superclass Eq dictionary.
 together in v1.12 (M139). The fixed-width types had existed since the
 FFI milestone as wired names sharing `Int`'s exact, promoting
 representation, with Int's dictionaries borrowed wholesale — so
-`200 :: Int8` was 200. Now every arithmetic result is Int's result
-*narrowed* to the width by one runtime primitive (the low 64 bits
+`200 :: Int8` was 200. Now every arithmetic result is *narrowed* to
+the width (computed at Int until M146, in Integer since, when Int
+itself began to wrap) by one runtime primitive (the low 64 bits
 of an Int or bignum, masked and sign- or zero-extended), which is
 what makes them wrap like GHC's; the instances — Num, Real, Enum
 with GHC's error texts, Integral raising `ArithException Overflow`
