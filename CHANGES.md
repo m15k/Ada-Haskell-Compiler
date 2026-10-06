@@ -1,5 +1,112 @@
 # AHC Changelog
 
+## v1.17 (unreleased)
+
+**M146 - Int is a machine integer.** AHC's `Int` used to share
+`Integer`'s representation and primitives, so it never overflowed: it
+grew into a bignum. That is Report-conformant (6.4 leaves overflow
+undefined) but not GHC's behaviour, and four places printed wrong
+answers or hung where GHC succeeds:
+
+| Expression | GHC 9.4.8 | AHC v1.16 |
+|---|---|---|
+| `maxBound + 1 :: Int` | `-9223372036854775808` | `9223372036854775808` |
+| `fromInteger (2^70 + 5) :: Int` | `5` | `1180591620717411303429` |
+| ``minBound `div` (-1) :: Int`` | `arithmetic overflow` | `9223372036854775808` |
+| `[2^70 .. 2^70+2] :: [Integer]` | three 22-digit numbers | `[12884901889]` |
+| `take 3 [1..10^9 :: Int]` | instant | builds the whole list (60 s, 7.5 GB) |
+| `foldl' (+) 0 [1..3*10^7 :: Int]` | `450000015000000` | stack overflow (1 GB stack, 2.4 GB RSS) |
+
+- **Int wraps modulo 2^64.** Int has its own primitives (computed in
+  `unsigned long`), and `fromInteger` at Int narrows as GHC's
+  `integerToInt` does, so literals, `fromIntegral`, `read` and
+  `toEnum` narrow with it. ``minBound `div`/`quot` (-1)`` raises
+  `arithmetic overflow`. Integer keeps the promoting primitives.
+  The eight fixed-width types now compute in Integer and narrow,
+  because they had relied on Int being exact.
+- **Ranges are lazy** (Report 6.3.4). They are produced 128 cells per
+  forcing. Integer's enumeration is exact at any magnitude, and
+  word-sized Integer ranges share Int's generator.
+- **Strict loops run in constant C stack.** When a thunk's code
+  returns another thunk, `ahc_eval` updates it to an indirection and
+  loops instead of recursing, with path compression so that a held
+  result is never a chain. `foldl'` over 3·10^7 elements now runs on
+  an 8 MB stack in 6 MB.
+
+**Older bugs found on the way:**
+
+- `Integral`'s superclasses were `(Num, Ord)`, not the Report's
+  `(Real, Enum)`, so `[1 .. n]` and `realToFrac` at an Integral type
+  variable were rejected.
+- `truncate`/`round`/`floor`/`ceiling` of a large Double into Integer
+  saturated at minBound.
+- `gcd`/`lcm` were not the Report's.
+- `fromEnum` of a Word64 above Int's range returned a bignum instead
+  of raising GHC's error.
+
+**The adversarial review found 13 more defects after a green gate,**
+all fixed and pinned (5b1a595):
+
+- **Introduced by M146:**
+  - `toEnum` at Word64 rejected every tag: its bound literal now
+    wrapped.
+  - `Ratio Int` overflowed at its bounds.
+  - The new evaluator left indirection chains: re-forcing a held
+    result was 88× slower.
+- **Older:**
+  - `pi` and `recip` at Double were garbage whenever `Data.Ratio` was
+    imported (since about M82).
+  - The own collector could sweep live data when it recycled a slot
+    that still carried its mark bit (about 1 run in 40 under stress).
+  - User `Enum` and `Fractional` instances lacked their class defaults
+    (`$mMISSING`).
+  - `show ()` did not force its argument.
+  - A derived `Ix` `index` did not check its bounds.
+  - Fatal reports printed ahead of earlier stdout.
+
+The final bench then caught one more: the review's exit-only
+compression kept the chain alive (123 MB). Fixed in 5b198fc.
+
+**Bench against v1.16** (release builds, interleaved best of 5):
+
+| Benchmark | Change |
+|---|---|
+| `b_strictfold` | −52% |
+| `b_parsort` | −20% |
+| `b_sort` | −7% |
+| `b_fib` | −6% |
+| `b_map`, `b_parfib`, `b_strings` | −4% |
+| `b_text` | −3% |
+| `b_parmap` | +7% |
+| `b_sumfold` | +11% (median of 10) |
+
+Both slowdowns are deliberate trade-offs for correctness:
+
+- `b_parmap` retires about 5% more instructions from Phase A on.
+  `even`/`odd` reach `==` through the Report's Integral → Real → Ord →
+  Eq superclass chain, one hop longer than AHC's old shortcut.
+- `b_sumfold` is a lazy `foldl` over an Int range that is now
+  genuinely lazy. It retires fewer instructions in 11% less memory,
+  but its wall time is higher.
+
+Both should go away with method resolution at known instances, in the
+performance milestone.
+
+Known, documented:
+
+- `Int mod N` products wrap at 2^64 before normalization (moduli above
+  2^32).
+- `mapM_` costs about 7 s and 380 MB per 10^6 elements, unchanged
+  since v1.16.
+- A two-thread indirection cycle under `par`, in a program that
+  genuinely loops, may spin rather than report `<<loop>>` (reasoned,
+  not reproduced).
+
+Gate: full suites in both GC modes on the release build, goldens on
+both builds, both differential suites, repl, examples, bindgen,
+separate, export, userlib, TSan, own soak with `AHC_OWN_VERIFY=1`,
+fuzz 300/300 with Int literals at the 64-bit bounds.
+
 ## v1.16 (2026-10-04)
 
 **M142 - the library round.** Hackage-style modules are the first
