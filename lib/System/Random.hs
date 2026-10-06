@@ -20,8 +20,8 @@ module System.Random
 -- where random draws 32 bits, a genWord64 where it draws 64).
 --
 -- Representation notes (values identical to GHC's):
---   * AHC's Int promotes on overflow instead of wrapping, so every
---     Int result is computed at Int64 (which wraps, and whose random
+--   * Every Int result is computed at Int64 (written before M146, when
+--     AHC's Int promoted on overflow; Int64 wraps, and its random
 --     algorithms are random's Int algorithms verbatim: both draw a
 --     genWord64 and reject through a 64-bit mask) and then narrowed.
 --   * `Word` is AHC's synonym for Word64, so the Word64 instances

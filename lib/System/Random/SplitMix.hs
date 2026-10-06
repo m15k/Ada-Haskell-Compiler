@@ -68,8 +68,8 @@ nextTwoWord32 g = (fromIntegral (w64 `shiftR` 32), fromIntegral w64, g')
     (w64, g') = nextWord64 g
 
 -- nextInt: fromIntegral w64 at a 64-bit Int, i.e. the two's-complement
--- reinterpretation (AHC's Int promotes rather than wraps, so the cast
--- goes through Int64, which wraps like GHC's Int).
+-- reinterpretation. The cast goes through Int64, from when AHC's Int
+-- promoted rather than wrapped (before M146); both wrap now.
 nextInt :: SMGen -> (Int, SMGen)
 nextInt g = case nextWord64 g of
     (w64, g') -> (fromIntegral (fromIntegral w64 :: Int64), g')

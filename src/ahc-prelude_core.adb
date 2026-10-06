@@ -609,9 +609,17 @@ package body AHC.Prelude_Core is
             B : constant Real_Var_Id := Fresh ("b");
             I : constant Real_Var_Id := Fresh ("i");
          begin
+            --  index checks inRange first, as GHC's derived Ix does
+            --  (M146 review: `index (A, B) D` returned 2).
             Ms.Append (Lam (P, Lam (I, Pair_Case (P, A, B,
-              Ap2 (V (P_Sub), From_E (TC, I),
-                   From_E (TC, A))))));
+              Bool_Case
+                (Ap2 (V (P_GtI), From_E (TC, A), From_E (TC, I)),
+                 Err ("Error in array index"),
+                 Bool_Case
+                   (Ap2 (V (P_GtI), From_E (TC, I), From_E (TC, B)),
+                    Err ("Error in array index"),
+                    Ap2 (V (P_Sub), From_E (TC, I),
+                         From_E (TC, A))))))));
          end;
          declare
             P : constant Real_Var_Id := Fresh ("p");
@@ -1750,8 +1758,11 @@ package body AHC.Prelude_Core is
               M.Info (Real_Instance_Id (II));
             Cl_Id : constant Class_Id := Inst.Of_Class;
 
-            --  Fixed-width C types share Int's runtime nodes, so
-            --  their Num/Integral/Show dictionaries reuse Int's.
+            --  Fixed-width C types share Int's runtime nodes, so their
+            --  wired Eq/Ord/Show dictionaries reuse Int's. Num and
+            --  Integral are Prelude source instances (an Integer
+            --  carrier since M146), so the Is_Fix arms below that
+            --  build them are never reached for these types.
             function Is_Fix (T : TyCon_Id) return Boolean
             is (for some K in Builtins.C_Fix_Kind =>
                   Env.CFix_TCs (K) = T);
@@ -1874,12 +1885,18 @@ package body AHC.Prelude_Core is
                     and then (Inst.Head = Env.Double_TC
                               or else Inst.Head = Env.Float_TC)
                   then
-                     Ms.Append (M.Add (Expr_Node'
+                     --  A float literal is an exact rational pair at
+                     --  run time once Data.Ratio is loaded (codegen's
+                     --  Ratio_Tag), so a wired Double constant goes
+                     --  through fromRational like a source literal:
+                     --  `pi` and `recip` read a ratio node as a
+                     --  double before M146's review.
+                     Ms.Append (Ap (V (P_FromRatD), M.Add (Expr_Node'
                        (Kind => Lit_C, Span => Span,
                         Lit => (Kind => L_Float,
                                 Text => Names.Name_Id
                                   (Table.Intern
-                                     ("3.141592653589793"))))));
+                                     ("3.141592653589793")))))));
                      Ms.Append (V (P_ExpD));
                      Ms.Append (V (P_LogD));
                      Ms.Append (V (P_SqrtD));
@@ -1945,7 +1962,9 @@ package body AHC.Prelude_Core is
                      begin
                         Ms.Append (V (P_DivD));
                         Ms.Append
-                          (Lam (X, Ap2 (V (P_DivD), One, V (X))));
+                          (Lam (X, Ap2 (V (P_DivD),
+                                        Ap (V (P_FromRatD), One),
+                                        V (X))));
                         --  Exact rational pair (or a legacy double
                         --  node) -> one correctly rounded Double.
                         Ms.Append (V (P_FromRatD));
@@ -2028,7 +2047,12 @@ package body AHC.Prelude_Core is
                            function Show_U return Real_Expr_Id is
                               U : constant Real_Var_Id := Fresh ("u");
                            begin
-                              return Lam (U, Str ("()"));
+                              --  seq: show of () forces its argument,
+                              --  as GHC's pattern match on () does
+                              --  (M146 review: `print (undefined ::
+                              --  ())` printed "()").
+                              return Lam (U, Ap2 (V (P_Seq), V (U),
+                                                  Str ("()")));
                            end Show_U;
                         begin
                            Ms.Append (Show_U);

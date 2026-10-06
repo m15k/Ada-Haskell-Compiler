@@ -801,6 +801,41 @@ package body AHC.Elaborate is
                                  when others =>
                                     return No_Expr;
                               end case;
+                           elsif (Inst.Of_Class = Env.Enum_Cl
+                                  and then MI in 1 | 2 | 5 .. 8)
+                             or else (Inst.Of_Class = Env.Fractional_Cl
+                                      and then MI in 1 .. 2)
+                           then
+                              --  The Report's Enum and Fractional class
+                              --  defaults (Prelude's enumSuccDefault_
+                              --  ...), applied to this dictionary - a
+                              --  user instance with only toEnum and
+                              --  fromEnum was $mMISSING (M146 review).
+                              declare
+                                 F : constant Expr_Id :=
+                                   Global_Named
+                                     ((if Inst.Of_Class = Env.Fractional_Cl
+                                       then (if MI = 1
+                                             then "fracDivDefault_"
+                                             else "fracRecipDefault_")
+                                       else
+                                         (case MI is
+                                            when 1 => "enumSuccDefault_",
+                                            when 2 => "enumPredDefault_",
+                                            when 5 => "enumFromDefault_",
+                                            when 6 =>
+                                              "enumFromThenDefault_",
+                                            when 7 =>
+                                              "enumFromToDefault_",
+                                            when others =>
+                                              "enumFromThenToDefault_")));
+                              begin
+                                 if F = No_Expr then
+                                    return No_Expr;
+                                 end if;
+                                 return Expr_Id
+                                   (Ap2E (Real_Expr_Id (F), V2 (Self_D)));
+                              end;
                            elsif Inst.Of_Class = Env.Floating_Cl
                              and then MI in 16 .. 18
                            then

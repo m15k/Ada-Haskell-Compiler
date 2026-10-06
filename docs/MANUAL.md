@@ -2095,7 +2095,12 @@ arithmetic cannot be a check — under erasure, `+` is plain Int `+`,
 so the only place wrapping can happen is the boundary. So a modular
 refinement is a **coercion**: values crossing an `Int mod 12`
 boundary are *normalized* into `[0, 12)` (mathematical mod, never
-negative — `(25 :: Clock)` is `1`).
+negative — `(25 :: Clock)` is `1`). Because the arithmetic inside is
+plain Int arithmetic, and Int wraps modulo 2^64 (M146, as GHC's), a
+modulus above 2^32 can see a product wrap before it is normalized:
+`999999999999 * 999999999999` in `Int mod 10^12` is `205206896641`,
+not Ada's exact `1`. Moduli up to 2^32 are exact for `+`, `-` and
+`*`.
 
 The distinction has a visible consequence: `--unchecked` (the
 release-mode flag, mirroring Ada's suppressed-checks policy) strips

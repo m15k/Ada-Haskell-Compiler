@@ -11,14 +11,19 @@ data Ratio a = a :% a
 
 type Rational = Ratio Integer
 
+--  Transcribed from GHC.Real (M146 review): (%) moves the sign onto
+--  the numerator FIRST and reduce divides with quot by the gcd. The
+--  earlier div-by-(gcd * signum d) form agreed for Integer but, with
+--  Int now wrapping, divided minBound by -1 (an Overflow) where
+--  GHC's `3 % (minBound :: Int)` is (-3) % (-9223372036854775808).
 reduceR :: Integral a => a -> a -> Ratio a
 reduceR _ 0 = error "Ratio has zero denominator"
-reduceR n d = div n g :% div d g
+reduceR x y = quot x d :% quot y d
   where
-    g = gcd n d * signum d
+    d = gcd x y
 
 (%) :: Integral a => a -> a -> Ratio a
-(%) n d = reduceR n d
+(%) x y = reduceR (x * signum y) (abs y)
 
 numerator :: Ratio a -> a
 numerator (n :% _) = n
@@ -48,6 +53,9 @@ instance Integral a => Num (Ratio a) where
   fromInteger n = fromInteger n :% 1
 
 instance Integral a => Fractional (Ratio a) where
-  (a :% b) / (c :% d) = reduceR (a * d) (b * c)
-  recip (a :% b) = reduceR b a
+  (a :% b) / (c :% d) = (a * d) % (b * c)
+  recip (a :% b)
+    | a == 0 = error "Ratio has zero denominator"
+    | a < 0 = negate b :% negate a
+    | otherwise = b :% a
   fromRational (n :% d) = fromInteger n % fromInteger d

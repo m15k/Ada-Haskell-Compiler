@@ -1,8 +1,9 @@
 -- Strict loops run in constant C stack (M146): each step's result is
 -- a thunk returned by `seq`, and the evaluator now updates and loops
 -- instead of recursing. strict_loop_stack.env runs this on a 1 MB
--- main stack; before M146 each of these overflowed it within ~20k
--- elements (and a 1 GB stack at 3*10^7).
+-- main stack; before M146 the foldl' and the seq loop overflowed it
+-- within ~20k elements (and a 1 GB stack at 3*10^7). mapM_ was
+-- already constant-stack and pins that it stays so.
 import Data.List (foldl')
 
 loop :: Int -> Int -> Int

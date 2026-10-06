@@ -1833,7 +1833,7 @@ instance Real Word64 where
 
 instance Enum Word64 where
   toEnum i =
-    if i < 0 || i > 18446744073709551615
+    if i < 0
       then error ("Enum.toEnum{Word64}: tag (" ++ show i
                   ++ ") is outside of bounds (0,18446744073709551615)")
       else narrowWord64_ (toInteger i)
@@ -1932,6 +1932,36 @@ errorWithoutStackTrace s = error s
 -- class); at Double/Float they are libm's. A user instance that omits
 -- them gets these formulas (GHC has no default there: the instance is
 -- merely incomplete) through AHC.Elaborate's built-in defaults.
+-- Report 6.3.4 / 6.4 class defaults for Enum and Fractional, applied
+-- to the instance's own dictionary by AHC.Elaborate's Builtin_Default
+-- when a user instance omits the method (M146 review: an Enum
+-- instance with only toEnum/fromEnum compiled succ and [a ..] to
+-- $mMISSING - and Integral now requires Enum).
+enumSuccDefault_ :: Enum a => a -> a
+enumSuccDefault_ x = toEnum (fromEnum x + 1)
+
+enumPredDefault_ :: Enum a => a -> a
+enumPredDefault_ x = toEnum (fromEnum x - 1)
+
+enumFromDefault_ :: Enum a => a -> [a]
+enumFromDefault_ x = map toEnum [fromEnum x ..]
+
+enumFromThenDefault_ :: Enum a => a -> a -> [a]
+enumFromThenDefault_ x y = map toEnum [fromEnum x, fromEnum y ..]
+
+enumFromToDefault_ :: Enum a => a -> a -> [a]
+enumFromToDefault_ x y = map toEnum [fromEnum x .. fromEnum y]
+
+enumFromThenToDefault_ :: Enum a => a -> a -> a -> [a]
+enumFromThenToDefault_ x y z =
+  map toEnum [fromEnum x, fromEnum y .. fromEnum z]
+
+fracDivDefault_ :: Fractional a => a -> a -> a
+fracDivDefault_ x y = x * recip y
+
+fracRecipDefault_ :: Fractional a => a -> a
+fracRecipDefault_ x = 1 / x
+
 asinhDefault_ :: Floating a => a -> a
 asinhDefault_ x = log (x + sqrt (x * x + 1.0))
 

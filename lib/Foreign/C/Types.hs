@@ -3,5 +3,6 @@ module Foreign.C.Types
   ) where
 
 -- Synonyms of the wired fixed-width types (LP64 widths), where GHC has
--- newtypes: AHC's CInt IS Int32, arithmetic promotes rather than wraps,
--- and the width is enforced at the foreign boundary only.
+-- newtypes: AHC's CInt IS Int32, so arithmetic wraps at the type's
+-- width as GHC's does, and the width is also enforced at the foreign
+-- boundary.

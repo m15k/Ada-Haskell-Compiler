@@ -519,6 +519,10 @@ void ahc_callback_landing(void) {
 
 void ahc_die(const char *msg) {
   die_unwind_if_armed(msg);
+  /* Output the program already produced comes first, as GHC's top
+     handler flushes stdout before reporting (M146 review: <<loop>>
+     printed ahead of earlier stdout). */
+  fflush(stdout);
   fputs("ahc: ", stderr);
   fputs(msg, stderr);
   fputc('\n', stderr);
@@ -700,7 +704,9 @@ static void own_write_barrier(void *o) {
   lim = (char *)__atomic_load_n(&own_commit, __ATOMIC_RELAXED);
   if ((char *)o < own_base || (char *)o >= lim) return;
   i = (size_t)((char *)o - own_base) >> 3;
-  if (own_marks[i >> 3] & (unsigned char)(1u << (i & 7)))
+  /* atomic: allocators now clear neighbouring bits concurrently */
+  if (__atomic_load_n(&own_marks[i >> 3], __ATOMIC_RELAXED)
+      & (unsigned char)(1u << (i & 7)))
     own_remember(o);
 }
 
@@ -825,6 +831,18 @@ static void *own_adopt_partial(int kind, size_t cls) {
   return own_free_tls[kind][cls];
 }
 
+/* A recycled slot can still carry its mark bit: a stale conservative
+   word may have marked a free slot of a block the minor sweep then
+   skipped. Allocated that way, the object is born "old" and its young
+   children are passed over by the next minor - live data swept (M146
+   review, the M114/M115 bug class). Clear it on reuse; atomic because
+   neighbouring slots share the byte with other allocating workers. */
+static void own_clear_mark(void *o) {
+  size_t i = (size_t)((char *)o - own_base) >> 3;
+  __atomic_fetch_and(&own_marks[i >> 3],
+                     (unsigned char)~(1u << (i & 7)), __ATOMIC_RELAXED);
+}
+
 static void *own_alloc(int kind, size_t n) {
   size_t cls;
   OwnBlock *b;
@@ -839,6 +857,7 @@ static void *own_alloc(int kind, size_t n) {
   if (p) {
     own_free_tls[kind][cls] = *(void **)p;
     memset(p, 0, n);
+    own_clear_mark(p);
     return p;
   }
   b = own_active[kind][cls];
@@ -846,6 +865,7 @@ static void *own_alloc(int kind, size_t n) {
     if ((p = own_adopt_partial(kind, cls)) != NULL) {
       own_free_tls[kind][cls] = *(void **)p;
       memset(p, 0, n);
+      own_clear_mark(p);
       return p;
     }
     b = own_get_block((uint32_t)kind, (uint32_t)n);
@@ -1055,6 +1075,7 @@ void ahc_spin_report_gc(int nw);
 static void ahc_spin_report(AhcNode *n, void *owner, AhcTask *self);
 
 AhcNode *ahc_eval(AhcNode *n) {
+  AhcNode *const n0 = n;       /* compressed onto the value on exit */
   unsigned long spins = 0;
   double spin_t0 = 0.0;        /* watchdog stamp, set on first spin */
   /* cur_task is thread-local, and a TLS read is not free (on Darwin
@@ -1084,6 +1105,8 @@ AhcNode *ahc_eval(AhcNode *n) {
       __atomic_store_n(&n->u.bh.owner, self, __ATOMIC_RELAXED);
       n->u.bh.waiters = NULL;
       __atomic_store_n(&n->tag, AHC_BLACKHOLE, __ATOMIC_RELEASE);
+      spins = 0;                 /* the watchdog times each wait, not */
+      spin_t0 = 0.0;             /* the whole trampoline (M146 review) */
       {
         AhcEvalFrame ef;
         AhcNode *v;
@@ -1185,6 +1208,20 @@ AhcNode *ahc_eval(AhcNode *n) {
       break;
     }
     default:
+      /* Path compression (M146 review): the trampoline leaves
+         n0 -> t1 -> ... -> value as a chain of INDs, and every later
+         force of n0 walked it - 10^6 hops per force of a held foldl'
+         result. n0 is already an IND into this same chain, so
+         re-pointing it at the value changes no meaning; a racing
+         compressor stores the same value. */
+      if (n0 != n
+          && __atomic_load_n(&n0->tag, __ATOMIC_ACQUIRE) == AHC_IND
+          && __atomic_load_n(&n0->u.ind, __ATOMIC_ACQUIRE) != n) {
+        __atomic_store_n(&n0->u.ind, n, __ATOMIC_RELEASE);
+#ifdef AHC_GC_OWN
+        own_write_barrier(n0);
+#endif
+      }
       return n;
     }
   }
