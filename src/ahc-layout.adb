@@ -194,12 +194,20 @@ package body AHC.Layout is
                      end if;
                      Enqueue (S, T);
 
-                  when Kw_Let | Kw_Where | Kw_Do | Kw_Of =>
+                  when Kw_Let | Kw_Where | Kw_Do | Kw_Of | Kw_Case =>
                      Enqueue (S, T);
-                     --  Input always ends with End_Of_File, so I+1 is
-                     --  safe: {n} unless an explicit brace follows.
-                     S.Await_Open :=
-                       S.Input (S.I + 1).Kind /= Left_Brace;
+                     --  `case` opens a block only as `\case`
+                     --  (LambdaCase, M147); a plain `case e of` opens
+                     --  its block at `of`. Input always ends with
+                     --  End_Of_File, so I+1 is safe: {n} unless an
+                     --  explicit brace follows.
+                     if T.Kind /= Kw_Case
+                       or else (S.I > 1
+                                and then S.Input (S.I - 1).Kind = Backslash)
+                     then
+                        S.Await_Open :=
+                          S.Input (S.I + 1).Kind /= Left_Brace;
+                     end if;
 
                   when others =>
                      Enqueue (S, T);

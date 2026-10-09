@@ -32,6 +32,12 @@ package body AHC.Parser is
       Nil_Name   : constant Names.Real_Name_Id := Table.Intern ("[]");
       Arrow_Name : constant Names.Real_Name_Id := Table.Intern ("(->)");
       Colon_Name : constant Names.Real_Name_Id := Table.Intern (":");
+      --  The binder of `\case` (LambdaCase, M147): `\case alts` parses
+      --  as `\lc$ -> case lc$ of alts`. No source program can spell
+      --  `lc$`, so it can neither capture nor be captured; an inner
+      --  `\case` shadows an outer one harmlessly, since nothing but
+      --  the generated scrutinee ever names it.
+      LC_Name : constant Names.Real_Name_Id := Table.Intern ("lc$");
 
       ------------------------------------------------------------------
       --  Token plumbing
@@ -870,6 +876,34 @@ package body AHC.Parser is
          case Tok.Kind is
             when Backslash =>
                Advance;
+               if Tok.Kind = Kw_Case then
+                  Advance;
+                  declare
+                     Alts  : Alt_Id_Vectors.Vector;
+                     Pats  : Pat_Id_Vectors.Vector;
+                     Scrut : Real_Expr_Id;
+                  begin
+                     Parse_Alt_Block (Alts);
+                     if Alts.Is_Empty then
+                        Fail ("empty \case block");
+                     end if;
+                     Pats.Append (Arena.Add
+                       (Pat_Node'(Kind => Var_P, Span => Span,
+                                  Var => Names.Name_Id (LC_Name))));
+                     Scrut := Arena.Add
+                       (Expr_Node'(Kind => Var_E, Span => Span,
+                                   Name => (Name => Names.Name_Id (LC_Name),
+                                            Qualifier => Names.No_Name)));
+                     return Arena.Add
+                       (Expr_Node'(Kind => Lambda_E, Span => Span,
+                                   L_Pats => Pats,
+                                   L_Body => Arena.Add
+                                     (Expr_Node'(Kind => Case_E,
+                                                 Span => Span,
+                                                 Scrutinee => Scrut,
+                                                 Alts => Alts))));
+                  end;
+               end if;
                declare
                   Pats : Pat_Id_Vectors.Vector;
                begin
