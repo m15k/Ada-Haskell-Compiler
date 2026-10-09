@@ -12,7 +12,7 @@ package body AHC.Elaborate is
    --  default -- `instance MonadPlus Maybe` with no where-block).
    function Needs_Dict (M : Core.Core_Module; I : Instance_Info)
      return Boolean
-   is (I.From_Source
+   is ((I.From_Source or else I.Is_GND)
        and then I.Dict_Global in 1 .. M.Last_Var);
 
    function All_Dictionaries_Built (M : Core.Core_Module) return Boolean
@@ -300,7 +300,46 @@ package body AHC.Elaborate is
             if Natural (II) <= Inst_Origins.Last_Index then
                Bag.Set_Origin (Inst_Origins (Natural (II)));
             end if;
-            if Needs_Dict (M, Inst) then
+            if Needs_Dict (M, Inst) and then Inst.Is_GND then
+               --  GeneralizedNewtypeDeriving (M147): with newtypes
+               --  erased, the dictionary IS the representation's -
+               --  \ctx... -> evidence for C GND_Target under the
+               --  instance's context. No methods, no knot.
+               declare
+                  Span : constant Diagnostics.Source_Span := Inst.Span;
+                  Givens : Given_Vectors.Vector;
+                  Params : Var_Id_Vectors.Vector;
+                  Dict : Real_Expr_Id;
+                  G : Top_Bind;
+               begin
+                  for CI in 1 .. Inst.Context.Last_Index loop
+                     declare
+                        D : constant Real_Var_Id := M.Mint_Var
+                          ((Name => Table.Intern ("$d"),
+                            Span => Span, others => <>));
+                     begin
+                        Params.Append (D);
+                        Givens.Append
+                          (Given_Ev'(C => Inst.Context (CI), D => D));
+                     end;
+                  end loop;
+                  Dict := Solve_Ev
+                    (Constraint'(Class => Inst.Of_Class,
+                                 Arg => Real_Type_Id (Inst.GND_Target),
+                                 Span => Span),
+                     Givens, Span, 0);
+                  for PI in reverse 1 .. Params.Last_Index loop
+                     Dict := M.Add (Expr_Node'
+                       (Kind => Lam_C, Span => Span,
+                        Binder => Params (PI), Lam_Body => Dict));
+                  end loop;
+                  G.Is_Rec := False;
+                  G.Binds.Append
+                    (Bind_Pair'(Binder => Real_Var_Id (Inst.Dict_Global),
+                                Rhs => Dict));
+                  M.Top_Binds.Append (G);
+               end;
+            elsif Needs_Dict (M, Inst) then
                declare
                   Cl : constant Real_Class_Id :=
                     Real_Class_Id (Inst.Of_Class);

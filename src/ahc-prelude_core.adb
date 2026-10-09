@@ -1773,6 +1773,10 @@ package body AHC.Prelude_Core is
             if Inst.Method_Binds.Is_Empty
               and then Inst.Dict_Global /= No_Var
               and then not Inst.From_Source
+              --  A GND instance's dictionary is its representation's,
+              --  bound by AHC.Elaborate (M147); the class-name
+              --  dispatch below must never see one.
+              and then not Inst.Is_GND
             then
                declare
                   Cl : constant Real_Class_Id := Real_Class_Id (Cl_Id);

@@ -1610,6 +1610,40 @@ package body AHC.Rename is
                  Mod_Find_Class (DC, N.Span, Amb);
             begin
                if C /= Core.No_Class
+                 and then Is_NT
+                 and then not (Stock_Derivable (C, DC.Name)
+                               and then Text (DC.Name) in "Show" | "Read")
+               then
+                  --  GeneralizedNewtypeDeriving (M147): a newtype
+                  --  derives every class but Show/Read through its
+                  --  representation's instance. Head_Vars, Context and
+                  --  GND_Target are the typechecker's (Resolve_GND),
+                  --  which also rejects a representation without the
+                  --  instance.
+                  declare
+                     Dict : constant Core.Real_Var_Id := M.Mint_Var
+                       ((Name => Table.Intern
+                           ("$d" & Text (DC.Name) & Text (N.D_Name)),
+                         Span => N.Span, Is_Global => True,
+                         others => <>));
+                     Ignore : Core.Real_Instance_Id;
+                  begin
+                     Ignore := M.Mint_Instance
+                       ((Of_Class => C,
+                         Head => Core.TyCon_Id (TC),
+                         Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
+                         Head_Type => Core.No_Type,
+                         Is_GND => True,
+                         GND_Target => Core.No_Type,
+                         Context => Core.Constraint_Vectors.Empty_Vector,
+                         Dict_Global => Core.Var_Id (Dict),
+                         From_Source => False,
+                         Method_Binds => Core.Bind_Vectors.Empty_Vector,
+                         Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
+                         Span => N.Span));
+                     pragma Unreferenced (Ignore);
+                  end;
+               elsif C /= Core.No_Class
                  and then not Stock_Derivable (C, DC.Name)
                then
                   --  Report 4.3.3: only the standard classes derive.

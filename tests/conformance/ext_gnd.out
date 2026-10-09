@@ -1,0 +1,6 @@
+(Age 7,Age 3,[Age 1,Age 2,Age 3],Age 9223372036854775807)
+(Age 7,9,Age 6,3)
+(Score 3.0,Score 0.25,True)
+(W (Just 2),True)
+(Box [1,2,3],Box [],Box ["True"])
+(Counter (Right 2),Counter (Left "too big"))

@@ -1794,7 +1794,162 @@ package body AHC.Typechecker is
          end case;
       end Build_Ev;
 
+      --  GeneralizedNewtypeDeriving (M147). For newtype T v1..vn = K R
+      --  deriving C: a kind-* class gets head T v1..vn and target R;
+      --  a constructor class eta-reduces - R must be R' vn with vn not
+      --  free in R', the head is T v1..vn-1 and the target R'. The
+      --  target's own instance (matched one way, its type variables
+      --  rigid) supplies the context; a bare type variable target
+      --  needs C v. With newtypes erased, AHC.Elaborate then binds the
+      --  dictionary to the target's.
+      procedure Resolve_GND (II : Real_Instance_Id; Depth : Natural);
+
+      procedure Resolve_GND_Now (II : Real_Instance_Id; Depth : Natural) is
+         Inst : constant Instance_Info := M.Info (II);
+         Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
+         TC : constant Real_TyCon_Id := Real_TyCon_Id (Inst.Head);
+         TCI : constant TyCon_Info := M.Info (TC);
+         DCI : constant DataCon_Info := M.Info (TCI.Cons (1));
+         Sch : constant Scheme := M.Node (Real_Scheme_Id (DCI.Con_Scheme));
+         R : constant Real_Type_Id :=
+           M.Node (Real_Type_Id (Sch.S_Body)).From;
+         Ctor_Class : constant Boolean :=
+           M.Node (Real_Kind_Id (M.Info (Cl).Var_Kind)).Kind = KFun_K;
+         Vars : TyVar_Id_Vectors.Vector := Sch.Tvs;
+         Target : Real_Type_Id := R;
+         Head_T : Real_Type_Id := TCon (Core.TyCon_Id (TC));
+         Ctx : Constraint_Vectors.Vector;
+
+         function Name return String is
+           (Table.Text (M.Info (Cl).Name) & "' for '"
+            & Table.Text (Names.Real_Name_Id (TCI.Name)));
+
+         function Occurs (V : Real_TyVar_Id; T : Real_Type_Id)
+           return Boolean
+         is
+            N : constant Type_Node := M.Node (T);
+         begin
+            case N.Kind is
+               when TVar_T => return N.Tv = V;
+               when TApp_T => return Occurs (V, N.T_Fun)
+                                or else Occurs (V, N.T_Arg);
+               when TFun_T => return Occurs (V, N.From)
+                                or else Occurs (V, N.To);
+               when others => return False;
+            end case;
+         end Occurs;
+      begin
+         if Ctor_Class then
+            declare
+               TN : constant Type_Node := M.Node (R);
+            begin
+               if Vars.Is_Empty
+                 or else TN.Kind /= TApp_T
+                 or else M.Node (TN.T_Arg).Kind /= TVar_T
+                 or else M.Node (TN.T_Arg).Tv /= Vars.Last_Element
+                 or else Occurs (Vars.Last_Element, TN.T_Fun)
+               then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Class_Gnd,
+                           Inst.Span,
+                           "cannot derive '" & Name & "': its "
+                           & "representation does not end in its last "
+                           & "type variable");
+                  return;
+               end if;
+               Target := TN.T_Fun;
+               Vars.Delete_Last;
+            end;
+         end if;
+         for V of Vars loop
+            Head_T := Make_App (Head_T, M.Add (Type_Node'
+              (Kind => TVar_T, Tv => V)));
+         end loop;
+
+         if M.Node (Target).Kind = TVar_T then
+            Ctx.Append (Constraint'(Class => Cl, Arg => Target,
+                                    Span => Inst.Span));
+         else
+            declare
+               Hits : Natural := 0;
+               Hit : Real_Instance_Id := II;
+               Hit_Args : Type_Id_Vectors.Vector;
+            begin
+               for J of M.Info (Cl).Instances loop
+                  if J /= II then
+                     Resolve_GND (J, Depth + 1);
+                     declare
+                        A : Type_Id_Vectors.Vector;
+                     begin
+                        if Inst_Match."=" (Match_TC (M, Env, M.Info (J), Target, A),
+                                           Inst_Match.Matched)
+                        then
+                           Hits := Hits + 1;
+                           Hit := J;
+                           Hit_Args := A;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+               if Hits /= 1 then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Class_Gnd,
+                           Inst.Span,
+                           "cannot derive '" & Name & "': "
+                           & (if Hits = 0 then "no instance '"
+                              else "overlapping instances for '")
+                           & Table.Text (M.Info (Cl).Name) & " "
+                           & (if M.Node (Target).Kind in TApp_T | TFun_T
+                              then "(" & Type_Str (Target) & ")"
+                              else Type_Str (Target))
+                           & "'");
+                  return;
+               end if;
+               declare
+                  HI : constant Instance_Info := M.Info (Hit);
+                  Map : TyVar_Type_Maps.Map;
+               begin
+                  for VI in 1 .. HI.Head_Vars.Last_Index loop
+                     if VI <= Hit_Args.Last_Index then
+                        Map.Include (HI.Head_Vars (VI),
+                                     Hit_Args.Element (VI));
+                     end if;
+                  end loop;
+                  for IC of HI.Context loop
+                     Ctx.Append (Constraint'
+                       (Class => IC.Class,
+                        Arg => Subst_TyVars (IC.Arg, Map),
+                        Span => Inst.Span));
+                  end loop;
+               end;
+            end;
+         end if;
+
+         M.Instances (II).Head_Type := Head_T;
+         M.Instances (II).Head_Vars := Vars;
+         M.Instances (II).Context := Ctx;
+         M.Instances (II).GND_Target := Target;
+      end Resolve_GND_Now;
+
+      procedure Resolve_GND (II : Real_Instance_Id; Depth : Natural) is
+         Inst : constant Instance_Info := M.Info (II);
+      begin
+         --  Only an unresolved GND instance of a real newtype; the
+         --  declarations of Resolve_GND_Now read its constructor.
+         if Inst.Is_GND and then Inst.GND_Target = No_Type
+           and then Depth <= 20
+           and then Inst.Head /= No_TyCon
+           and then not M.Info (Real_TyCon_Id (Inst.Head)).Cons.Is_Empty
+         then
+            Resolve_GND_Now (II, Depth);
+         end if;
+      end Resolve_GND;
+
    begin
+      --  Before any constraint is solved: GND instances get their heads
+      --  and contexts (M147).
+      for II in 1 .. M.Last_Instance loop
+         Resolve_GND (Real_Instance_Id (II), 0);
+      end loop;
+
       for GI in 1 .. M.Top_Binds.Last_Index loop
          for B of M.Top_Binds (GI).Binds loop
             Binder_Group.Include (B.Binder, GI);
@@ -1847,7 +2002,7 @@ package body AHC.Typechecker is
             Inst : constant Instance_Info :=
               M.Info (Real_Instance_Id (II));
          begin
-            if Inst.From_Source
+            if (Inst.From_Source or else Inst.Is_GND)
               and then Inst.Of_Class /= No_Class
               and then (Inst.Head /= No_TyCon
                         or else Inst.Head_Type /= No_Type)
