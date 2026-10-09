@@ -1,8 +1,11 @@
+with AHC.Inst_Match;
+
 package body AHC.Kinds is
 
    use AHC.Syntax;
    use type Core.TyCon_Id;
    use type Core.Class_Id;
+   use type Core.Instance_Id;
    use type Core.Kind_Id;
    use type Core.Type_Id;
    use type Core.Scheme_Id;
@@ -1180,8 +1183,58 @@ package body AHC.Kinds is
                  Res.Decl_Inst.Element (Positive (D));
             begin
                if Core."/=" (I, 0) then
-                  M.Instances (Core.Real_Instance_Id (I)).Head_Vars := Order;
-                  M.Instances (Core.Real_Instance_Id (I)).Context := Ctx;
+                  declare
+                     II : constant Core.Real_Instance_Id :=
+                       Core.Real_Instance_Id (I);
+                     RT : constant Core.Real_Type_Id :=
+                       Core.Real_Type_Id (R);
+
+                     --  The spine TyCon of the head, or No_TyCon for a
+                     --  bare-variable head (M147).
+                     function Spine (T : Core.Real_Type_Id)
+                       return Core.TyCon_Id
+                     is
+                        TN : constant Core.Type_Node := M.Node (T);
+                     begin
+                        case TN.Kind is
+                           when Core.TCon_T =>
+                              return Core.TyCon_Id (TN.Con);
+                           when Core.TApp_T =>
+                              return Spine (TN.T_Fun);
+                           when Core.TFun_T =>
+                              return Env.Arrow_TC;
+                           when others =>
+                              return Core.No_TyCon;
+                        end case;
+                     end Spine;
+                  begin
+                     M.Instances (II).Head_Vars := Order;
+                     M.Instances (II).Context := Ctx;
+                     --  The full head, synonyms expanded (M147,
+                     --  FlexibleInstances/TypeSynonymInstances).
+                     M.Instances (II).Head_Type := R;
+                     M.Instances (II).Head := Spine (RT);
+                     --  A duplicate is an earlier instance of this class
+                     --  whose head is equal up to renaming; overlap
+                     --  alone is legal, as in GHC.
+                     for J of M.Info (Core.Real_Class_Id (Cl_Id)).Instances
+                     loop
+                        exit when J = II;
+                        declare
+                           JI : constant Core.Instance_Info := M.Info (J);
+                        begin
+                           if (JI.Head_Type /= Core.No_Type
+                               or else JI.Head /= Core.No_TyCon)
+                             and then Inst_Match.Heads_Equal
+                               (M, RT, Inst_Match.Instance_Type (M, Env, JI))
+                           then
+                              Bag.Add (Diagnostics.Error,
+                                       Diagnostics.Class_Duplicate_Instance,
+                                       N.Span, "duplicate instance");
+                           end if;
+                        end;
+                     end loop;
+                  end;
                end if;
             end;
          end;

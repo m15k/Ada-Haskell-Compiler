@@ -1,0 +1,9 @@
+str:hi
+maybe-int:Just 3
+maybe-bool:Just True
+left:e
+right:7
+maybes:[Just 'x',Nothing]
+a list of 2
+!!!!
+str:ada

@@ -217,6 +217,7 @@ package body AHC.Builtins is
          Ignore := M.Mint_Instance
            ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
              Head_Vars => Head_Vars, Context => Context,
+             Head_Type => No_Type, Is_GND => False, GND_Target => No_Type,
              Dict_Global => Var_Id (Dict),
              From_Source => False,   --  wired; Prelude_Core binds it
              Method_Binds => Bind_Vectors.Empty_Vector,

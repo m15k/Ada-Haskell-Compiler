@@ -1,9 +1,11 @@
+with AHC.Inst_Match;
 with Ada.Containers.Vectors;
 
 package body AHC.Elaborate is
 
    use AHC.Core;
    use type Names.Name_Id;
+   use type AHC.Inst_Match.Match_Result;
 
    --  An instance needs a dictionary binding iff it came from user
    --  source (its Method_Binds may still be empty if all methods
@@ -163,6 +165,30 @@ package body AHC.Elaborate is
       --  arguments before it is solved (M142 review: both were
       --  missing, so superclass dictionaries of instances with
       --  contexts came out $dMISSING at run time).
+      --  Instance selection's view of a zonked type (M147): the wired
+      --  Rational placeholder read as Data.Ratio's `Ratio Integer`, as
+      --  the typechecker's Norm_TC does.
+      function Norm_EL (T : Real_Type_Id) return Real_Type_Id is
+         N : constant Type_Node := M.Node (T);
+      begin
+         if N.Kind = TCon_T and then TyCon_Id (N.Con) = Env.Rational_TC then
+            declare
+               SC : constant Builtins.Syn_Maps.Cursor :=
+                 Env.Synonyms.Find (Table.Intern ("Rational"));
+            begin
+               if Builtins.Syn_Maps.Has_Element (SC)
+                 and then Builtins.Syn_Maps.Element (SC).Core_Rhs /= No_Type
+               then
+                  return Real_Type_Id
+                    (Builtins.Syn_Maps.Element (SC).Core_Rhs);
+               end if;
+            end;
+         end if;
+         return T;
+      end Norm_EL;
+
+      function Match_EL is new Inst_Match.Match_Instance (Norm_EL);
+
       function Solve_Ev
         (C : Constraint; Givens : Given_Vectors.Vector;
          Span : Diagnostics.Source_Span; Depth : Natural)
@@ -199,83 +225,44 @@ package body AHC.Elaborate is
             end if;
          end loop;
 
-         --  Head-directed instance lookup.
-         declare
-            Head : TyCon_Id := No_TyCon;
-            Args : Type_Id_Vectors.Vector;
-
-            procedure Head_Of (T : Real_Type_Id) is
-               N : constant Type_Node := M.Node (T);
+         --  Instance selection by one-way matching (M147), the same
+         --  matcher the typechecker's Solve uses, so the two can never
+         --  pick different instances.
+         for I of M.Info (C.Class).Instances loop
+            declare
+               Inst : constant Instance_Info := M.Info (I);
+               Args : Type_Id_Vectors.Vector;
             begin
-               case N.Kind is
-                  when TCon_T =>
-                     Head := TyCon_Id (N.Con);
-                     --  The wired Rational placeholder is Data.Ratio's
-                     --  `Ratio Integer` (as in the typechecker's
-                     --  Head_Of).
-                     if Head = Env.Rational_TC then
-                        declare
-                           SC : constant Builtins.Syn_Maps.Cursor :=
-                             Env.Synonyms.Find
-                               (Table.Intern ("Rational"));
-                        begin
-                           if Builtins.Syn_Maps.Has_Element (SC)
-                             and then Builtins.Syn_Maps.Element (SC)
-                                        .Core_Rhs /= No_Type
-                           then
-                              Head_Of (Real_Type_Id
-                                (Builtins.Syn_Maps.Element (SC)
-                                   .Core_Rhs));
-                           end if;
-                        end;
-                     end if;
-                  when TApp_T =>
-                     Head_Of (N.T_Fun);
-                     Args.Append (N.T_Arg);
-                  when TFun_T =>
-                     --  An arrow instance's evidence (M142).
-                     Head := Env.Arrow_TC;
-                     Args.Append (N.From);
-                     Args.Append (N.To);
-                  when others =>
-                     Head := No_TyCon;
-               end case;
-            end Head_Of;
-         begin
-            Head_Of (C.Arg);
-
-            if Head /= No_TyCon then
-               for I of M.Info (C.Class).Instances loop
+               if Match_EL (M, Env, Inst, C.Arg, Args)
+                 = Inst_Match.Matched
+               then
                   declare
-                     Inst : constant Instance_Info := M.Info (I);
+                     Result : Real_Expr_Id :=
+                       M.Add (Expr_Node'
+                         (Kind => Var_C, Span => Span,
+                          V => Real_Var_Id (Inst.Dict_Global)));
                   begin
-                     if Inst.Head = Head then
+                     for IC of Inst.Context loop
                         declare
-                           Result : Real_Expr_Id :=
-                             M.Add (Expr_Node'
-                               (Kind => Var_C, Span => Span,
-                                V => Real_Var_Id
-                                       (Inst.Dict_Global)));
+                           Sub : constant Real_Expr_Id :=
+                             Solve_Ev
+                               (Constraint'
+                                  (Class => IC.Class,
+                                   Arg => Subst_Head
+                                     (IC.Arg, Inst.Head_Vars, Args),
+                                   Span => IC.Span),
+                                Givens, Span, Depth + 1);
                         begin
-                           for IC of Inst.Context loop
-                              Result := M.Add (Expr_Node'
-                                (Kind => App_C, Span => Span,
-                                 Fun => Result,
-                                 Arg => Solve_Ev
-                                   (Constraint'
-                                      (Class => IC.Class,
-                                       Arg => Subst_Head
-                                         (IC.Arg, Inst.Head_Vars, Args),
-                                       Span => IC.Span),
-                                    Givens, Span, Depth + 1)));
-                           end loop;
-                           return Result;
+                           Result := M.Add (Expr_Node'
+                             (Kind => App_C, Span => Span,
+                              Fun => Result, Arg => Sub));
                         end;
-                     end if;
+                     end loop;
+                     return Result;
                   end;
-               end loop;
-            end if;
-         end;
+               end if;
+            end;
+         end loop;
 
          --  Unreachable when the typechecker accepted the module;
          --  reachable in error recovery.
@@ -347,17 +334,9 @@ package body AHC.Elaborate is
 
                   --  Superclass dictionaries at the instance head.
                   declare
-                     Head_T : Real_Type_Id :=
-                       M.Add (Type_Node'
-                         (Kind => TCon_T,
-                          Con => Real_TyCon_Id (Inst.Head),
-                          Refine => No_Refinement));
+                     Head_T : constant Real_Type_Id :=
+                       Inst_Match.Instance_Type (M, Env, Inst);
                   begin
-                     for HV of Inst.Head_Vars loop
-                        Head_T := Builtins.Make_App
-                          (M, Env, Head_T, M.Add (Type_Node'
-                             (Kind => TVar_T, Tv => HV)));
-                     end loop;
                      for Super of Cl_Info.Supers loop
                         Supers.Append
                           (Solve_Ev
@@ -739,11 +718,27 @@ package body AHC.Elaborate is
                                           for I2 of M.Info (App_Cl)
                                                       .Instances
                                           loop
-                                             if M.Info (I2).Head =
-                                                  Inst.Head
-                                             then
-                                                Has_App := True;
-                                             end if;
+                                             declare
+                                                AI : constant Instance_Info
+                                                  := M.Info (I2);
+                                                HT : constant Real_Type_Id
+                                                  := Inst_Match
+                                                       .Instance_Type
+                                                         (M, Env, Inst);
+                                                Ign : Type_Id_Vectors
+                                                  .Vector;
+                                             begin
+                                                --  An Applicative
+                                                --  instance covering
+                                                --  this Monad's head
+                                                --  (M147: by matching).
+                                                if Match_EL
+                                                     (M, Env, AI, HT, Ign)
+                                                   = Inst_Match.Matched
+                                                then
+                                                   Has_App := True;
+                                                end if;
+                                             end;
                                           end loop;
                                           if not Has_App then
                                              Bag.Add

@@ -1696,6 +1696,9 @@ package body AHC.Rename is
                        ((Of_Class => Core.Class_Id (Cl),
                          Head => Core.TyCon_Id (TC),
                          Head_Vars => Vars,
+                         Head_Type => Core.No_Type,
+                         Is_GND => False,
+                         GND_Target => Core.No_Type,
                          Context => Ctx,
                          Dict_Global => Core.Var_Id (Dict),
                          From_Source => False,   --  deriving clause
@@ -1848,13 +1851,17 @@ package body AHC.Rename is
          end loop;
       end Fill_Class;
 
-      --  Head TyCon of an instance type.
+      --  Head TyCon of an instance type. A synonym head (`C String`,
+      --  TypeSynonymInstances) or a bare type variable (`C a`) sets
+      --  Deferred: AHC.Kinds sets the real head from the converted,
+      --  synonym-expanded type (M147).
       function Instance_Head
-        (T : Real_Type_Id; Span : Diagnostics.Source_Span)
-         return Core.TyCon_Id
+        (T : Real_Type_Id; Span : Diagnostics.Source_Span;
+         Deferred : out Boolean) return Core.TyCon_Id
       is
          N : constant Type_Node := Arena.Node (T);
       begin
+         Deferred := False;
          case N.Kind is
             when Con_T =>
                declare
@@ -1866,12 +1873,25 @@ package body AHC.Rename is
                      return TC2;
                   end if;
                end;
+               declare
+                  Found, Amb_S : Boolean;
+                  Ref : Syn_Ref;
+               begin
+                  Mod_Find_Syn (N.Con, Span, Found, Ref, Amb_S);
+                  if Found or else Amb_S then
+                     Deferred := Found;
+                     return Core.No_TyCon;
+                  end if;
+               end;
                Bag.Add (Diagnostics.Error,
                         Diagnostics.Rename_Out_Of_Scope, Span,
                         "type not in scope: " & Text (N.Con.Name));
                return Core.No_TyCon;
+            when Var_T =>
+               Deferred := True;
+               return Core.No_TyCon;
             when App_T =>
-               return Instance_Head (N.Fun, Span);
+               return Instance_Head (N.Fun, Span, Deferred);
             when List_T =>
                return Env.List_TC;
             when Tuple_T =>
@@ -1890,6 +1910,7 @@ package body AHC.Rename is
       end Instance_Head;
 
       procedure Declare_Instance (D : Real_Decl_Id; N : Decl_Node) is
+         Deferred : Boolean;
          Amb : Boolean;
          ClC : constant Core.Class_Id :=
            Mod_Find_Class (N.I_Class, N.Span, Amb);
@@ -1903,29 +1924,40 @@ package body AHC.Rename is
                      "class not in scope: " & Text (N.I_Class.Name));
             return;
          end if;
-         Head := Instance_Head (N.I_Type, N.Span);
-         if Head = Core.No_TyCon then
+         Head := Instance_Head (N.I_Type, N.Span, Deferred);
+         if Head = Core.No_TyCon and then not Deferred then
             return;
          end if;
          declare
             Cl : constant Core.Real_Class_Id :=
               Core.Real_Class_Id (ClC);
+            --  Duplicates are AHC.Kinds' to find, on full head types
+            --  (overlap alone is legal, as in GHC - M147). The name is
+            --  cosmetic - dictionaries are found by Instance_Id - but
+            --  a numeric suffix keeps `C (Maybe Int)` and
+            --  `C (Maybe Bool)` apart in the generated C.
+            Same_Head : Natural := 0;
          begin
             Res.Decl_Class.Replace_Element
               (Positive (D), Core.Class_Id (Cl));
             for I of M.Classes (Cl).Instances loop
                if M.Info (I).Head = Head then
-                  Bag.Add (Diagnostics.Error,
-                           Diagnostics.Class_Duplicate_Instance, N.Span,
-                           "duplicate instance");
+                  Same_Head := Same_Head + 1;
                end if;
             end loop;
             declare
+               Head_Name : constant String :=
+                 (if Head /= Core.No_TyCon
+                  then Text (M.Info (Core.Real_TyCon_Id (Head)).Name)
+                  else "Var");
+               Count_Img : constant String := Natural'Image (Same_Head);
+               Suffix : constant String :=
+                 (if Same_Head = 0 then ""
+                  else "$" & Count_Img (2 .. Count_Img'Last));
                Dict : constant Core.Real_Var_Id :=
                  M.Mint_Var
                    ((Name => Table.Intern
-                       ("$d" & Text (N.I_Class.Name)
-                        & Text (M.Info (Core.Real_TyCon_Id (Head)).Name)),
+                       ("$d" & Text (N.I_Class.Name) & Head_Name & Suffix),
                      Span => N.Span, Is_Global => True, others => <>));
                Inst : Core.Real_Instance_Id;
             begin
@@ -1934,6 +1966,9 @@ package body AHC.Rename is
                Inst := M.Mint_Instance
                  ((Of_Class => Core.Class_Id (Cl), Head => Head,
                    Head_Vars => Core.TyVar_Id_Vectors.Empty_Vector,
+                   Head_Type => Core.No_Type,
+                   Is_GND => False,
+                   GND_Target => Core.No_Type,
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict),
                    From_Source => True,

@@ -58,6 +58,8 @@ package AHC.Diagnostics is
       Class_No_Instance,
       Class_Missing_Method,
       Class_Duplicate_Instance,
+      Class_Overlap,           --  M147: a use matching two instances
+      Class_Gnd,               --  M147: a newtype derivation refused
       Class_Context_Depth,
       Arity_Mismatch,
       Match_Warning);

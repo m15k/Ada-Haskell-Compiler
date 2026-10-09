@@ -282,14 +282,23 @@ package AHC.Core is
       Super_Sels : Var_Id_Vectors.Vector;
    end record;
 
-   --  Haskell 2010 instance heads are always C (T a1..an), so keying
-   --  on the head TyCon is complete. Head_Vars lists a1..an in order;
-   --  Context constraints mention only these, so matching a wanted
-   --  C (T t1..tn) instantiates the context by position.
+   --  An instance head is any type (M147, FlexibleInstances): Head_Type
+   --  is the full head, synonyms expanded, over Head_Vars (its type
+   --  variables in order of first appearance); Head is its spine TyCon,
+   --  or No_TyCon for a bare-variable head (`instance C a`). Selection
+   --  matches Head_Type one way (AHC.Inst_Match), and Context
+   --  constraints mention only Head_Vars, instantiated from the match.
+   --  Wired and stock-derived instances leave Head_Type as No_Type:
+   --  their head is Head applied to Head_Vars (Inst_Match.Instance_Type).
    type Instance_Info is record
       Of_Class    : Class_Id := No_Class;
       Head        : TyCon_Id := No_TyCon;
       Head_Vars   : TyVar_Id_Vectors.Vector;
+      Head_Type   : Type_Id := No_Type;
+      --  GeneralizedNewtypeDeriving (M147): the dictionary is the
+      --  representation's, i.e. the instance of Of_Class at GND_Target.
+      Is_GND      : Boolean := False;
+      GND_Target  : Type_Id := No_Type;
       Context     : Constraint_Vectors.Vector;
       Dict_Global : Var_Id := No_Var;
       --  True only for an instance DECLARATION in user/Prelude source
@@ -540,8 +549,12 @@ package AHC.Core is
    function Mint_Instance
      (M : in out Core_Module; Info : Instance_Info)
       return Real_Instance_Id
+     --  Head may be No_TyCon when the renamer defers it to AHC.Kinds
+     --  (a synonym or bare-variable head, M147); Kinds then sets it
+     --  from Head_Type, or leaves No_TyCon for `instance C a`.
      with Pre  => Info.Of_Class in 1 .. M.Last_Class
-                  and then Info.Head in 1 .. M.Last_TyCon,
+                  and then (Info.Head = No_TyCon
+                            or else Info.Head in 1 .. M.Last_TyCon),
           Post => Mint_Instance'Result = M.Last_Instance;
 
    --  Checked accessors.

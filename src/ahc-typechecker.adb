@@ -1,5 +1,7 @@
 with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Vectors;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+with AHC.Inst_Match;
 
 with AHC.Core.Printer;
 
@@ -676,6 +678,31 @@ package body AHC.Typechecker is
          end case;
       end Head_Of;
 
+      --  Instance selection's view of a type (M147): solved
+      --  metavariables followed, and the wired Rational placeholder
+      --  read as Data.Ratio's `Ratio Integer`, as Head_Of does.
+      function Norm_TC (T : Real_Type_Id) return Real_Type_Id is
+         Z : constant Real_Type_Id := Repr (T);
+         N : constant Type_Node := M.Node (Z);
+      begin
+         if N.Kind = TCon_T and then TyCon_Id (N.Con) = Env.Rational_TC then
+            declare
+               C : constant Builtins.Syn_Maps.Cursor :=
+                 Env.Synonyms.Find (Table.Intern ("Rational"));
+            begin
+               if Builtins.Syn_Maps.Has_Element (C)
+                 and then Builtins.Syn_Maps.Element (C).Core_Rhs /= No_Type
+               then
+                  return Repr (Real_Type_Id
+                    (Builtins.Syn_Maps.Element (C).Core_Rhs));
+               end if;
+            end;
+         end if;
+         return Z;
+      end Norm_TC;
+
+      function Match_TC is new Inst_Match.Match_Instance (Norm_TC);
+
       --  Reduce wanted I to HNF, recording its evidence shape.
       --  Unsolved entries have tyvar/meta heads (residuals).
       procedure Solve (I : Positive; Depth : Natural) is
@@ -710,34 +737,47 @@ package body AHC.Typechecker is
          declare
             Head : TyCon_Id;
             Args : Type_Id_Vectors.Vector;
+            Hits : Natural := 0;
+            Hit  : Real_Instance_Id := 1;
+            Hit_Args : Type_Id_Vectors.Vector;
+            Pending : Boolean := False;
+            Heads : Unbounded_String;
          begin
             Head_Of (W.C.Arg, Head, Args);
-            if Head = No_TyCon then
-               return;   --  residual
+            if M.Node (Norm_TC (W.C.Arg)).Kind = TMeta_T then
+               return;   --  residual: wait for unification
             end if;
 
+            --  One-way match of every instance head (M147): exactly
+            --  one Matched commits; an Undecided means a metavariable
+            --  still hides the answer, so the wanted stays residual;
+            --  two Matched are GHC's overlapping-instances error.
             for Inst_Id of M.Info (W.C.Class).Instances loop
                declare
                   Inst : constant Instance_Info := M.Info (Inst_Id);
+                  IT : constant Real_Type_Id :=
+                    Inst_Match.Instance_Type (M, Env, Inst);
+                  A : Type_Id_Vectors.Vector;
+                  R : constant Inst_Match.Match_Result :=
+                    Match_TC (M, Env, Inst, W.C.Arg, A);
 
-                  --  Instance lookup is TyCon-keyed, which makes an
-                  --  instance at the list TyCon mean "all [a]". For
-                  --  IsString that would be unsound (fromString
-                  --  returns [Char] whatever a is), so THIS class
-                  --  pins the element: a metavar element is unified
-                  --  with Char ("x" at [a] positions), anything else
-                  --  must already BE Char ("x" :: [Bool] falls
+                  --  IsString's wired instance is at [a], but
+                  --  fromString returns [Char] whatever a is, so THIS
+                  --  class pins the element: a metavar element is
+                  --  unified with Char ("x" at [a] positions), anything
+                  --  else must already BE Char ("x" :: [Bool] falls
                   --  through to no-instance).
                   function List_Element_Is_Char return Boolean is
                   begin
                      if Class_Id (W.C.Class) /= Env.IsString_Cl
-                       or else Head /= Env.List_TC
+                       or else Inst.Head /= Env.List_TC
+                       or else A.Is_Empty
                      then
                         return True;
                      end if;
                      declare
                         El : constant Real_Type_Id :=
-                          Repr (Args (1));
+                          Repr (A.Element (1));
                         EN : constant Type_Node := M.Node (El);
                      begin
                         if EN.Kind = TMeta_T then
@@ -750,38 +790,75 @@ package body AHC.Typechecker is
                      end;
                   end List_Element_Is_Char;
                begin
-                  if Inst.Head = Head
-                    and then List_Element_Is_Char
-                  then
-                     declare
-                        Map : TyVar_Type_Maps.Map;
-                     begin
-                        for VI in 1 .. Inst.Head_Vars.Last_Index loop
-                           if VI <= Args.Last_Index then
-                              Map.Include (Inst.Head_Vars (VI),
-                                           Args (VI));
+                  case R is
+                     when Inst_Match.Matched =>
+                        if List_Element_Is_Char then
+                           Hits := Hits + 1;
+                           Hit := Inst_Id;
+                           Hit_Args := A;
+                           if Hits > 1 then
+                              Append (Heads, ", ");
                            end if;
-                        end loop;
-                        for IC of Inst.Context loop
-                           W_List.Append
-                             (Wanted_Rec'
-                                (C => Constraint'
-                                   (Class => IC.Class,
-                                    Arg => Subst_TyVars (IC.Arg, Map),
-                                    Span => W.C.Span),
-                                 Site => No_Expr, Owner => W.Owner,
-                                 others => <>));
-                           W.Subs.Append (W_List.Last_Index);
-                           Solve (W_List.Last_Index, Depth + 1);
-                        end loop;
-                        W.Sol := By_Instance;
-                        W.Inst := Instance_Id (Inst_Id);
-                        W_List.Replace_Element (I, W);
-                        return;
-                     end;
-                  end if;
+                           Append (Heads, Type_Str (IT));
+                        end if;
+                     when Inst_Match.Undecided =>
+                        Pending := True;
+                     when Inst_Match.No_Match =>
+                        null;
+                  end case;
                end;
             end loop;
+
+            if Hits = 0 and then Head = No_TyCon then
+               --  A rigid type variable (or one applied) that no
+               --  instance - not even a bare-variable head - matches:
+               --  residual, answered by a given or reported as a
+               --  missing context, exactly as before M147.
+               return;
+            end if;
+            if Hits > 1 then
+               if not Probing then
+                  Bag.Add (Diagnostics.Error,
+                           Diagnostics.Class_Overlap, W.C.Span,
+                           "overlapping instances for '"
+                           & Table.Text (M.Info (W.C.Class).Name) & " "
+                           & Type_Str (W.C.Arg) & "': "
+                           & To_String (Heads));
+               end if;
+               W.Sol := By_Error;
+               W_List.Replace_Element (I, W);
+               return;
+            elsif Pending then
+               return;   --  residual: wait for unification
+            elsif Hits = 1 then
+               declare
+                  Inst : constant Instance_Info := M.Info (Hit);
+                  Map : TyVar_Type_Maps.Map;
+               begin
+                  for VI in 1 .. Inst.Head_Vars.Last_Index loop
+                     if VI <= Hit_Args.Last_Index then
+                        Map.Include (Inst.Head_Vars (VI),
+                                     Hit_Args.Element (VI));
+                     end if;
+                  end loop;
+                  for IC of Inst.Context loop
+                     W_List.Append
+                       (Wanted_Rec'
+                          (C => Constraint'
+                             (Class => IC.Class,
+                              Arg => Subst_TyVars (IC.Arg, Map),
+                              Span => W.C.Span),
+                           Site => No_Expr, Owner => W.Owner,
+                           others => <>));
+                     W.Subs.Append (W_List.Last_Index);
+                     Solve (W_List.Last_Index, Depth + 1);
+                  end loop;
+                  W.Sol := By_Instance;
+                  W.Inst := Instance_Id (Hit);
+                  W_List.Replace_Element (I, W);
+                  return;
+               end;
+            end if;
 
             if not Probing then
                Bag.Add (Diagnostics.Error,
@@ -1772,7 +1849,8 @@ package body AHC.Typechecker is
          begin
             if Inst.From_Source
               and then Inst.Of_Class /= No_Class
-              and then Inst.Head /= No_TyCon
+              and then (Inst.Head /= No_TyCon
+                        or else Inst.Head_Type /= No_Type)
               and then Inst.Dict_Global /= No_Var
               --  Num keeps the Report's (Eq a, Show a) superclasses,
               --  which GHC dropped (7.4): `instance Num D` without
@@ -1785,18 +1863,11 @@ package body AHC.Typechecker is
                   Bag.Set_Origin (Inst_Origins (Natural (II)));
                end if;
                declare
-                  Head_T : Real_Type_Id :=
-                    M.Add (Type_Node'
-                      (Kind => TCon_T,
-                       Con => Real_TyCon_Id (Inst.Head),
-                       Refine => No_Refinement));
+                  Head_T : constant Real_Type_Id :=
+                    Inst_Match.Instance_Type (M, Env, Inst);
                   Givens_Mark : constant Natural := Givens.Last_Index;
                   W_Mark : constant Natural := W_List.Last_Index;
                begin
-                  for HV of Inst.Head_Vars loop
-                     Head_T := Make_App (Head_T, M.Add (Type_Node'
-                       (Kind => TVar_T, Tv => HV)));
-                  end loop;
                   --  The evidence is never used (the wanteds are
                   --  dropped below), so no variable is minted for it:
                   --  minting would renumber every later entity.
@@ -1861,18 +1932,11 @@ package body AHC.Typechecker is
                declare
                   Cl : constant Class_Info :=
                     M.Info (Real_Class_Id (Inst.Of_Class));
-                  Head_T : Real_Type_Id :=
-                    M.Add (Type_Node'
-                      (Kind => TCon_T,
-                       Con => Real_TyCon_Id (Inst.Head),
-                       Refine => No_Refinement));
+                  Head_T : constant Real_Type_Id :=
+                    Inst_Match.Instance_Type (M, Env, Inst);
                   Givens_Mark : constant Natural :=
                     Givens.Last_Index;
                begin
-                  for HV of Inst.Head_Vars loop
-                     Head_T := Make_App (Head_T, M.Add (Type_Node'
-                       (Kind => TVar_T, Tv => HV)));
-                  end loop;
                   for C of Inst.Context loop
                      declare
                         D : constant Real_Var_Id :=

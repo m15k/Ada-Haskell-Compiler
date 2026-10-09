@@ -11,6 +11,7 @@ with Test_Layout;
 with Test_Parser;
 with Test_Fixity;
 with Test_Core;
+with Test_Inst_Match;
 with Test_Rename;
 with Test_Kinds;
 with Test_Desugar;
@@ -32,6 +33,7 @@ begin
    Test_Parser.Run;
    Test_Fixity.Run;
    Test_Core.Run;
+   Test_Inst_Match.Run;
    Test_Rename.Run;
    Test_Kinds.Run;
    Test_Desugar.Run;
