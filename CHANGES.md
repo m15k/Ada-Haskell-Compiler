@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.17 (unreleased)
+## v1.17 (2026-10-09)
 
 **M146 - Int is a machine integer.** AHC's `Int` used to share
 `Integer`'s representation and primitives, so it never overflowed: it

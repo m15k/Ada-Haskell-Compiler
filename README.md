@@ -578,6 +578,17 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.17** — the machine-Int release (M146): `Int` is a 64-bit
+  integer that wraps like GHC's (`maxBound + 1` is `minBound`,
+  `fromInteger` narrows, ``minBound `div` (-1)`` raises
+  `arithmetic overflow`), ranges are lazy (`take 3 [1..10^9]` is
+  instant) and exact at `Integer` of any size, and strict loops run in
+  constant C stack (`foldl'` over 3·10^7 elements in 6 MB, where it
+  overflowed a 1 GB stack). Along the way, and in an adversarial
+  review that found thirteen defects after a green gate: `Integral`
+  got the Report's superclasses, `pi`/`recip` stopped returning
+  garbage under `import Data.Ratio`, and the own collector stopped
+  occasionally sweeping live data. `b_strictfold` is 52% faster.
 - **v1.16** — the library round (M142–M145): `Debug.Trace`,
   `Data.Map.Strict` with containers' everyday Map API,
   `Control.Monad.State`, `Text.Printf`, `System.Random` (bit-for-bit
