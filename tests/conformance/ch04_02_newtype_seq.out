@@ -1,0 +1,8 @@
+bottom: Prelude.undefined
+value
+value
+bottom: Prelude.undefined
+bottom: Prelude.undefined
+(N 3,[1,2],R {unR = [4]},R {unR = [5]})
+(True,LT,[[],[0]])
+("(N (-4))","Just (N 7)",42)

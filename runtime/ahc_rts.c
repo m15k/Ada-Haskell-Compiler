@@ -2713,6 +2713,11 @@ static AhcNode *p_enum_from_to(AhcNode *a, AhcNode *b) {
 /* seq: force the first argument to WHNF, yield the second
    untouched (Report 6.2). The one primitive that makes strictness
    expressible in source - foldl' and ($!) are built on it. */
+/* A newtype's constructor (M147, Report 4.2.3): the identity, and
+   its argument is returned UNEVALUATED - wrapping adds no box and
+   forces nothing, so `N undefined` is undefined only when demanded. */
+static AhcNode *p_newtype_id(AhcNode *a) { return a; }
+
 static AhcNode *p_seq(AhcNode *a, AhcNode *b) {
   ahc_eval(a);
   return b;
@@ -7935,7 +7940,8 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_enum_from_to_int,
   *ahc_prim_put_str, *ahc_prim_put_str_ln,
   *ahc_prim_bind_io, *ahc_prim_then_io, *ahc_prim_return_io,
-  *ahc_prim_error, *ahc_prim_seq, *ahc_prim_from_rational_d,
+  *ahc_prim_error, *ahc_prim_seq, *ahc_prim_newtype_id,
+  *ahc_prim_from_rational_d,
   *ahc_prim_to_rational_i, *ahc_prim_to_rational_d,
   *ahc_prim_to_rational_f,
   *ahc_prim_scope, *ahc_prim_spawn, *ahc_prim_await,
@@ -8101,6 +8107,7 @@ void ahc_rts_init(void) {
   ahc_prim_return_io = mk_prim1(p_return_io);
   ahc_prim_error = mk_prim1(p_error);
   ahc_prim_seq = mk_prim2(p_seq);
+  ahc_prim_newtype_id = mk_prim1(p_newtype_id);
   ahc_prim_scope = mk_prim1(p_scope);
   ahc_prim_spawn = mk_prim2(p_spawn);
   ahc_prim_await = mk_prim1(p_await);

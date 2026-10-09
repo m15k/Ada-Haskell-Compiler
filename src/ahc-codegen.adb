@@ -110,6 +110,15 @@ package body AHC.CodeGen is
       function Sym_Of (V : Real_Var_Id) return String
       is (To_String (Sym (V)));
 
+      --  Newtype erasure (M147, Report 4.2.3): a newtype's
+      --  constructor is the identity and a case on it binds its field
+      --  to the scrutinee without forcing. Every Core producer -
+      --  desugared patterns, derived Show/Read, record selectors and
+      --  updates - emits ordinary constructor cases, so erasing here
+      --  erases them all.
+      function Is_NT_Con (DC : Real_DataCon_Id) return Boolean is
+        (M.Info (Real_TyCon_Id (M.Info (DC).TyCon)).Is_Newtype);
+
       function Lid (V : Real_Var_Id) return String is
          C : constant Var_Nat_Maps.Cursor := L_Map.Find (V);
       begin
@@ -610,6 +619,11 @@ package body AHC.CodeGen is
                      end;
                end case;
             when Con_C =>
+               if Is_NT_Con (N.Con) then
+                  --  Newtype erasure (M147): the constructor is the
+                  --  identity.
+                  return "ahc_prim_newtype_id";
+               end if;
                declare
                   Info : constant DataCon_Info := M.Info (N.Con);
                   --  Strict fields (Report 4.2.1): bit I-1 set when
@@ -810,6 +824,36 @@ package body AHC.CodeGen is
                   return To_String (R);
                end;
             when Case_C =>
+               --  Newtype erasure (M147, Report 4.2.3): a case on a
+               --  newtype constructor binds its field to the scrutinee
+               --  itself and forces nothing - `case undefined of N _`
+               --  is the body, and `N undefined` is undefined.
+               declare
+                  First_Alt : constant Alt_Node := M.Node (N.Alts (1));
+               begin
+                  if First_Alt.Kind = Con_Alt
+                    and then Is_NT_Con (First_Alt.A_Con)
+                  then
+                     declare
+                        Inner : Scope_Maps.Map := Scope;
+                        R : Unbounded_String;
+                     begin
+                        Append (R, "({ ");
+                        if not First_Alt.Binders.Is_Empty then
+                           Append (R, "AhcNode *"
+                             & Lid (First_Alt.Binders (1)) & " = "
+                             & Gen_Lazy (N.Scrutinee, Scope) & "; ");
+                           Inner.Include
+                             (First_Alt.Binders (1),
+                              To_Unbounded_String
+                                (Lid (First_Alt.Binders (1))));
+                        end if;
+                        Append (R, Gen_Force (First_Alt.Alt_Body, Inner)
+                                     & "; })");
+                        return To_String (R);
+                     end;
+                  end if;
+               end;
                declare
                   R : Unbounded_String;
                   First : Boolean := True;
