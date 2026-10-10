@@ -95,6 +95,11 @@ private
       Q_First      : Positive := 1;
       Await_Open   : Boolean := False;   --  {n} pending before Input(I)
       Newline_Done : Boolean := False;   --  Input(I)'s <n> already used
+      Quiet_Open   : Boolean := False;   --  the pending {n} is quiet
+      --  The stack depths of the quiet contexts, innermost last: a
+      --  multi-way if's guard block, which GHC opens without
+      --  semicolons (M148 review) - a line at its column continues.
+      Quiet        : Context_Vectors.Vector;
       Is_Started   : Boolean := False;
       Is_Finished  : Boolean := False;
       Last_Tok     : Tokens.Token;       --  last token delivered

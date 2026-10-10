@@ -641,12 +641,9 @@ package body AHC.Parser is
                                                Value => Parse_Pat));
                               else
                                  --  NamedFieldPuns (M148): C{x} is
-                                 --  C{x = x}; GHC rejects a qualified
-                                 --  pun.
-                                 if F.Qualifier /= Names.No_Name then
-                                    Fail ("a punned field cannot be "
-                                          & "qualified");
-                                 end if;
+                                 --  C{x = x}; a qualified pun C{M.x}
+                                 --  binds the bare x (GHC; M148
+                                 --  review).
                                  Fields.Append
                                    (Field_Pat'(Field => F,
                                                Value => Arena.Add
@@ -844,10 +841,9 @@ package body AHC.Parser is
                            Fields.Append
                              (Field_Assign'(Field => F, Value => Parse_Expr));
                         else
-                           --  NamedFieldPuns (M148): C{x} is C{x = x}.
-                           if F.Qualifier /= Names.No_Name then
-                              Fail ("a punned field cannot be qualified");
-                           end if;
+                           --  NamedFieldPuns (M148): C{x} is C{x = x};
+                           --  a qualified pun C{M.x} reads the bare x
+                           --  (GHC; M148 review).
                            Fields.Append
                              (Field_Assign'
                                 (Field => F,
@@ -947,16 +943,38 @@ package body AHC.Parser is
                Advance;
                if Tok.Kind = Kw_Cases then
                   --  `\cases alts` (M148) is `\c1$ .. cn$ -> case
-                  --  (c1$, .., cn$) of alts`, the alternatives' pattern
-                  --  rows read as tuple patterns (no tuple for n = 1);
-                  --  left-to-right matching is the same, and building
-                  --  the tuple forces nothing.
+                  --  (c1$, (c2$, .. cn$)) of alts`, the alternatives'
+                  --  pattern rows read as right-nested pairs (no pair
+                  --  for n = 1), so any arity works (M148 review: a
+                  --  flat tuple broke past 7); left-to-right matching
+                  --  is the same, and building the pairs forces
+                  --  nothing.
                   Advance;
                   declare
                      Alts  : Alt_Id_Vectors.Vector;
                      Arity : Natural;
                      Pats  : Pat_Id_Vectors.Vector;
                      Items : Expr_Id_Vectors.Vector;
+
+                     --  e1 or (e1, (e2, .. en)).
+                     function Nest_Pairs
+                       (Es : Expr_Id_Vectors.Vector) return Real_Expr_Id
+                     is
+                        R : Real_Expr_Id := Es.Last_Element;
+                     begin
+                        for I in reverse 1 .. Es.Last_Index - 1 loop
+                           declare
+                              Two : Expr_Id_Vectors.Vector;
+                           begin
+                              Two.Append (Es.Element (I));
+                              Two.Append (R);
+                              R := Arena.Add
+                                (Expr_Node'(Kind => Tuple_E, Span => Span,
+                                            Items => Two));
+                           end;
+                        end loop;
+                        return R;
+                     end Nest_Pairs;
                   begin
                      Parse_Cases_Block (Alts, Arity);
                      for I in 1 .. Arity loop
@@ -982,12 +1000,7 @@ package body AHC.Parser is
                                    L_Body => Arena.Add
                                      (Expr_Node'
                                         (Kind => Case_E, Span => Span,
-                                         Scrutinee =>
-                                           (if Arity = 1 then Items (1)
-                                            else Arena.Add
-                                              (Expr_Node'(Kind => Tuple_E,
-                                                          Span => Span,
-                                                          Items => Items))),
+                                         Scrutinee => Nest_Pairs (Items),
                                          Alts => Alts))));
                   end;
                end if;
@@ -1058,11 +1071,9 @@ package body AHC.Parser is
                      if not At_K (Pipe) then
                         Advance;   --  '{' or the virtual one
                      end if;
+                     --  No `;` between guards: the layout block is
+                     --  quiet, and GHC rejects an explicit one.
                      loop
-                        while At_K (Semicolon) or else At_K (V_Semicolon)
-                        loop
-                           Advance;
-                        end loop;
                         if At_K (Pipe) then
                            Advance;
                            declare
@@ -1614,6 +1625,10 @@ package body AHC.Parser is
             end loop;
             exit when (Explicit and then At_K (Right_Brace))
               or else (not Explicit and then At_K (V_Right_Brace));
+            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            then
+               exit;   --  the M148 operator rule, as in Parse_Alt_Block
+            end if;
             declare
                Span : constant Diagnostics.Source_Span := Tok.Span;
                Ps   : Pat_Id_Vectors.Vector;
@@ -1633,9 +1648,18 @@ package body AHC.Parser is
                end if;
                Arity := Natural (Ps.Length);
                Known := True;
-               P := (if Arity = 1 then Ps (1)
-                     else Arena.Add (Pat_Node'(Kind => Tuple_P, Span => Span,
-                                               Items => Ps)));
+               --  p1 or (p1, (p2, .. pn)), matching the scrutinee.
+               P := Ps.Last_Element;
+               for I in reverse 1 .. Ps.Last_Index - 1 loop
+                  declare
+                     Two : Pat_Id_Vectors.Vector;
+                  begin
+                     Two.Append (Ps.Element (I));
+                     Two.Append (P);
+                     P := Arena.Add (Pat_Node'(Kind => Tuple_P, Span => Span,
+                                               Items => Two));
+                  end;
+               end loop;
                declare
                   R : constant Rhs := Parse_Guarded (Right_Arrow, "'->'");
                begin
@@ -2494,6 +2518,20 @@ package body AHC.Parser is
          end loop;
       end Skip_Decl;
 
+      --  Skip_Decl at module level, always making progress: a stray
+      --  `}` (a parse error inside record braces, say) is where
+      --  Skip_Decl stops, and the module loop would meet it forever
+      --  (M148 review).
+      procedure Skip_Top_Decl is
+         Before : constant Diagnostics.Source_Span := Tok.Span;
+         use type Diagnostics.Source_Span;
+      begin
+         Skip_Decl;
+         if Tok.Span = Before and then not At_K (End_Of_File) then
+            Advance;
+         end if;
+      end Skip_Top_Decl;
+
       procedure Parse_Decl_Block (Into : in out Decl_Id_Vectors.Vector) is
          Explicit : constant Boolean := At_K (Left_Brace);
       begin
@@ -2715,7 +2753,7 @@ package body AHC.Parser is
                Parse_Import;
             exception
                when Parse_Failure =>
-                  Skip_Decl;
+                  Skip_Top_Decl;
             end;
          end loop;
 
@@ -2730,7 +2768,7 @@ package body AHC.Parser is
                Arena.Top_Decls.Append (Parse_Decl);
             exception
                when Parse_Failure =>
-                  Skip_Decl;
+                  Skip_Top_Decl;
             end;
             if At_K (Semicolon) or else At_K (V_Semicolon) then
                Advance;
@@ -2744,7 +2782,7 @@ package body AHC.Parser is
                         Tok.Span,
                         "expected ';' or end of module (found '"
                         & Image (Tok, Table) & "')");
-               Skip_Decl;
+               Skip_Top_Decl;
             end if;
          end loop;
       end Parse_Top;

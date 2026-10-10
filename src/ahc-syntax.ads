@@ -3,7 +3,7 @@
 --  newtypes. A Pat_Id can never index the expression arena - category
 --  confusion is a compile-time error - and node addition is guarded by
 --  Well_Formed preconditions (child ids in range, a Let has at least
---  one binding, a Case at least one alternative, ...). One Module_Arena
+--  one binding, a Case_E's alternatives may be none (EmptyCase), ...). One Module_Arena
 --  owns every node of one module; dropping it frees the whole tree.
 
 with Ada.Containers.Ordered_Maps;
@@ -482,6 +482,8 @@ package AHC.Syntax is
       --  OVERLAPS (M148).
       Overlaps         : Overlap_Maps.Map;
       Lang_Overlapping : Boolean := False;
+      --  {-# LANGUAGE IncoherentInstances #-}: all of them INCOHERENT.
+      Lang_Incoherent  : Boolean := False;
       Exports         : Entity_Vectors.Vector;
       Imports         : Import_Vectors.Vector;
       Top_Decls       : Decl_Id_Vectors.Vector;

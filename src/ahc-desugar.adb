@@ -743,24 +743,33 @@ package body AHC.Desugar is
                      Pairs   : Pair_Vectors.Vector;
                      Alts    : Core.Alt_Id_Vectors.Vector;
                   begin
-                     for FI in 1 .. Info.Field_Names.Last_Index loop
+                     --  Every argument position: `C {}` on a
+                     --  positional constructor has no field names
+                     --  (M148 review: the arity came out 0).
+                     for FI in 1 .. Info.Arity loop
                         declare
                            B : Core.Real_Var_Id := Fresh ("$f", Span);
                            Matched : Boolean := False;
+                           Named : constant Boolean :=
+                             FI <= Info.Field_Names.Last_Index;
                         begin
                            --  RecordWildCards (M148): a `..` field binds
                            --  its variable directly.
                            if Res.Wild_Pat.Contains (Positive (Pat)) then
                               for W of Res.Wild_Pat.Element (Positive (Pat))
                               loop
-                                 if W.Field = Info.Field_Names.Element (FI)
+                                 if Named
+                                   and then W.Field
+                                     = Info.Field_Names.Element (FI)
                                  then
                                     B := Core.Real_Var_Id (W.Var);
                                  end if;
                               end loop;
                            end if;
                            for F of N.Rec_Fields loop
-                              if F.Field.Name = Info.Field_Names.Element (FI)
+                              if Named
+                                and then F.Field.Name
+                                  = Info.Field_Names.Element (FI)
                               then
                                  declare
                                     PN : constant Pat_Node :=
@@ -1417,22 +1426,30 @@ package body AHC.Desugar is
                        M.Info (BR.Con);
                      Result : Core.Real_Expr_Id := ConE (BR.Con, Span);
                   begin
-                     for FI in 1 .. Info.Field_Names.Last_Index loop
+                     --  Every argument position (`C {}` on a
+                     --  positional constructor, Report 3.15.2).
+                     for FI in 1 .. Info.Arity loop
                         declare
                            Arg : Core.Real_Expr_Id :=
                              Error_Call
                                ("missing field in record construction",
                                 Span);
+                           Named : constant Boolean :=
+                             FI <= Info.Field_Names.Last_Index;
                         begin
                            for F of N.Rec_Fields loop
-                              if F.Field.Name = Info.Field_Names.Element (FI)
+                              if Named
+                                and then F.Field.Name
+                                  = Info.Field_Names.Element (FI)
                               then
                                  Arg := Ds_Expr (F.Value);
                               end if;
                            end loop;
                            --  RecordWildCards (M148): a `..` field reads
                            --  its variable.
-                           if Res.Wild_Expr.Contains (Positive (E)) then
+                           if Named
+                             and then Res.Wild_Expr.Contains (Positive (E))
+                           then
                               for W of Res.Wild_Expr.Element (Positive (E))
                               loop
                                  if W.Field = Info.Field_Names.Element (FI)

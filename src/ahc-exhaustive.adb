@@ -178,12 +178,16 @@ package body AHC.Exhaustive is
                        M.Info (R.Con);
                      Args : Nat_Vectors.Vector;
                   begin
-                     for FI in 1 .. Info.Field_Names.Last_Index loop
+                     --  Every argument position: `C {}` on a
+                     --  positional constructor has no field names
+                     --  (M148 review: the arity came out 0).
+                     for FI in 1 .. Info.Arity loop
                         declare
                            A : Positive := Wild;
                         begin
                            for F of N.Rec_Fields loop
-                              if F.Field.Name = Info.Field_Names (FI)
+                              if FI <= Info.Field_Names.Last_Index
+                                and then F.Field.Name = Info.Field_Names (FI)
                               then
                                  A := Norm (Syntax.Pat_Id (F.Value));
                               end if;

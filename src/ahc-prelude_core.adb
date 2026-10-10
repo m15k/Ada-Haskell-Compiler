@@ -1,3 +1,4 @@
+with AHC.Inst_Match;
 with AHC.Diagnostics;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
@@ -683,56 +684,68 @@ package body AHC.Prelude_Core is
                   end if;
                end loop;
                return No_Expr;
-            when TCon_T =>
-               for SI of M.Info (Cl).Instances loop
-                  if M.Info (SI).Head = TyCon_Id (N.Con)
-                    and then M.Info (SI).Dict_Global /= No_Var
-                  then
-                     return Expr_Id (V (M.Info (SI).Dict_Global));
-                  end if;
-               end loop;
-               return No_Expr;
-            when TApp_T =>
-               --  Head instance dictionary applied to the
-               --  arguments' dictionaries.
+            when TCon_T | TApp_T =>
+               --  The instance the typechecker would choose: the one
+               --  shared matcher, overlap rule included (M148 review:
+               --  keying on the head TyCon took `Eq [a]` over an
+               --  OVERLAPPING `Eq [Bool]`, and applied `Show (T Bool)`
+               --  at `T Int`), applied to its context's dictionaries.
                declare
-                  Head : Real_Type_Id := T;
-                  Args : Type_Id_Vectors.Vector;
+                  function Id (X : Real_Type_Id) return Real_Type_Id is (X);
+                  function Match is new Inst_Match.Match_Instance (Id);
+                  Cands : Instance_Id_Vectors.Vector;
+                  Chosen : Natural := 0;
                begin
-                  while M.Node (Head).Kind = TApp_T loop
-                     Args.Prepend (M.Node (Head).T_Arg);
-                     Head := M.Node (Head).T_Fun;
+                  for SI of M.Info (Cl).Instances loop
+                     declare
+                        Ign : Type_Id_Vectors.Vector;
+                     begin
+                        if M.Info (SI).Dict_Global /= No_Var
+                          and then Inst_Match."="
+                            (Match (M, Env, M.Info (SI), T, Ign),
+                             Inst_Match.Matched)
+                        then
+                           Cands.Append (SI);
+                        end if;
+                     end;
                   end loop;
-                  if M.Node (Head).Kind /= TCon_T then
+                  if Natural (Cands.Length) = 1 then
+                     Chosen := Natural (Cands.First_Element);
+                  elsif Natural (Cands.Length) > 1 then
+                     Chosen := Inst_Match.Pick (M, Env, Cands);
+                  end if;
+                  if Chosen = 0 then
                      return No_Expr;
                   end if;
-                  for SI of M.Info (Cl).Instances loop
-                     if M.Info (SI).Head =
-                          TyCon_Id (M.Node (Head).Con)
-                       and then M.Info (SI).Dict_Global /= No_Var
-                     then
+                  declare
+                     SI : constant Real_Instance_Id :=
+                       Real_Instance_Id (Chosen);
+                     Inst : constant Instance_Info := M.Info (SI);
+                     Args : Type_Id_Vectors.Vector;
+                     Ign : constant Inst_Match.Match_Result :=
+                       Match (M, Env, Inst, T, Args);
+                     pragma Unreferenced (Ign);
+                     Acc : Expr_Id := Expr_Id (V (Inst.Dict_Global));
+                  begin
+                     for IC of Inst.Context loop
+                        if IC.Class /= Cl then
+                           return No_Expr;
+                        end if;
                         declare
-                           Acc : Expr_Id :=
-                             Expr_Id (V (M.Info (SI).Dict_Global));
+                           A : constant Real_Type_Id :=
+                             Inst_Match.Subst_Vars
+                               (M, IC.Arg, Inst.Head_Vars, Args);
+                           DA : constant Expr_Id := Dict_For (A, Tvs);
                         begin
-                           for A of Args loop
-                              declare
-                                 DA : constant Expr_Id :=
-                                   Dict_For (A, Tvs);
-                              begin
-                                 if DA = No_Expr then
-                                    return No_Expr;
-                                 end if;
-                                 Acc := Expr_Id
-                                   (Ap (Real_Expr_Id (Acc),
-                                        Real_Expr_Id (DA)));
-                              end;
-                           end loop;
-                           return Acc;
+                           if DA = No_Expr then
+                              return No_Expr;
+                           end if;
+                           Acc := Expr_Id
+                             (Ap (Real_Expr_Id (Acc), Real_Expr_Id (DA)));
                         end;
-                     end if;
-                  end loop;
-                  return No_Expr;
+                     end loop;
+                     return Acc;
+                  end;
                end;
             when others =>
                return No_Expr;

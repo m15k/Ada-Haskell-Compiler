@@ -25,8 +25,19 @@ package body AHC.Layout is
    procedure Pop (S : in out Layout_Stream)
      with Pre => not S.Stack.Is_Empty is
    begin
+      if not S.Quiet.Is_Empty
+        and then S.Quiet.Last_Element = Natural (S.Stack.Length)
+      then
+         S.Quiet.Delete_Last;
+      end if;
       S.Stack.Delete_Last;
    end Pop;
+
+   --  The innermost context is a quiet one: `<n>` at its column
+   --  inserts no `;`.
+   function Top_Is_Quiet (S : Layout_Stream) return Boolean is
+     (not S.Quiet.Is_Empty
+      and then S.Quiet.Last_Element = Natural (S.Stack.Length));
 
    procedure Enqueue (S : in out Layout_Stream; T : Token) is
    begin
@@ -56,9 +67,13 @@ package body AHC.Layout is
    end Virtual;
 
    procedure Open_Implicit
-     (S : in out Layout_Stream; Indent : Positive; At_Token : Token) is
+     (S : in out Layout_Stream; Indent : Positive; At_Token : Token;
+      Quiet : Boolean := False) is
    begin
       S.Stack.Append (Indent);
+      if Quiet then
+         S.Quiet.Append (Natural (S.Stack.Length));
+      end if;
       S.Opens := S.Opens + 1;
       Enqueue (S, Virtual (V_Left_Brace, At_Token));
    end Open_Implicit;
@@ -123,6 +138,7 @@ package body AHC.Layout is
                if S.Await_Open then
                   --  {0} at end of input: an empty block.
                   S.Await_Open := False;
+                  S.Quiet_Open := False;
                   Open_And_Close_Empty (S, T);
                elsif not S.Stack.Is_Empty then
                   if Top (S) = 0 then
@@ -142,11 +158,13 @@ package body AHC.Layout is
                S.Await_Open := False;
                S.Newline_Done := True;  --  {n} supersedes T's <n>
                if S.Stack.Is_Empty or else N > Top (S) then
-                  Open_Implicit (S, N, T);
+                  Open_Implicit (S, N, T, Quiet => S.Quiet_Open);
+                  S.Quiet_Open := False;
                else
                   --  Note 2: the block is empty; T then still starts a
                   --  line for the enclosing context.
                   Open_And_Close_Empty (S, T);
+                  S.Quiet_Open := False;
                   S.Newline_Done := False;
                end if;
 
@@ -170,7 +188,9 @@ package body AHC.Layout is
                   Close_Implicit (S, T);
                elsif N = Top (S) then
                   S.Newline_Done := True;
-                  Enqueue (S, Virtual (V_Semicolon, T));
+                  if not Top_Is_Quiet (S) then
+                     Enqueue (S, Virtual (V_Semicolon, T));
+                  end if;
                elsif N < Top (S) then
                   Close_Implicit (S, T);  --  and re-check the new top
                else
@@ -232,8 +252,12 @@ package body AHC.Layout is
                      Enqueue (S, T);
                      --  MultiWayIf (M148): `if |` opens a layout block
                      --  for its guards, as GHC's multi-way if does.
+                     --  The block is quiet: GHC never puts a `;` between
+                     --  guards, so a guard or body continued at the
+                     --  `|` column goes on (M148 review).
                      if S.Input (S.I + 1).Kind = Pipe then
                         S.Await_Open := True;
+                        S.Quiet_Open := True;
                      end if;
 
                   when others =>

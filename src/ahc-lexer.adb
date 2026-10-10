@@ -275,14 +275,28 @@ package body AHC.Lexer is
          return Start;
       end Munch_Symbols;
 
+      --  `->` follows on this line (after blanks), as a whole symbol.
+      function Arrow_Follows return Boolean is
+         K : Natural := 0;
+      begin
+         while Peek (K) = ' ' or else Peek (K) = ASCII.HT loop
+            K := K + 1;
+         end loop;
+         return Peek (K) = '-' and then Peek (K + 1) = '>'
+           and then not Is_Symbol_Char (Peek (K + 2));
+      end Arrow_Follows;
+
       procedure Scan_Small_Ident is
          Start : constant Positive := Munch_Ident;
          Word  : constant String := Slice (Start, Pos);
          Kind  : constant Token_Kind := Word_Kind (Word);
       begin
+         --  `\cases` (M148) - but `\cases -> e` is Haskell 2010's
+         --  lambda with a parameter named `cases` (M148 review).
          if Kind = Varid and then Word = "cases"
            and then not Result.Is_Empty
            and then Result.Last_Element.Kind = Backslash
+           and then not Arrow_Follows
          then
             Emit_Plain (Kw_Cases, Start);   --  `\cases` (M148)
          elsif Kind = Varid then

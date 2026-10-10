@@ -57,6 +57,14 @@ package AHC.Inst_Match is
       I : Instance_Info) return Real_Type_Id
      with Pre => I.Head_Type /= No_Type or else I.Head /= No_TyCon;
 
+   --  T with each of Vars replaced by the type at its position in
+   --  Args - an instance context instantiated at a match (M148).
+   function Subst_Vars
+     (M    : in out Core_Module;
+      T    : Real_Type_Id;
+      Vars : TyVar_Id_Vectors.Vector;
+      Args : Type_Id_Vectors.Vector) return Real_Type_Id;
+
    --  Equal up to a consistent renaming of type variables: two such
    --  instance heads are a duplicate, not an overlap.
    function Heads_Equal

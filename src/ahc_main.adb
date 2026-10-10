@@ -7,9 +7,11 @@
 --
 --  Exit status: 0 on success, 1 on compilation errors, 2 on usage errors.
 
+with Ada.Characters.Handling;
 with Ada.Command_Line;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -332,11 +334,15 @@ procedure AHC_Main is
          use type AHC.Source_Text.Byte_Offset;
          use type AHC.Syntax.Decl_Kind;
 
+         --  The text between `{-#` and `#-}`. A span's Stop is one past
+         --  its `}`, and Slice's upper bound is exclusive too (M148
+         --  review: the inclusive bound cut the last letter of an
+         --  unspaced {-#OVERLAPPABLE#-}).
          function Inner_Of (Sp : AHC.Diagnostics.Source_Span) return String is
             From : constant Positive := Positive (Sp.Start) + 3;
-            To   : constant Natural  := Natural (Sp.Stop) - 4;
+            To   : constant Natural  := Natural (Sp.Stop) - 3;
          begin
-            if To < From then
+            if To <= From then
                return "";
             end if;
             return AHC.Source_Text.Slice
@@ -344,9 +350,11 @@ procedure AHC_Main is
                AHC.Source_Text.Byte_Offset (To));
          end Inner_Of;
 
+         --  Pragma names are case-insensitive in GHC: {-# overlappable #-}
+         --  counts (M148 review).
          function Kind_Of (Inner : String) return AHC.Syntax.Overlap_Pragma is
-            T : constant String := Ada.Strings.Fixed.Trim
-              (Inner, Ada.Strings.Both);
+            T : constant String := Ada.Characters.Handling.To_Upper
+              (Ada.Strings.Fixed.Trim (Inner, Ada.Strings.Both));
          begin
             if T = "OVERLAPPING" then
                return AHC.Syntax.Pragma_Overlapping;
@@ -359,18 +367,65 @@ procedure AHC_Main is
             end if;
             return AHC.Syntax.No_Pragma;
          end Kind_Of;
+
+         --  A module-wide extension, in order: `LANGUAGE` lists names,
+         --  `OPTIONS_GHC` -X flags; a No- form turns one off again
+         --  (M148 review: NoOverlappingInstances turned it on).
+         procedure Extension (Word : String) is
+         begin
+            if Word = "OverlappingInstances" then
+               Arena.Lang_Overlapping := True;
+            elsif Word = "NoOverlappingInstances" then
+               Arena.Lang_Overlapping := False;
+            elsif Word = "IncoherentInstances" then
+               Arena.Lang_Incoherent := True;
+            elsif Word = "NoIncoherentInstances" then
+               Arena.Lang_Incoherent := False;
+            end if;
+         end Extension;
+
+         procedure Module_Pragma (Inner : String) is
+            Separators : constant Ada.Strings.Maps.Character_Set :=
+              Ada.Strings.Maps.To_Set
+                (" ," & ASCII.HT & ASCII.LF & ASCII.CR);
+            First : Positive := Inner'First;
+            Last  : Natural;
+            Head  : Boolean := True;
+            Kind  : Natural := 0;   --  1 LANGUAGE, 2 OPTIONS_GHC
+         begin
+            while First <= Inner'Last loop
+               Ada.Strings.Fixed.Find_Token
+                 (Inner (First .. Inner'Last), Separators, Ada.Strings.Outside,
+                  First, Last);
+               exit when Last = 0;
+               declare
+                  W : constant String := Inner (First .. Last);
+               begin
+                  if Head then
+                     Head := False;
+                     if Ada.Characters.Handling.To_Upper (W) = "LANGUAGE"
+                     then
+                        Kind := 1;
+                     elsif Ada.Characters.Handling.To_Upper (W)
+                       = "OPTIONS_GHC"
+                     then
+                        Kind := 2;
+                     else
+                        return;
+                     end if;
+                  elsif Kind = 1 then
+                     Extension (W);
+                  elsif W'Length > 2 and then W (W'First .. W'First + 1) = "-X"
+                  then
+                     Extension (W (W'First + 2 .. W'Last));
+                  end if;
+               end;
+               First := Last + 1;
+            end loop;
+         end Module_Pragma;
       begin
          for Sp of Spans loop
-            declare
-               Inner : constant String := Inner_Of (Sp);
-            begin
-               if Ada.Strings.Fixed.Index (Inner, "LANGUAGE") > 0
-                 and then Ada.Strings.Fixed.Index
-                            (Inner, "OverlappingInstances") > 0
-               then
-                  Arena.Lang_Overlapping := True;
-               end if;
-            end;
+            Module_Pragma (Inner_Of (Sp));
          end loop;
          for D of Arena.Top_Decls loop
             declare

@@ -299,6 +299,48 @@ package body AHC.Inst_Match is
       return Go (A, B);
    end Heads_Equal;
 
+   ----------------
+   -- Subst_Vars --
+   ----------------
+
+   function Subst_Vars
+     (M    : in out Core_Module;
+      T    : Real_Type_Id;
+      Vars : TyVar_Id_Vectors.Vector;
+      Args : Type_Id_Vectors.Vector) return Real_Type_Id
+   is
+      N : constant Type_Node := M.Node (T);
+   begin
+      case N.Kind is
+         when TVar_T =>
+            for I in 1 .. Vars.Last_Index loop
+               if Real_TyVar_Id (Vars.Element (I)) = N.Tv
+                 and then I <= Args.Last_Index
+               then
+                  return Real_Type_Id (Args.Element (I));
+               end if;
+            end loop;
+            return T;
+         when TApp_T =>
+            declare
+               Fn : constant Real_Type_Id := Subst_Vars (M, N.T_Fun, Vars, Args);
+               Ar : constant Real_Type_Id := Subst_Vars (M, N.T_Arg, Vars, Args);
+            begin
+               return M.Add (Type_Node'(Kind => TApp_T, T_Fun => Fn,
+                                        T_Arg => Ar));
+            end;
+         when TFun_T =>
+            declare
+               Fr : constant Real_Type_Id := Subst_Vars (M, N.From, Vars, Args);
+               To : constant Real_Type_Id := Subst_Vars (M, N.To, Vars, Args);
+            begin
+               return M.Add (Type_Node'(Kind => TFun_T, From => Fr, To => To));
+            end;
+         when others =>
+            return T;
+      end case;
+   end Subst_Vars;
+
    -------------------
    -- More_Specific --
    -------------------

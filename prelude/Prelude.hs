@@ -408,11 +408,15 @@ lookup :: Eq a => a -> [(a, b)] -> Maybe b
 lookup _ [] = Nothing
 lookup k ((a, b) : rest) = if k == a then Just b else lookup k rest
 
+-- Right folds, so and/or/any/all stop at the first deciding element,
+-- infinite lists included (Report 9.1; a left fold never returned).
 andList_ :: [Bool] -> Bool
-andList_ = foldlList_ (&&) True
+andList_ [] = True
+andList_ (b : bs) = b && andList_ bs
 
 orList_ :: [Bool] -> Bool
-orList_ = foldlList_ (||) False
+orList_ [] = False
+orList_ (b : bs) = b || orList_ bs
 
 unwords :: [String] -> String
 unwords [] = ""
@@ -1265,7 +1269,7 @@ class Foldable t where
   foldr f z t = appEndo_ (foldMap (\x -> Endo_ (f x)) t) z
   null t = foldr (\_ _ -> False) True t
   length t = foldr (\_ n -> n + 1) 0 t
-  foldl f z t = foldlList_ f z (toListF_ t)
+  foldl f z t = appDualEndo_ (foldMap (\x -> DualEndo_ (\acc -> f acc x)) t) z
   elem e t = elemList_ e (toListF_ t)
   sum t = sumList_ (toListF_ t)
   product t = productList_ (toListF_ t)
@@ -1284,6 +1288,20 @@ instance Semigroup (Endo_ b) where
 
 instance Monoid (Endo_ b) where
   mempty = Endo_ (\x -> x)
+
+-- base's Dual (Endo b): composition the other way round, so the
+-- default foldl is base's - lazy in the elements to its left, which a
+-- left-recursive structure needs (M148 review).
+newtype DualEndo_ b = DualEndo_ (b -> b)
+
+appDualEndo_ :: DualEndo_ b -> b -> b
+appDualEndo_ (DualEndo_ f) = f
+
+instance Semigroup (DualEndo_ b) where
+  DualEndo_ f <> DualEndo_ g = DualEndo_ (\x -> g (f x))
+
+instance Monoid (DualEndo_ b) where
+  mempty = DualEndo_ (\x -> x)
 
 foldr1Default_ :: Foldable t => (a -> a -> a) -> t a -> a
 foldr1Default_ f t =

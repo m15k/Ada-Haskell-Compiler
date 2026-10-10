@@ -653,6 +653,65 @@ package body AHC.Rename is
       --  label names the field even where a local of the same name -
       --  typically a NamedFieldPuns binding - shadows its selector, as
       --  in GHC: `f p@P{px} = p { px = px + 1 }`.
+      --  The selector of field FI, or No_Var when none was recorded.
+      function Sel_Of (DI : Core.DataCon_Info; FI : Positive)
+        return Core.Var_Id
+      is (if FI <= DI.Field_Sels.Last_Index then DI.Field_Sels (FI)
+          else Core.No_Var);
+
+      --  `C{..}` where C has no labelled fields (GHC rejects it).
+      procedure No_Fields_Dotdot (Span : Diagnostics.Source_Span) is
+      begin
+         Bag.Add (Diagnostics.Error, Diagnostics.Rename_Field_Error, Span,
+                  "illegal '..' notation: the constructor has no "
+                  & "labelled fields");
+      end No_Fields_Dotdot;
+
+      --  RecordWildCards (M148 review): `..` covers only the fields
+      --  in scope under some qualification - GHC's rule - so a field
+      --  an import list hides is neither bound nor filled.
+      function Field_Visible (FN : Names.Name_Id; Sel : Core.Var_Id)
+        return Boolean
+      is
+         function Is_Sel (C : Builtins.Var_Maps.Cursor) return Boolean is
+           (Builtins.Var_Maps.Has_Element (C)
+            and then (Sel = Core.No_Var
+                      or else Core.Var_Id (Builtins.Var_Maps.Element (C))
+                                = Sel));
+      begin
+         if not Modular or else Is_Sel (Own.Values.Find (FN))
+           or else Is_Sel (Pre.Values.Find (FN))
+         then
+            return True;
+         end if;
+         for V of Imp_Views loop
+            if Is_Sel (V.Visible.Values.Find (FN)) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Field_Visible;
+
+      --  The LOCAL variable of this name, or No_Var: a wildcard in an
+      --  expression is filled only from local bindings, never from a
+      --  top-level or imported one (GHC; M148 review).
+      function Local_Value (Name : Names.Name_Id) return Core.Var_Id is
+      begin
+         for I in reverse 1 .. Scopes.Last_Index loop
+            declare
+               C : constant Scope_Maps.Cursor := Scopes (I).Find (Name);
+            begin
+               if Scope_Maps.Has_Element (C) then
+                  if M.Info (Scope_Maps.Element (C)).Is_Global then
+                     return Core.No_Var;
+                  end if;
+                  return Core.Var_Id (Scope_Maps.Element (C));
+               end if;
+            end;
+         end loop;
+         return Core.No_Var;
+      end Local_Value;
+
       function Lookup_Value
         (Q : QName; Span : Diagnostics.Source_Span;
          Quiet : Boolean := False;
@@ -1118,16 +1177,26 @@ package body AHC.Rename is
                   if N.Rec_Dotdot and then R.Kind = Data_Res then
                      declare
                         Wild : Wild_Vectors.Vector;
+                        DI : constant Core.DataCon_Info := M.Info (R.Con);
                      begin
-                        for FN of M.Info (R.Con).Field_Names loop
-                           if not (for some F of N.Rec_Fields =>
-                                     F.Field.Name = FN)
-                           then
-                              Wild.Append
-                                (Wild_Entry'(Field => FN,
-                                             Var => Core.Var_Id
-                                               (Bind_Var_Of (FN, N.Span))));
-                           end if;
+                        if DI.Field_Names.Is_Empty then
+                           No_Fields_Dotdot (N.Span);
+                        end if;
+                        for FI in 1 .. DI.Field_Names.Last_Index loop
+                           declare
+                              FN : constant Names.Name_Id :=
+                                DI.Field_Names (FI);
+                           begin
+                              if not (for some F of N.Rec_Fields =>
+                                        F.Field.Name = FN)
+                                and then Field_Visible (FN, Sel_Of (DI, FI))
+                              then
+                                 Wild.Append
+                                   (Wild_Entry'(Field => FN,
+                                                Var => Core.Var_Id
+                                                  (Bind_Var_Of (FN, N.Span))));
+                              end if;
+                           end;
                         end loop;
                         Res.Wild_Pat.Include (Positive (Id), Wild);
                      end;
@@ -1367,28 +1436,32 @@ package body AHC.Rename is
                         Wild : Wild_Vectors.Vector;
                      begin
                         if BR.Kind = Data_Res then
-                           for FN of M.Info (BR.Con).Field_Names loop
-                              if not (for some F of N.Rec_Fields =>
-                                        F.Field.Name = FN)
-                              then
-                                 declare
-                                    VR : constant Resolution :=
-                                      Lookup_Value
-                                        ((Name => FN,
-                                          Qualifier => Names.No_Name),
-                                         N.Span, Quiet => True);
-                                 begin
-                                    if VR.Kind = Var_Res
-                                      and then not M.Info (VR.Var).Is_Field
-                                    then
-                                       Wild.Append
-                                         (Wild_Entry'(Field => FN,
-                                                      Var => Core.Var_Id
-                                                        (VR.Var)));
-                                    end if;
-                                 end;
-                              end if;
+                           declare
+                              DI : constant Core.DataCon_Info :=
+                                M.Info (BR.Con);
+                           begin
+                           if DI.Field_Names.Is_Empty then
+                              No_Fields_Dotdot (N.Span);
+                           end if;
+                           for FI in 1 .. DI.Field_Names.Last_Index loop
+                              declare
+                                 FN : constant Names.Name_Id :=
+                                   DI.Field_Names (FI);
+                                 LV : constant Core.Var_Id :=
+                                   Local_Value (FN);
+                              begin
+                                 if not (for some F of N.Rec_Fields =>
+                                           F.Field.Name = FN)
+                                   and then Field_Visible
+                                     (FN, Sel_Of (DI, FI))
+                                   and then LV /= Core.No_Var
+                                 then
+                                    Wild.Append
+                                      (Wild_Entry'(Field => FN, Var => LV));
+                                 end if;
+                              end;
                            end loop;
+                           end;
                         end if;
                         Res.Wild_Expr.Include (Positive (Id), Wild);
                      end;
@@ -1660,45 +1733,6 @@ package body AHC.Rename is
             end;
          end Eta_OK;
 
-         --  GHC's inferred context: a type variable applied with the last
-         --  parameter among its arguments (`f a`, `g (h a)`) needs the
-         --  class itself; constructor heads resolve when the synthesized
-         --  code is typechecked.
-         procedure Functor_Context_Vars
-           (T : Real_Type_Id; Into : in out Core.Name_Id_Vectors.Vector)
-         is
-            TN : constant Type_Node := Arena.Node (T);
-         begin
-            case TN.Kind is
-               when App_T =>
-                  declare
-                     H : Real_Type_Id := TN.Fun;
-                  begin
-                     while Arena.Node (H).Kind = App_T loop
-                        H := Arena.Node (H).Fun;
-                     end loop;
-                     if Arena.Node (H).Kind = Var_T
-                       and then Arena.Node (H).Var /= Last_Var
-                       and then Occurs_Syn (Last_Var, T)
-                       and then not Into.Contains (Arena.Node (H).Var)
-                     then
-                        Into.Append (Arena.Node (H).Var);
-                     end if;
-                  end;
-                  Functor_Context_Vars (TN.Fun, Into);
-                  Functor_Context_Vars (TN.Arg, Into);
-               when Fun_T =>
-                  Functor_Context_Vars (TN.To, Into);
-               when List_T =>
-                  Functor_Context_Vars (TN.Elem, Into);
-               when Tuple_T =>
-                  for I of TN.Items loop
-                     Functor_Context_Vars (I, Into);
-                  end loop;
-               when others =>
-                  null;
-            end case;
-         end Functor_Context_Vars;
          TC : Core.Real_TyCon_Id;
          Type_Fields : Scope_Maps.Map;   --  field -> this type's selector
       begin
@@ -1916,13 +1950,7 @@ package body AHC.Rename is
                      Ignore : Core.Real_Instance_Id;
                      FF : constant Core.Stock_Derive_Kind :=
                        Functor_Family (C);
-                     Ctx_Vars : Core.Name_Id_Vectors.Vector;
                   begin
-                     if Core."/=" (FF, Core.No_Stock_Derive) then
-                        for FT of Field_Types loop
-                           Functor_Context_Vars (FT, Ctx_Vars);
-                        end loop;
-                     end if;
                      for VQ of N.D_Vars loop
                         --  A constructor class (M148) covers the LAST
                         --  parameter: it is not a head variable.
@@ -1938,9 +1966,10 @@ package body AHC.Rename is
                                (Kind => Core.TVar_T, Tv => Tv));
                         begin
                            Vars.Append (Tv);
-                           if Core."=" (FF, Core.No_Stock_Derive)
-                             or else Ctx_Vars.Contains (VQ.Name)
-                           then
+                           --  A constructor class's context is
+                           --  inferred by AHC.Derive_Functor, through
+                           --  the field types' instances (M148 review).
+                           if Core."=" (FF, Core.No_Stock_Derive) then
                               Ctx.Append
                                 (Core.Constraint'
                                    (Class => Cl, Arg => TvT,
@@ -2190,7 +2219,8 @@ package body AHC.Rename is
                when Syntax.No_Pragma           => null;
             end case;
          end if;
-         return (if Arena.Lang_Overlapping then Core.Overlaps
+         return (if Arena.Lang_Incoherent then Core.Incoherent
+                 elsif Arena.Lang_Overlapping then Core.Overlaps
                  else Core.No_Overlap);
       end Overlap_Of;
 
@@ -2491,12 +2521,20 @@ package body AHC.Rename is
                               Hit := True;
                               if E.Sub_All or else E.Has_Subs then
                                  --  T(..) / T(A, f): constructors
-                                 --  and selectors travel with T.
+                                 --  and selectors travel with T -
+                                 --  T(A, f) only the ones it lists
+                                 --  (Report 5.3.1; M148 review: every
+                                 --  field came along).
                                  declare
                                     TC : constant
                                       Core.Real_TyCon_Id :=
                                         Builtins.TyCon_Maps.Element
                                           (TCC);
+                                    function Listed
+                                      (N : Names.Name_Id) return Boolean
+                                    is (E.Sub_All
+                                        or else (for some Q of E.Subs =>
+                                                   Q.Name = N));
                                  begin
                                     for DCI of M.Info (TC).Cons loop
                                        declare
@@ -2512,6 +2550,7 @@ package body AHC.Rename is
                                        begin
                                           if Builtins.DataCon_Maps
                                             .Has_Element (DCC)
+                                            and then Listed (DI.Name)
                                           then
                                              View.Visible.DataCons
                                                .Include (DI.Name,
@@ -2539,6 +2578,7 @@ package body AHC.Rename is
                                                     .Var_Maps.Element
                                                       (FC)
                                                     = DI.Field_Sels (FI)
+                                                  and then Listed (FN)
                                                 then
                                                    View.Visible.Values
                                                      .Include (FN,
@@ -3054,11 +3094,21 @@ package body AHC.Rename is
                                            M.Info
                                              (Core.Real_DataCon_Id
                                                 (DCI));
+                                       --  T(A, f) exports only what it
+                                       --  lists (Report 5.2; M148
+                                       --  review).
+                                       function Listed
+                                         (N : Names.Name_Id) return Boolean
+                                       is (E.Sub_All
+                                           or else (for some Q of E.Subs =>
+                                                      Q.Name = N));
                                     begin
-                                       Exp_DataCon
-                                         (DI.Name,
-                                          Core.Real_DataCon_Id
-                                            (DCI));
+                                       if Listed (DI.Name) then
+                                          Exp_DataCon
+                                            (DI.Name,
+                                             Core.Real_DataCon_Id
+                                               (DCI));
+                                       end if;
                                        --  The type's own field
                                        --  selectors - not whatever
                                        --  this module calls by that
@@ -3066,9 +3116,12 @@ package body AHC.Rename is
                                        for FI in
                                          1 .. DI.Field_Sels.Last_Index
                                        loop
-                                          Exp_Value
-                                            (DI.Field_Names (FI),
-                                             DI.Field_Sels (FI));
+                                          if Listed (DI.Field_Names (FI))
+                                          then
+                                             Exp_Value
+                                               (DI.Field_Names (FI),
+                                                DI.Field_Sels (FI));
+                                          end if;
                                        end loop;
                                     end;
                                  end loop;

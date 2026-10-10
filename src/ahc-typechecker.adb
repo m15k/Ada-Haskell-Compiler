@@ -85,6 +85,10 @@ package body AHC.Typechecker is
       W_List : Wanted_Vectors.Vector;
       Current_Owner : Var_Id := No_Var;
       Probing : Boolean := False;
+      --  The solve before a binding group generalizes: what is still
+      --  unknown now is quantified or defaulted, never learned, so an
+      --  INCOHERENT match commits, as GHC's does (M148 review).
+      Group_End : Boolean := False;
 
       --  Dictionary-lambda wraps to apply at the end: binder -> params.
       type Wrap_Rec is record
@@ -745,6 +749,52 @@ package body AHC.Typechecker is
 
       function Match_TC is new Inst_Match.Match_Instance (Norm_TC);
 
+      --  GHC's Note [Binding when looking up instances]: the type
+      --  variables of an instance declaration never unify with another
+      --  instance's head, so `Show (Either a b)` inside its own
+      --  instance is not blocked by a user `Show (Either Int Int)`
+      --  (M148 review). An instance's Head_Vars are minted for it
+      --  alone, so being one identifies such a variable.
+      function Is_Instance_Var (Tv : Real_TyVar_Id) return Boolean is
+      begin
+         for J in 1 .. M.Last_Instance loop
+            if M.Info (Real_Instance_Id (J)).Head_Vars.Contains
+                 (TyVar_Id (Tv))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Is_Instance_Var;
+
+      function Has_Meta (T : Real_Type_Id) return Boolean is
+         N : constant Type_Node := M.Node (Repr (T));
+      begin
+         case N.Kind is
+            when TMeta_T => return True;
+            when TApp_T => return Has_Meta (N.T_Fun) or else Has_Meta (N.T_Arg);
+            when TFun_T => return Has_Meta (N.From) or else Has_Meta (N.To);
+            when others => return False;
+         end case;
+      end Has_Meta;
+
+      --  T has no metavariable and every type variable in it is an
+      --  instance declaration's: an Undecided match against T is a
+      --  No_Match.
+      function Only_Apart_Vars (T : Real_Type_Id) return Boolean is
+         N : constant Type_Node := M.Node (Repr (T));
+      begin
+         case N.Kind is
+            when TMeta_T => return False;
+            when TVar_T => return Is_Instance_Var (N.Tv);
+            when TApp_T => return Only_Apart_Vars (N.T_Fun)
+                             and then Only_Apart_Vars (N.T_Arg);
+            when TFun_T => return Only_Apart_Vars (N.From)
+                             and then Only_Apart_Vars (N.To);
+            when others => return True;
+         end case;
+      end Only_Apart_Vars;
+
       --  Reduce wanted I to HNF, recording its evidence shape.
       --  Unsolved entries have tyvar/meta heads (residuals).
       procedure Solve (I : Positive; Depth : Natural) is
@@ -860,8 +910,12 @@ package body AHC.Typechecker is
                            Append (Heads, Type_Str (IT));
                         end if;
                      when Inst_Match.Undecided =>
-                        --  An INCOHERENT instance never blocks (M148).
-                        if Inst.Overlap /= Incoherent then
+                        --  An INCOHERENT instance never blocks (M148),
+                        --  nor does one only an instance declaration's
+                        --  own variables keep undecided.
+                        if Inst.Overlap /= Incoherent
+                          and then not Only_Apart_Vars (W.C.Arg)
+                        then
                            Pending := True;
                         end if;
                      when Inst_Match.No_Match =>
@@ -896,9 +950,13 @@ package body AHC.Typechecker is
                end;
             end if;
             --  An INCOHERENT choice ignores the instances that might
-            --  match later (GHC's lookupInstEnv).
+            --  match later (GHC's lookupInstEnv) - once the wanted is
+            --  fully known: GHC solves after unification, so a
+            --  metavariable still open here may yet pick a more
+            --  specific instance (M148 review).
             if Hits = 1
               and then M.Info (Hit).Overlap = Incoherent
+              and then (Group_End or else not Has_Meta (W.C.Arg))
             then
                Pending := False;
             end if;
@@ -1600,9 +1658,17 @@ package body AHC.Typechecker is
 
          --  Solve the group's wanteds, then generalize with a shared
          --  quantifier set and context.
+         --  An ordinary pass first, so what other wanteds pin (an
+         --  IsString literal's element, say) is known before an
+         --  INCOHERENT match may commit in the second.
          for I in W_Mark + 1 .. W_List.Last_Index loop
             Solve (I, 0);
          end loop;
+         Group_End := True;
+         for I in W_Mark + 1 .. W_List.Last_Index loop
+            Solve (I, 0);
+         end loop;
+         Group_End := False;
 
          declare
             Subst : Meta_Type_Maps.Map;
@@ -2039,6 +2105,7 @@ package body AHC.Typechecker is
                         Hit_Ids.Append (J);
                      elsif Inst_Match."=" (MR, Inst_Match.Undecided)
                        and then M.Info (J).Overlap /= Incoherent
+                       and then not Only_Apart_Vars (T)
                      then
                         Pending := True;
                      end if;
