@@ -916,3 +916,21 @@ verdict paragraph.
     CLOSED.
   - Memory: update ahc-classes with matching, GND and overlap.
 - [ ] **F4 Release v1.18,** with the user's go-ahead.
+
+---
+
+**Verdict (2026-10-10): GO as of d5983b4.** Phases A to D landed as
+planned, with these changes:
+
+- **Phase B** needed the Haskell 2010 spine rule kept for wired and
+  stock-derived instances. Building full heads for those broke
+  `IsString [a]`.
+- **Phase C's** bench was folded into Phase E's.
+- **Phase E:** milestone gate green, bench within noise, scout recorded
+  in CHANGES and repos-to-try.
+- **Adversarial review:** four reviewers found 20 defects, all fixed in
+  one commit with 29 new tests, then the full gate re-run green.
+- **Not fixed:** the pre-existing structural Eq/Ord divergence the
+  review confirmed is recorded in EXCLUSIONS for its own milestone.
+- **Security pass:** not required. FFI marshalling is unchanged;
+  newtypes in FFI signatures stay rejected.

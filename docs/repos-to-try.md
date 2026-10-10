@@ -321,9 +321,22 @@ Re-ordered after round two, by how often it actually came up across
   be done short of the module existing in `lib/`.
 - **Extensions.** `LambdaCase` and `TemplateHaskell` led round two,
   then `FlexibleInstances`, `TypeSynonymInstances`, `InstanceSigs`,
-  `GeneralizedNewtypeDeriving`. (`OverloadedStrings` is CLOSED —
-  AHC's literal overloading is unconditional, so a module carrying
-  the pragma just works.)
+  `GeneralizedNewtypeDeriving`. CLOSED by M147: `LambdaCase`,
+  `FlexibleInstances`, `TypeSynonymInstances` and
+  `GeneralizedNewtypeDeriving` (always on; `InstanceSigs` and
+  `OverloadedStrings` already worked). The M147 scout tried 203
+  small repos: 38 used these extensions, and almost every one ALSO
+  needed something still missing. In descending order:
+  - `TemplateHaskell`;
+  - `FlexibleContexts` (as a pragma, which the scout filter rejects);
+  - `OverlappingInstances`;
+  - `TupleSections`, `RecordWildCards`, `MultiWayIf`;
+  - `DeriveFunctor`/`DeriveGeneric`;
+  - Parsec and Data.Vector as dependencies.
+
+  That list is the next extension round. One more gap the scout found
+  in passing: an operator at a do block's statement column, which GHC's
+  parse-error(t) layout rule handles (EXCLUSIONS 10.3).
 - ~~**The flat type and constructor namespace**~~ CLOSED by M75.
   Two modules may declare the same type, constructor, class, synonym
   or record field, and qualified imports disambiguate them —

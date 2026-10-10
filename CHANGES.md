@@ -1,5 +1,83 @@
 # AHC Changelog
 
+## v1.18 (unreleased)
+
+**M147 - GHC extensions: LambdaCase, FlexibleInstances,
+TypeSynonymInstances, GeneralizedNewtypeDeriving.** After Hackage
+dependencies, extensions are what most often stops real repositories.
+These four now work, always on (AHC ignores `LANGUAGE` pragmas, as it
+already did for OverloadedStrings).
+
+- **`\case`** is parsed as a lambda over a case, on a binder no
+  program can spell. Layout opens a block after `\case` as after
+  `of`.
+- **Instance heads may be any type:** `instance C [Char]`,
+  `C (Maybe Int)` beside `C (Maybe Bool)`, `C String`, even `C a`.
+  - Instances are chosen by one-way matching of the full head. One
+    function decides it for the typechecker, the elaborator, the
+    duplicate check and deriving, so they cannot disagree.
+  - Overlap follows GHC: overlapping declarations are fine, and a use
+    that matches two instances is an error. So is one that could match
+    a more specific instance once a type variable is known.
+  - Constraints that cannot be reduced yet (`C (Maybe t)`) join an
+    inferred context, and givens are compared structurally.
+- **Newtypes are erased at run time**, Report 4.2.3. The constructor is
+  the identity and a case on it never forces, so `N undefined `seq` x`
+  diverges as in GHC; v1.17 returned `x`. A newtype must have exactly
+  one non-strict field.
+- **GeneralizedNewtypeDeriving:** a newtype derives every class but
+  Show and Read (which stay stock) through its representation's
+  instance.
+  - For `Functor`/`Applicative`/`Monad` the representation is
+    eta-reduced first, including function representations
+    (`newtype R e a = R (e -> a)`).
+  - The derived context is reduced to type variables.
+  - The superclass slots are the newtype's own instances.
+
+**The adversarial review found 20 defects after a green gate** (d5983b4),
+all fixed and pinned by 17 conformance programs, 11 corpus-types rejects
+and an exec test.
+- Three ran as `$dMISSING` at run time:
+  - a constraint left undecided in a helper with no signature;
+  - a flexible `Monad` without `return`;
+  - a GND context copied unreduced.
+- A GND dictionary took its superclass slots from the representation,
+  giving wrong answers with a hand-written superclass instance.
+- Malformed newtypes miscompiled once erased.
+- `\cases` silently meant something else.
+- An explicit `}` could not close an implicit `\case` block.
+- `in` at a let block's column did not close it, found by the scout.
+
+**Scout:** 203 small repos searched, 38 use these extensions. Almost
+all of them also need something still missing:
+- TemplateHaskell;
+- FlexibleContexts as a pragma;
+- OverlappingInstances;
+- TupleSections, RecordWildCards, MultiWayIf;
+- DeriveFunctor;
+- Parsec.
+
+That is the next round (docs/repos-to-try.md).
+
+**Recorded in EXCLUSIONS, not fixed:**
+- Derived and wired Eq/Ord compare structurally and ignore user
+  instances of the component types (old and serious; its own
+  milestone).
+- `\cases`, EmptyCase and stock DeriveFunctor are absent; GHC2021
+  enables them.
+- An operator at a do block's statement column does not close the
+  block.
+- Ill-typed unreachable alternatives are accepted.
+
+**Bench against v1.17** (interleaved best of 5): within noise
+everywhere. `b_sort` is -3%. `b_bignum`'s +9% (4 ms) retires the same
+instructions within 0.3%.
+
+**Gate:** full suites in both GC modes on the release build, goldens on
+both builds, both differential suites, repl, examples, bindgen,
+separate, export, userlib, TSan, the own soak with `AHC_OWN_VERIFY=1`,
+fuzz 300/300.
+
 ## v1.17 (2026-10-09)
 
 **M146 - Int is a machine integer.** AHC's `Int` used to share

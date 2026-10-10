@@ -681,6 +681,66 @@ comprehensible compiler — the small typechecker wins decisively.
 
 ---
 
+### Beyond Haskell 2010: instance heads, GND, newtypes (M147)
+
+Haskell 2010 limits an instance head to `C (T a1 .. an)` with distinct
+variables. That is why AHC used to find instances by the pair (class,
+head type constructor). GHC's FlexibleInstances and TypeSynonymInstances
+lift the limit (`instance C [Char]`, `instance C (Maybe Int)`,
+`instance C String`, even `instance C a`), and GHC 9.4's default
+language turns them on. AHC accepts them unconditionally.
+
+**Instances are now chosen by matching.** A source instance keeps its
+full head type, with synonyms expanded, and one function
+(`AHC.Inst_Match.Match_Instance`) decides selection everywhere: the
+typechecker, the elaborator, the duplicate check and newtype deriving.
+That way they can never disagree. Matching is one-way: the instance's
+variables bind, the wanted type's do not. The answer is three-valued:
+
+- **Matched:** the instance applies.
+- **No match:** no instantiation of the head equals the type.
+- **Undecided:** it might match once a type becomes known. That is the
+  case when an unsolved metavariable, or a rigid type variable of a
+  signature, sits where the head has structure.
+
+An undecided wanted waits. If it is still undecided at the end, it is
+an error, which is GHC's rule against incoherent choices. Two matching
+instances make an overlap error at the use, while overlapping
+*declarations* alone are fine, as in GHC. Wired and stock-derived
+instances keep the old constructor-and-position rule, which is exactly
+what `Functor Maybe` and `IsString [a]` always meant.
+
+A constraint that cannot be reduced yet, such as `C (Maybe t)` in a
+local function without a signature, joins the inferred type's context,
+as GHC infers it. Given constraints are compared structurally, so
+`C (Maybe a) =>` in a signature is usable.
+
+**Newtypes are erased.** A newtype's constructor is the identity at
+run time, and a case on it binds its field without forcing anything.
+That is Report 4.2.3's semantics: `N undefined `seq` ()` diverges. The
+erasure happens in code generation, so every producer of Core gets it
+for free: desugared patterns, derived Show and Read, record selectors.
+It also requires that a newtype really has one non-strict field, which
+the parser now insists on.
+
+**GeneralizedNewtypeDeriving** follows from erasure: `newtype Age = Age
+Int deriving (Num)` can use Int's methods unchanged. Every class except
+Show and Read, which stay stock, derives this way.
+
+- **Constructor classes.** For `Functor`, `Monad` and the like, the
+  representation is eta-reduced first: `newtype W a = W (Maybe a)`
+  uses `Functor Maybe`, and `newtype R e a = R (e -> a)` uses
+  `(->) e`.
+- **Context.** The derived instance's context is the representation's,
+  reduced to type variables.
+- **Superclass slots** are the newtype's own instances, not the
+  representation's. With a hand-written `Eq Age`, `==` through an
+  `Ord Age` dictionary is Age's, as in GHC.
+
+`\case` is the smallest of the four: the parser reads `\case alts` as
+`\lc$ -> case lc$ of alts`. No program can spell `lc$`, so it can
+neither capture nor be captured, and no later pass needed to change.
+
 ## 7. Desugaring
 
 ### The idea: a small core language
