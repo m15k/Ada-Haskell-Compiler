@@ -578,6 +578,15 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.18** — the extensions release (M147): `LambdaCase`,
+  `FlexibleInstances`, `TypeSynonymInstances` and
+  `GeneralizedNewtypeDeriving`, always on as in GHC 9.4.8. Instance
+  heads may be any type and are chosen by one-way matching with GHC's
+  overlap rule; newtypes are erased at run time (Report 4.2.3, so
+  `N undefined `seq` x` now diverges as in GHC), which lets a newtype
+  derive any class through its representation's instance. An
+  adversarial review found twenty defects after a green gate, three of
+  them run-time crashes, all fixed and pinned.
 - **v1.17** — the machine-Int release (M146): `Int` is a 64-bit
   integer that wraps like GHC's (`maxBound + 1` is `minBound`,
   `fromInteger` narrows, ``minBound `div` (-1)`` raises

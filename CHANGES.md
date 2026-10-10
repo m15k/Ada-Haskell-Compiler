@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.18 (unreleased)
+## v1.18 (2026-10-10)
 
 **M147 - GHC extensions: LambdaCase, FlexibleInstances,
 TypeSynonymInstances, GeneralizedNewtypeDeriving.** After Hackage
