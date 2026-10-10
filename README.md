@@ -125,8 +125,11 @@ GHC replacement. Read that as a promise and a limit:
   AHC does not implement is written down in
   [`tests/conformance/EXCLUSIONS.md`](tests/conformance/EXCLUSIONS.md)
   rather than tested weakly.
-- **The limit.** No GHC extensions, no `base` beyond the subset in
-  `lib/`, and no Hackage — a program's dependencies are the modules
+- **The limit.** Only the GHC extensions EXCLUSIONS lists as
+  supported (OverloadedStrings, InstanceSigs, LambdaCase,
+  FlexibleInstances, TypeSynonymInstances, GeneralizedNewtypeDeriving,
+  FlexibleContexts - always on, since AHC ignores `LANGUAGE`
+  pragmas), no `base` beyond the subset in `lib/`, and no Hackage — a program's dependencies are the modules
   beside it, AHC's own standard library, and the module trees its
   `ahc.toml` names: local paths (M134) or git repositories with
   Go-style minimal version selection and an `ahc.sum` (M135). Programs using
@@ -222,9 +225,11 @@ second evaluator, so the REPL cannot disagree with the compiler
 
 ## Language coverage highlights
 
-**The numeric tower is real classes**: Integral (instances at Int and
-Integer — the canonical bignum representation lets both bind the same
-promoting prims, with toInteger the identity), Floating and RealFrac
+**The numeric tower is real classes**: Integral (superclasses Real
+and Enum, as the Report says; instances at Int, which wraps at 64
+bits like GHC's, and Integer, which is exact; toInteger is the
+identity because an Int is always a valid Integer node), Floating
+and RealFrac
 (instances at Double: sqrt, pi, exp/log, `**`, logBase, trig,
 hyperbolics, floor/ceiling/round/truncate with round-to-even, results
 at Integer), plus RealFloat and properFraction. fromIntegral is
@@ -241,14 +246,16 @@ fixed-vs-scientific switch (`0.1 + 0.2` prints 0.30000000000000004;
 Data.Ratio, printed GHC-style as `1 % 2`.
 
 **Integer is arbitrary-precision**: a hand-rolled sign+magnitude
-bignum (uint32 limbs) lives in the runtime, and every integer
+bignum (uint32 limbs) lives in the runtime, and every Integer
 primitive takes the C-long fast path until overflow promotes —
 `product [1 .. 25]`, 2^100 and 30-digit literals print exactly what
 GHC prints, including floored div/mod on negative bignums. Values are
 canonical (anything that fits a long stays a plain int node), so
 comparisons, Show and the structural Eq/Ord see mixed representations
-transparently. Int overflow promotes rather than wrapping — behavior
-the Report leaves undefined.
+transparently. Int is a separate 64-bit machine integer since M146:
+its arithmetic wraps modulo 2^64 and `fromInteger` narrows, as GHC's
+(`maxBound + 1 :: Int` is `minBound`); the fixed-width types compute
+in Integer and narrow.
 
 **Show is Report-complete where it counts**: showsPrec/showList are
 real methods, strings print as escaped string literals (`show "ab"`
