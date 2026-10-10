@@ -42,9 +42,9 @@ filter_dir() {
   # tr -d '\r' everywhere: a CRLF repo would otherwise leave the
   # carriage return on the module name and every import would look
   # foreign (the filter rejected Data.Char on its first outing).
-  # Extensions AHC accepts, always on (M147 and earlier): a repo using
+  # Extensions AHC accepts, always on (M148 and earlier): a repo using
   # only these is a candidate.
-  local ok_ext='^(LambdaCase|FlexibleInstances|TypeSynonymInstances|GeneralizedNewtypeDeriving|GeneralisedNewtypeDeriving|InstanceSigs|OverloadedStrings)$'
+  local ok_ext='^(LambdaCase|FlexibleInstances|TypeSynonymInstances|GeneralizedNewtypeDeriving|GeneralisedNewtypeDeriving|InstanceSigs|OverloadedStrings|FlexibleContexts|TupleSections|MultiWayIf|EmptyCase|RecordWildCards|NamedFieldPuns|DeriveFunctor|DeriveFoldable|DeriveTraversable|OverlappingInstances)$'
   pragmas=$(grep -h '{-# *LANGUAGE' $hs 2>/dev/null \
             | sed 's/.*LANGUAGE *//; s/ *#-}.*//' | tr ',' '\n' \
             | tr -d ' \r' | sort -u | grep -v '^$' | grep -Ev "$ok_ext")
