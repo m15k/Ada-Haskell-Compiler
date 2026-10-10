@@ -13,7 +13,8 @@
 -- Int arithmetic wraps at 64 bits on both compilers (M146), so Int
 -- literals and products reach the bounds; partial functions are never
 -- emitted (division is guarded against 0, and at Int against -1,
--- whose quotient of minBound overflows, maximum/minimum get a consed head,
+-- whose quotient of minBound overflows; gcd/lcm at Int are kept off
+-- minBound for the same reason), maximum/minimum get a consed head,
 -- recursion is structural on the tail). Text literals range over
 -- Unicode incl. cased letters (Data.Char is table-exact vs GHC).
 module Main where
@@ -370,10 +371,17 @@ node sz env t = freq (common sz env t ++ own)
                  return (binOp "*" a (show (l + 2))))
         , (2, guarded TInt "0" "1" ["div", "mod", "quot", "rem"])
         , (1, unary TInt ["abs", "negate", "signum"])
-        , (1, do f <- pick ["min", "max", "gcd", "lcm"]
+        , (1, do f <- pick ["min", "max"]
                  a <- sub TInt
                  b <- sub TInt
                  return ("(" ++ f ++ " " ++ a ++ " " ++ b ++ ")"))
+          -- gcd/lcm at Int overflow on minBound (GHC raises
+          -- "arithmetic overflow"): clamp both arguments above it
+        , (1, do f <- pick ["gcd", "lcm"]
+                 a <- sub TInt
+                 b <- sub TInt
+                 let clamp x = "(max (-9223372036854775807) " ++ x ++ ")"
+                 return ("(" ++ f ++ " " ++ clamp a ++ " " ++ clamp b ++ ")"))
         , (1, do et <- scalarTy
                  l  <- sub (TList et)
                  return ("(length (" ++ l ++ " :: ["
