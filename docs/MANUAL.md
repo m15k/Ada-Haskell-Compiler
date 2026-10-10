@@ -741,6 +741,66 @@ Show and Read, which stay stock, derives this way.
 `\lc$ -> case lc$ of alts`. No program can spell `lc$`, so it can
 neither capture nor be captured, and no later pass needed to change.
 
+### The second extension round (M148)
+
+M148 adds the extensions the M147 scout found next, all always on.
+Only the overlap extensions read a pragma.
+
+**Syntax, as parser rewrites.** Each one becomes ordinary syntax on
+binders no program can spell, so no later pass changed:
+
+- **TupleSections:** `(,x)` is `\ts1$ -> (ts1$, x)`.
+- **MultiWayIf:** `if | g1 -> e1 | g2 -> e2` is a guarded `case ()`.
+  A failure reads "non-exhaustive guards in multi-way if". Its guards
+  sit in a *quiet* layout block: like GHC's, that block closes
+  normally but never inserts `;`. So a guard or body continued at the
+  `|` column carries on.
+- **`\cases`:** a lambda over a case on right-nested pairs of its
+  arguments, so any arity works. `\cases -> e` is still Haskell 2010's
+  lambda with a parameter named `cases`.
+- **EmptyCase:** `case x of {}` forces `x`.
+
+The Report's parse-error(t) rule now also covers an operator at a
+statement, alternative or declaration column: it closes the implicit
+block, as GHC does.
+
+**Records.** NamedFieldPuns and RecordWildCards follow GHC's scoping:
+- `C{..}` in a pattern binds only the fields in scope.
+- In an expression it fills only fields that are in scope, from
+  *local* variables. A top-level or imported binding never fills one.
+- A qualified pun `C{M.x}` binds the bare `x`.
+
+**Stock Functor, Foldable and Traversable.** `AHC.Derive_Functor`
+synthesizes the methods as Core from the constructors' field types:
+- `fmap` / `traverse` for Functor and Traversable.
+- `foldr`, `foldMap` and `null` for Foldable, as GHC does.
+
+The recursive call gets `f` itself, not `\y -> f y`, so a deep
+structure stays linear. The instance context is inferred like GHC's:
+each `C g` the code needs is reduced through g's instances until a
+type variable heads it. The results are `Functor f` for `T f a`,
+`Functor (f b)` for `T f b a`, and `Functor f` through
+`instance Functor f => Functor (Wrap f)`.
+
+**Overlapping instances** follow GHC's `lookupInstEnv`:
+1. Drop every matching candidate that a strictly more specific one may
+   override (the loser is OVERLAPPABLE, or the winner OVERLAPPING).
+2. Take the one survivor that is not INCOHERENT, or any survivor when
+   all of them are.
+
+An instance that might match later blocks the choice unless:
+- it is incoherent;
+- the chosen instance is incoherent and the wanted is fully known,
+  which is always the case once a binding group generalizes;
+- or only an instance declaration's own type variables keep it
+  undecided. GHC treats those as never unifying, so
+  `Show (Either a b)` inside its own instance is not blocked by a
+  user's `Show (Either Int Int)`.
+
+The pragmas are read by source position. Module-wide, the deprecated
+`LANGUAGE`/`OPTIONS_GHC -X` forms `OverlappingInstances` and
+`IncoherentInstances`, and their `No` forms, apply in order.
+
 ## 7. Desugaring
 
 ### The idea: a small core language

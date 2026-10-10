@@ -1,5 +1,63 @@
 # AHC Changelog
 
+## v1.19 (unreleased)
+
+**M148 - the second extension round.** These are the extensions the
+M147 scout found blocking real repositories next. All are always on.
+Only the overlap extensions read a pragma.
+
+- **Syntax:**
+  - TupleSections (`(,x)`, `(1,,3)`).
+  - MultiWayIf. Its guards sit in a layout block that never inserts
+    `;`, as in GHC, and a failure reads "non-exhaustive guards in
+    multi-way if".
+  - `\cases`, of any arity.
+  - EmptyCase: `case x of {}` forces `x`.
+  - The layout rule now closes an implicit block when an operator
+    starts a line at the block's column, as GHC does.
+- **Records:** NamedFieldPuns, including qualified puns, and
+  RecordWildCards with GHC's scoping. `..` covers only fields in scope,
+  and in an expression it is filled from local variables only.
+- **Stock deriving:** Functor, Foldable and Traversable.
+  - The new `AHC.Derive_Functor` writes fmap, foldr, foldMap, null and
+    traverse as Core from the constructors' field types.
+  - The instance context is inferred through the field types'
+    instances, as GHC infers it.
+- **Overlapping instances:**
+  - The `OVERLAPPING`, `OVERLAPPABLE`, `OVERLAPS` and `INCOHERENT`
+    pragmas.
+  - The module-wide `OverlappingInstances` and `IncoherentInstances`,
+    and their `No` forms.
+  - Selection follows GHC's lookupInstEnv rule, and an instance
+    declaration's own type variables never unify with another
+    instance's head.
+- **FlexibleContexts** now has a conformance program. The scout counts
+  all of the above as supported.
+
+**The adversarial review found 22 defects after a green gate**
+(3d6f462), all fixed and pinned by regression tests. They include:
+- crashes and hangs: `\cases` past seven arguments, a parse error
+  inside record braces, qualified puns;
+- quadratic derived methods on recursive types;
+- `C{..}` filling fields from top-level bindings;
+- a user `Show (Either Int Int)` breaking the Prelude's own instance;
+- an INCOHERENT choice made before a type was known.
+
+It also exposed three older bugs, now fixed:
+- `or`, `and`, `any` and `all` never returned on an infinite list;
+- `import M (T(C, f))` brought every constructor and field of `T`;
+- a positional `C {}` pattern had arity 0.
+
+**Gate:**
+- Both builds, both GC modes.
+- 268 conformance programs, including under `AHC_GC=own`.
+- The own soak with `AHC_OWN_VERIFY=1`, TSan, and fuzz 300/300.
+- Bench against v1.18 is flat: every program within 2%.
+- Scout: none of the 38 M147-era candidates is now held back by an
+  M148 extension. One agrees byte-for-byte with GHC, and the next
+  blockers are TemplateHaskell, Parsec, mtl, DeriveGeneric,
+  MultiParamTypeClasses and an Ix-indexed `Data.Array`.
+
 ## v1.18 (2026-10-10)
 
 **M147 - GHC extensions: LambdaCase, FlexibleInstances,

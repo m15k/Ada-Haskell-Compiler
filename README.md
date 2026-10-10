@@ -119,7 +119,7 @@ blocks a repo.
 AHC is a complete, verified implementation of **Haskell 2010** — not a
 GHC replacement. Read that as a promise and a limit:
 
-- **The promise.** 88 conformance programs are byte-identical to GHC
+- **The promise.** 268 conformance programs are byte-identical to GHC
   9.4.8's output, and a differential fuzzer keeps checking randomly
   generated programs against it. Everything the Report requires and
   AHC does not implement is written down in
@@ -128,8 +128,11 @@ GHC replacement. Read that as a promise and a limit:
 - **The limit.** Only the GHC extensions EXCLUSIONS lists as
   supported (OverloadedStrings, InstanceSigs, LambdaCase,
   FlexibleInstances, TypeSynonymInstances, GeneralizedNewtypeDeriving,
-  FlexibleContexts - always on, since AHC ignores `LANGUAGE`
-  pragmas), no `base` beyond the subset in `lib/`, and no Hackage — a program's dependencies are the modules
+  FlexibleContexts, TupleSections, MultiWayIf, EmptyCase,
+  RecordWildCards, NamedFieldPuns, DeriveFunctor, DeriveFoldable,
+  DeriveTraversable - always on, since AHC ignores `LANGUAGE`
+  pragmas - plus OverlappingInstances and its per-instance pragmas),
+  no `base` beyond the subset in `lib/`, and no Hackage — a program's dependencies are the modules
   beside it, AHC's own standard library, and the module trees its
   `ahc.toml` names: local paths (M134) or git repositories with
   Go-style minimal version selection and an `ahc.sum` (M135). Programs using
