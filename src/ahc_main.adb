@@ -25,6 +25,7 @@ with AHC.CodeGen;
 with AHC.Contracts;
 with AHC.Core.Printer;
 with AHC.Deps;
+with AHC.Derive_Functor;
 with AHC.Desugar;
 with AHC.Diagnostics;
 with AHC.Elaborate;
@@ -318,6 +319,87 @@ procedure AHC_Main is
          end loop;
       end Detect_Shadow;
 
+      --  Overlap pragmas (M148): `instance {-# OVERLAPPING #-} C T` - a
+      --  pragma lying between a top-level instance's `instance` keyword
+      --  and its head type belongs to that instance; and the deprecated
+      --  {-# LANGUAGE OverlappingInstances #-} marks every instance of
+      --  the module.
+      procedure Detect_Overlap
+        (Src   : AHC.Source_Text.Source;
+         Spans : AHC.Lexer.Span_Vectors.Vector;
+         Arena : in out AHC.Syntax.Module_Arena)
+      is
+         use type AHC.Source_Text.Byte_Offset;
+         use type AHC.Syntax.Decl_Kind;
+
+         function Inner_Of (Sp : AHC.Diagnostics.Source_Span) return String is
+            From : constant Positive := Positive (Sp.Start) + 3;
+            To   : constant Natural  := Natural (Sp.Stop) - 4;
+         begin
+            if To < From then
+               return "";
+            end if;
+            return AHC.Source_Text.Slice
+              (Src, AHC.Source_Text.Byte_Offset (From),
+               AHC.Source_Text.Byte_Offset (To));
+         end Inner_Of;
+
+         function Kind_Of (Inner : String) return AHC.Syntax.Overlap_Pragma is
+            T : constant String := Ada.Strings.Fixed.Trim
+              (Inner, Ada.Strings.Both);
+         begin
+            if T = "OVERLAPPING" then
+               return AHC.Syntax.Pragma_Overlapping;
+            elsif T = "OVERLAPPABLE" then
+               return AHC.Syntax.Pragma_Overlappable;
+            elsif T = "OVERLAPS" then
+               return AHC.Syntax.Pragma_Overlaps;
+            elsif T = "INCOHERENT" then
+               return AHC.Syntax.Pragma_Incoherent;
+            end if;
+            return AHC.Syntax.No_Pragma;
+         end Kind_Of;
+      begin
+         for Sp of Spans loop
+            declare
+               Inner : constant String := Inner_Of (Sp);
+            begin
+               if Ada.Strings.Fixed.Index (Inner, "LANGUAGE") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Inner, "OverlappingInstances") > 0
+               then
+                  Arena.Lang_Overlapping := True;
+               end if;
+            end;
+         end loop;
+         for D of Arena.Top_Decls loop
+            declare
+               N : constant AHC.Syntax.Decl_Node := Arena.Node (D);
+            begin
+               if N.Kind = AHC.Syntax.Instance_D then
+                  declare
+                     Lo : constant AHC.Source_Text.Byte_Offset := N.Span.Stop;
+                     Hi : constant AHC.Source_Text.Byte_Offset :=
+                       Arena.Node (N.I_Type).Span.Start;
+                  begin
+                     for Sp of Spans loop
+                        if Sp.Start >= Lo and then Sp.Stop <= Hi then
+                           declare
+                              K : constant AHC.Syntax.Overlap_Pragma :=
+                                Kind_Of (Inner_Of (Sp));
+                           begin
+                              if AHC.Syntax."/=" (K, AHC.Syntax.No_Pragma) then
+                                 Arena.Overlaps.Include (Positive (D), K);
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Detect_Overlap;
+
       --  Function contracts (PRE/POST pragmas): collected per
       --  module, signatures injected after the frontend, wrapping
       --  done by AHC.Refine.
@@ -523,6 +605,7 @@ procedure AHC_Main is
             AHC.Parser.Parse_Module (L_Stream, Table, Bag, L.Ref.all);
             Collect_Link_Flags (L.Text, L_Pragmas);
             Detect_Shadow (L.Text, L_Pragmas, L.Ref.all);
+            Detect_Overlap (L.Text, L_Pragmas, L.Ref.all);
             if not Bag.Has_Errors then
                --  PRE/POST contract pragmas become hidden top-level
                --  bindings in this module's arena.
@@ -689,6 +772,7 @@ procedure AHC_Main is
                                      Root.Ref.all);
             Collect_Link_Flags (Text, R_Pragmas);
             Detect_Shadow (Text, R_Pragmas, Root.Ref.all);
+            Detect_Overlap (Text, R_Pragmas, Root.Ref.all);
             if not Bag.Has_Errors then
                AHC.Contracts.Collect
                  (Text, R_Pragmas, Table, Bag, Root.Ref.all,
@@ -1066,6 +1150,12 @@ procedure AHC_Main is
                end if;
             end;
          end loop;
+      end if;
+
+      --  Stock DeriveFunctor/Foldable/Traversable (M148): synthesize the
+      --  derived instances' method bindings before type checking.
+      if not Bag.Has_Errors then
+         AHC.Derive_Functor.Synthesize (Table, Bag, M, Env);
       end if;
 
       if not Bag.Has_Errors then

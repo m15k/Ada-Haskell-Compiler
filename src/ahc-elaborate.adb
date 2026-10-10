@@ -242,41 +242,62 @@ package body AHC.Elaborate is
          --  Instance selection by one-way matching (M147), the same
          --  matcher the typechecker's Solve uses, so the two can never
          --  pick different instances.
-         for I of M.Info (C.Class).Instances loop
-            declare
-               Inst : constant Instance_Info := M.Info (I);
-               Args : Type_Id_Vectors.Vector;
-            begin
-               if Match_EL (M, Env, Inst, C.Arg, Args)
-                 = Inst_Match.Matched
-               then
-                  declare
-                     Result : Real_Expr_Id :=
-                       M.Add (Expr_Node'
-                         (Kind => Var_C, Span => Span,
-                          V => Real_Var_Id (Inst.Dict_Global)));
-                  begin
-                     for IC of Inst.Context loop
-                        declare
-                           Sub : constant Real_Expr_Id :=
-                             Solve_Ev
-                               (Constraint'
-                                  (Class => IC.Class,
-                                   Arg => Subst_Head
-                                     (IC.Arg, Inst.Head_Vars, Args),
-                                   Span => IC.Span),
-                                Givens, Span, Depth + 1);
-                        begin
-                           Result := M.Add (Expr_Node'
-                             (Kind => App_C, Span => Span,
-                              Fun => Result, Arg => Sub));
-                        end;
-                     end loop;
-                     return Result;
-                  end;
-               end if;
-            end;
-         end loop;
+         declare
+            Cands : Instance_Id_Vectors.Vector;
+            Chosen : Natural := 0;
+         begin
+            for I of M.Info (C.Class).Instances loop
+               declare
+                  Args : Type_Id_Vectors.Vector;
+                  II : constant Instance_Info := M.Info (I);
+               begin
+                  if Match_EL (M, Env, II, C.Arg, Args)
+                    = Inst_Match.Matched
+                  then
+                     Cands.Append (I);
+                  end if;
+               end;
+            end loop;
+            --  The typechecker's choice exactly: the sole match, or the
+            --  most specific one by the overlap rule (M148).
+            if Natural (Cands.Length) = 1 then
+               Chosen := Natural (Cands.First_Element);
+            elsif Natural (Cands.Length) > 1 then
+               Chosen := Inst_Match.Pick (M, Env, Cands);
+            end if;
+            if Chosen /= 0 then
+               declare
+                  Inst : constant Instance_Info :=
+                    M.Info (Real_Instance_Id (Chosen));
+                  Args : Type_Id_Vectors.Vector;
+                  Ign : constant Inst_Match.Match_Result :=
+                    Match_EL (M, Env, Inst, C.Arg, Args);
+                  pragma Unreferenced (Ign);
+                  Result : Real_Expr_Id :=
+                    M.Add (Expr_Node'
+                      (Kind => Var_C, Span => Span,
+                       V => Real_Var_Id (Inst.Dict_Global)));
+               begin
+                  for IC of Inst.Context loop
+                     declare
+                        Sub : constant Real_Expr_Id :=
+                          Solve_Ev
+                            (Constraint'
+                               (Class => IC.Class,
+                                Arg => Subst_Head
+                                  (IC.Arg, Inst.Head_Vars, Args),
+                                Span => IC.Span),
+                             Givens, Span, Depth + 1);
+                     begin
+                        Result := M.Add (Expr_Node'
+                          (Kind => App_C, Span => Span,
+                           Fun => Result, Arg => Sub));
+                     end;
+                  end loop;
+                  return Result;
+               end;
+            end if;
+         end;
 
          --  Unreachable when the typechecker accepted the module;
          --  reachable in error recovery.

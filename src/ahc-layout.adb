@@ -222,6 +222,20 @@ package body AHC.Layout is
                           S.Input (S.I + 1).Kind /= Left_Brace;
                      end if;
 
+                  when Kw_Cases =>
+                     --  `\cases` (M148) opens a block, as `of` does.
+                     Enqueue (S, T);
+                     S.Await_Open :=
+                       S.Input (S.I + 1).Kind /= Left_Brace;
+
+                  when Kw_If =>
+                     Enqueue (S, T);
+                     --  MultiWayIf (M148): `if |` opens a layout block
+                     --  for its guards, as GHC's multi-way if does.
+                     if S.Input (S.I + 1).Kind = Pipe then
+                        S.Await_Open := True;
+                     end if;
+
                   when others =>
                      Enqueue (S, T);
                end case;

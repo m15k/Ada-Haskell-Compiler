@@ -1,0 +1,5 @@
+(Pair 2 3,Node Leaf "3" (Node Leaf "4" Leaf))
+(Rec {tag = 7, val = -1, vals = [-2,-3]},Tup (0,False) (True,True))
+([10,20],Just [30])
+(12,[(3,"")])
+(Phantom "p!",Leaf)

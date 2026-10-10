@@ -6,6 +6,7 @@
 --  one binding, a Case at least one alternative, ...). One Module_Arena
 --  owns every node of one module; dropping it frees the whole tree.
 
+with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Vectors;
 
 with AHC.Diagnostics;
@@ -181,6 +182,9 @@ package AHC.Syntax is
          when Rec_Con_E | Rec_Update_E =>
             Rec_Base   : Real_Expr_Id;   --  con ref or updated expr
             Rec_Fields : Field_Assign_Vectors.Vector;
+            --  RecordWildCards (M148): a trailing `..` - the renamer
+            --  fills the unmentioned fields (Resolutions.Wild_Expr).
+            Rec_Dotdot : Boolean := False;
       end case;
    end record;
 
@@ -224,6 +228,9 @@ package AHC.Syntax is
          when Rec_P =>
             Rec_Con    : QName;
             Rec_Fields : Field_Pat_Vectors.Vector;
+            --  RecordWildCards (M148): `..` binds every unmentioned
+            --  field to a variable of its name (Resolutions.Wild_Pat).
+            Rec_Dotdot : Boolean := False;
          when Sig_P =>
             Sig_Pat  : Real_Pat_Id;
             Sig_Type : Real_Type_Id;
@@ -449,6 +456,14 @@ package AHC.Syntax is
    package Con_Node_Vectors is new Ada.Containers.Vectors
      (Real_Con_Id, Con_Node);
 
+   --  An instance's overlap pragma (M148): `instance {-# OVERLAPPING #-}
+   --  ...`, matched to its declaration by span in the driver.
+   type Overlap_Pragma is
+     (No_Pragma, Pragma_Overlapping, Pragma_Overlappable, Pragma_Overlaps,
+      Pragma_Incoherent);
+   package Overlap_Maps is new Ada.Containers.Ordered_Maps
+     (Positive, Overlap_Pragma);   --  Instance_D decl id -> pragma
+
    type Module_Arena is tagged limited record
       Has_Header      : Boolean := False;
       Module_Name     : Names.Name_Id := Names.No_Name;
@@ -462,6 +477,11 @@ package AHC.Syntax is
       --  top-level names silently shadow imported and Prelude ones (no
       --  ambiguity). Only the REPL's generated modules carry it.
       Own_Shadows     : Boolean := False;
+      --  Overlap pragmas on this module's instances, and the deprecated
+      --  {-# LANGUAGE OverlappingInstances #-}, which marks all of them
+      --  OVERLAPS (M148).
+      Overlaps         : Overlap_Maps.Map;
+      Lang_Overlapping : Boolean := False;
       Exports         : Entity_Vectors.Vector;
       Imports         : Import_Vectors.Vector;
       Top_Decls       : Decl_Id_Vectors.Vector;

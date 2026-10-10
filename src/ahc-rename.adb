@@ -649,9 +649,14 @@ package body AHC.Rename is
       --  The export list's C(..) asks that of every method of a class
       --  it may only have imported; a method that is not in scope is
       --  simply not re-exported, not an error at the class.
+      --  Skip_Locals: a record field label (M148). Inside record syntax a
+      --  label names the field even where a local of the same name -
+      --  typically a NamedFieldPuns binding - shadows its selector, as
+      --  in GHC: `f p@P{px} = p { px = px + 1 }`.
       function Lookup_Value
         (Q : QName; Span : Diagnostics.Source_Span;
-         Quiet : Boolean := False) return Resolution
+         Quiet : Boolean := False;
+         Skip_Locals : Boolean := False) return Resolution
       is
          procedure Not_In_Scope is
          begin
@@ -665,7 +670,7 @@ package body AHC.Rename is
          if not Check_Qualifier (Q, Span) then
             return (Kind => Unresolved);
          end if;
-         if Q.Qualifier = Names.No_Name then
+         if Q.Qualifier = Names.No_Name and then not Skip_Locals then
             for I in reverse 1 .. Scopes.Last_Index loop
                declare
                   C : constant Scope_Maps.Cursor :=
@@ -986,8 +991,20 @@ package body AHC.Rename is
       is
          N : constant Pat_Node := Arena.Node (Id);
 
+         --  Mint and bring into scope a pattern variable, returning it.
+         function Bind_Var_Of
+           (Name : Names.Name_Id; Span : Diagnostics.Source_Span)
+            return Core.Real_Var_Id;
+
          procedure Bind_Pattern_Var
            (Name : Names.Name_Id; Span : Diagnostics.Source_Span) is
+         begin
+            Set_Pat (Id, (Kind => Var_Res, Var => Bind_Var_Of (Name, Span)));
+         end Bind_Pattern_Var;
+
+         function Bind_Var_Of
+           (Name : Names.Name_Id; Span : Diagnostics.Source_Span)
+            return Core.Real_Var_Id is
          begin
             if Global_Binders then
                declare
@@ -1006,7 +1023,7 @@ package body AHC.Rename is
                      Env.Values.Include (Name, V);
                   end if;
                   Own.Values.Include (Name, V);
-                  Set_Pat (Id, (Kind => Var_Res, Var => V));
+                  return V;
                end;
             else
                declare
@@ -1014,10 +1031,10 @@ package body AHC.Rename is
                     Mint_Local (Name, Span);
                begin
                   Bind_In_Scope (Name, V, Span);
-                  Set_Pat (Id, (Kind => Var_Res, Var => V));
+                  return V;
                end;
             end if;
-         end Bind_Pattern_Var;
+         end Bind_Var_Of;
       begin
          case N.Kind is
             when Var_P =>
@@ -1068,7 +1085,8 @@ package body AHC.Rename is
                      --  with an import's or the Prelude's (M144).
                      declare
                         Ignore : constant Resolution :=
-                          Lookup_Value (F.Field, N.Span, Quiet => True);
+                          Lookup_Value (F.Field, N.Span, Quiet => True,
+                                        Skip_Locals => True);
                      begin
                         null;
                      end;
@@ -1095,6 +1113,25 @@ package body AHC.Rename is
                      end if;
                      Rename_Pat (F.Value, Global_Binders);
                   end loop;
+                  --  RecordWildCards (M148): `..` binds each field not
+                  --  mentioned to a variable of the field's name.
+                  if N.Rec_Dotdot and then R.Kind = Data_Res then
+                     declare
+                        Wild : Wild_Vectors.Vector;
+                     begin
+                        for FN of M.Info (R.Con).Field_Names loop
+                           if not (for some F of N.Rec_Fields =>
+                                     F.Field.Name = FN)
+                           then
+                              Wild.Append
+                                (Wild_Entry'(Field => FN,
+                                             Var => Core.Var_Id
+                                               (Bind_Var_Of (FN, N.Span))));
+                           end if;
+                        end loop;
+                        Res.Wild_Pat.Include (Positive (Id), Wild);
+                     end;
+                  end if;
                end;
             when Sig_P =>
                Rename_Pat (N.Sig_Pat, Global_Binders);
@@ -1294,7 +1331,8 @@ package body AHC.Rename is
                      Value_Amb_Reported := False;
                      declare
                         R : constant Resolution :=
-                          Lookup_Value (F.Field, N.Span, Quiet => True);
+                          Lookup_Value (F.Field, N.Span, Quiet => True,
+                                        Skip_Locals => True);
                      begin
                         if R.Kind = Var_Res and then M.Info (R.Var).Is_Field
                         then
@@ -1313,6 +1351,47 @@ package body AHC.Rename is
                   end loop;
                   if N.Kind = Rec_Update_E then
                      Res.Field_Res.Include (Positive (Id), Sels);
+                     if N.Rec_Dotdot then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Field_Error, N.Span,
+                                 "a record update cannot use '..'");
+                     end if;
+                  elsif N.Rec_Dotdot then
+                     --  RecordWildCards (M148): each field not mentioned
+                     --  reads the variable of its name in scope - not
+                     --  the field's own selector; a field with no such
+                     --  variable stays missing, as in GHC.
+                     declare
+                        BR : constant Resolution :=
+                          Res.Expr_Res (Positive (N.Rec_Base));
+                        Wild : Wild_Vectors.Vector;
+                     begin
+                        if BR.Kind = Data_Res then
+                           for FN of M.Info (BR.Con).Field_Names loop
+                              if not (for some F of N.Rec_Fields =>
+                                        F.Field.Name = FN)
+                              then
+                                 declare
+                                    VR : constant Resolution :=
+                                      Lookup_Value
+                                        ((Name => FN,
+                                          Qualifier => Names.No_Name),
+                                         N.Span, Quiet => True);
+                                 begin
+                                    if VR.Kind = Var_Res
+                                      and then not M.Info (VR.Var).Is_Field
+                                    then
+                                       Wild.Append
+                                         (Wild_Entry'(Field => FN,
+                                                      Var => Core.Var_Id
+                                                        (VR.Var)));
+                                    end if;
+                                 end;
+                              end if;
+                           end loop;
+                        end if;
+                        Res.Wild_Expr.Include (Positive (Id), Wild);
+                     end;
                   end if;
                end;
          end case;
@@ -1474,7 +1553,11 @@ package body AHC.Rename is
       is
          T : constant String := Text (Name);
       begin
-         if T in "Eq" | "Ord" | "Enum" | "Bounded" | "Show" | "Read" then
+         if T in "Eq" | "Ord" | "Enum" | "Bounded" | "Show" | "Read"
+                | "Functor" | "Foldable" | "Traversable"
+         then
+            --  Functor/Foldable/Traversable: stock DeriveFunctor & co.
+            --  (M148), the Prelude's classes by identity.
             return Env.Classes.Contains (Name)
               and then Core.Class_Id (Env.Classes.Element (Name)) = C;
          elsif T = "Ix" and then Modular then
@@ -1493,6 +1576,129 @@ package body AHC.Rename is
 
       procedure Declare_Data (D : Real_Decl_Id; N : Decl_Node) is
          Is_NT : constant Boolean := N.Kind = Newtype_D;
+
+         --  Stock DeriveFunctor/Foldable/Traversable (M148).
+         function Functor_Family (C : Core.Class_Id) return Core.Stock_Derive_Kind
+         is
+            function Named (Nm : String) return Boolean is
+              (Env.Classes.Contains (Table.Intern (Nm))
+               and then Core.Class_Id
+                 (Env.Classes.Element (Table.Intern (Nm))) = C);
+         begin
+            if Named ("Functor") then
+               return Core.Stock_Functor;
+            elsif Named ("Foldable") then
+               return Core.Stock_Foldable;
+            elsif Named ("Traversable") then
+               return Core.Stock_Traversable;
+            end if;
+            return Core.No_Stock_Derive;
+         end Functor_Family;
+
+         Last_Var : constant Names.Name_Id :=
+           (if N.D_Vars.Is_Empty then Names.No_Name
+            else N.D_Vars.Last_Element.Name);
+
+         function Occurs_Syn (V : Names.Name_Id; T : Real_Type_Id)
+           return Boolean
+         is
+            TN : constant Type_Node := Arena.Node (T);
+         begin
+            case TN.Kind is
+               when Var_T => return TN.Var = V;
+               when App_T => return Occurs_Syn (V, TN.Fun)
+                               or else Occurs_Syn (V, TN.Arg);
+               when Fun_T => return Occurs_Syn (V, TN.From)
+                               or else Occurs_Syn (V, TN.To);
+               when List_T => return Occurs_Syn (V, TN.Elem);
+               when Tuple_T =>
+                  return (for some I of TN.Items => Occurs_Syn (V, I));
+               when others => return False;
+            end case;
+         end Occurs_Syn;
+
+         --  Every field type of every constructor.
+         function Field_Types return Type_Id_Vectors.Vector is
+            R : Type_Id_Vectors.Vector;
+         begin
+            for CI of N.D_Cons loop
+               declare
+                  CN : constant Con_Node := Arena.Node (CI);
+               begin
+                  case CN.Shape is
+                     when Prefix_Con | Infix_Con =>
+                        for A of CN.Args loop
+                           R.Append (A);
+                        end loop;
+                     when Record_Con =>
+                        for F of CN.Fields loop
+                           for Ignore of F.Names_List loop
+                              R.Append (F.Field_Type);
+                           end loop;
+                        end loop;
+                  end case;
+               end;
+            end loop;
+            return R;
+         end Field_Types;
+
+         --  A newtype's representation eta-reduces (`R' a`, a not in R'):
+         --  GND applies; otherwise the stock derivation does.
+         function Eta_OK return Boolean is
+            FT : constant Type_Id_Vectors.Vector := Field_Types;
+         begin
+            if FT.Is_Empty or else Last_Var = Names.No_Name then
+               return False;
+            end if;
+            declare
+               TN : constant Type_Node := Arena.Node (FT.First_Element);
+            begin
+               return TN.Kind = App_T
+                 and then Arena.Node (TN.Arg).Kind = Var_T
+                 and then Arena.Node (TN.Arg).Var = Last_Var
+                 and then not Occurs_Syn (Last_Var, TN.Fun);
+            end;
+         end Eta_OK;
+
+         --  GHC's inferred context: a type variable applied with the last
+         --  parameter among its arguments (`f a`, `g (h a)`) needs the
+         --  class itself; constructor heads resolve when the synthesized
+         --  code is typechecked.
+         procedure Functor_Context_Vars
+           (T : Real_Type_Id; Into : in out Core.Name_Id_Vectors.Vector)
+         is
+            TN : constant Type_Node := Arena.Node (T);
+         begin
+            case TN.Kind is
+               when App_T =>
+                  declare
+                     H : Real_Type_Id := TN.Fun;
+                  begin
+                     while Arena.Node (H).Kind = App_T loop
+                        H := Arena.Node (H).Fun;
+                     end loop;
+                     if Arena.Node (H).Kind = Var_T
+                       and then Arena.Node (H).Var /= Last_Var
+                       and then Occurs_Syn (Last_Var, T)
+                       and then not Into.Contains (Arena.Node (H).Var)
+                     then
+                        Into.Append (Arena.Node (H).Var);
+                     end if;
+                  end;
+                  Functor_Context_Vars (TN.Fun, Into);
+                  Functor_Context_Vars (TN.Arg, Into);
+               when Fun_T =>
+                  Functor_Context_Vars (TN.To, Into);
+               when List_T =>
+                  Functor_Context_Vars (TN.Elem, Into);
+               when Tuple_T =>
+                  for I of TN.Items loop
+                     Functor_Context_Vars (I, Into);
+                  end loop;
+               when others =>
+                  null;
+            end case;
+         end Functor_Context_Vars;
          TC : Core.Real_TyCon_Id;
          Type_Fields : Scope_Maps.Map;   --  field -> this type's selector
       begin
@@ -1613,6 +1819,9 @@ package body AHC.Rename is
                  and then Is_NT
                  and then not (Stock_Derivable (C, DC.Name)
                                and then Text (DC.Name) in "Show" | "Read")
+                 and then not (Core."/=" (Functor_Family (C),
+                                          Core.No_Stock_Derive)
+                               and then not Eta_OK)
                then
                   --  GeneralizedNewtypeDeriving (M147): a newtype
                   --  derives every class but Show/Read through its
@@ -1635,6 +1844,8 @@ package body AHC.Rename is
                          Head_Type => Core.No_Type,
                          Is_GND => True,
                          GND_Target => Core.No_Type,
+                         Stock_Derive => Core.No_Stock_Derive,
+                         Overlap => Core.No_Overlap,
                          Context => Core.Constraint_Vectors.Empty_Vector,
                          Dict_Global => Core.Var_Id (Dict),
                          From_Source => False,
@@ -1703,8 +1914,20 @@ package body AHC.Rename is
                      Vars : Core.TyVar_Id_Vectors.Vector;
                      Dict : Core.Real_Var_Id;
                      Ignore : Core.Real_Instance_Id;
+                     FF : constant Core.Stock_Derive_Kind :=
+                       Functor_Family (C);
+                     Ctx_Vars : Core.Name_Id_Vectors.Vector;
                   begin
+                     if Core."/=" (FF, Core.No_Stock_Derive) then
+                        for FT of Field_Types loop
+                           Functor_Context_Vars (FT, Ctx_Vars);
+                        end loop;
+                     end if;
                      for VQ of N.D_Vars loop
+                        --  A constructor class (M148) covers the LAST
+                        --  parameter: it is not a head variable.
+                        exit when Core."/=" (FF, Core.No_Stock_Derive)
+                          and then VQ.Name = Last_Var;
                         declare
                            Tv : constant Core.Real_TyVar_Id :=
                              M.Mint_TyVar ((Name => VQ.Name,
@@ -1715,10 +1938,14 @@ package body AHC.Rename is
                                (Kind => Core.TVar_T, Tv => Tv));
                         begin
                            Vars.Append (Tv);
-                           Ctx.Append
-                             (Core.Constraint'
-                                (Class => Cl, Arg => TvT,
-                                 Span => N.Span));
+                           if Core."=" (FF, Core.No_Stock_Derive)
+                             or else Ctx_Vars.Contains (VQ.Name)
+                           then
+                              Ctx.Append
+                                (Core.Constraint'
+                                   (Class => Cl, Arg => TvT,
+                                    Span => N.Span));
+                           end if;
                         end;
                      end loop;
                      Dict := M.Mint_Var
@@ -1733,9 +1960,14 @@ package body AHC.Rename is
                          Head_Type => Core.No_Type,
                          Is_GND => False,
                          GND_Target => Core.No_Type,
+                         Stock_Derive => FF,
+                         Overlap => Core.No_Overlap,
                          Context => Ctx,
                          Dict_Global => Core.Var_Id (Dict),
-                         From_Source => False,   --  deriving clause
+                         --  A constructor-class derivation's methods are
+                         --  synthesized Core (AHC.Stock_Functor), so
+                         --  elaborate builds it like a source instance.
+                         From_Source => Core."/=" (FF, Core.No_Stock_Derive),
                          Method_Binds =>
                            Core.Bind_Vectors.Empty_Vector,
                          Param_Vars =>
@@ -1943,6 +2175,25 @@ package body AHC.Rename is
          end case;
       end Instance_Head;
 
+      --  The instance's overlap flag (M148): its own pragma, else the
+      --  module's deprecated LANGUAGE OverlappingInstances (OVERLAPS).
+      function Overlap_Of (D : Real_Decl_Id) return Core.Overlap_Kind is
+         C : constant Syntax.Overlap_Maps.Cursor :=
+           Arena.Overlaps.Find (Positive (D));
+      begin
+         if Syntax.Overlap_Maps.Has_Element (C) then
+            case Syntax.Overlap_Maps.Element (C) is
+               when Syntax.Pragma_Overlapping  => return Core.Overlapping;
+               when Syntax.Pragma_Overlappable => return Core.Overlappable;
+               when Syntax.Pragma_Overlaps     => return Core.Overlaps;
+               when Syntax.Pragma_Incoherent   => return Core.Incoherent;
+               when Syntax.No_Pragma           => null;
+            end case;
+         end if;
+         return (if Arena.Lang_Overlapping then Core.Overlaps
+                 else Core.No_Overlap);
+      end Overlap_Of;
+
       procedure Declare_Instance (D : Real_Decl_Id; N : Decl_Node) is
          Deferred : Boolean;
          Amb : Boolean;
@@ -2003,6 +2254,8 @@ package body AHC.Rename is
                    Head_Type => Core.No_Type,
                    Is_GND => False,
                    GND_Target => Core.No_Type,
+                   Stock_Derive => Core.No_Stock_Derive,
+                   Overlap => Overlap_Of (D),
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict),
                    From_Source => True,

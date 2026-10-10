@@ -290,6 +290,17 @@ package AHC.Core is
    --  constraints mention only Head_Vars, instantiated from the match.
    --  Wired and stock-derived instances leave Head_Type as No_Type:
    --  their head is Head applied to Head_Vars (Inst_Match.Instance_Type).
+   --  Stock deriving of a constructor class (M148): AHC.Derive_Functor
+   --  synthesizes the instance's method bindings after desugaring.
+   type Stock_Derive_Kind is
+     (No_Stock_Derive, Stock_Functor, Stock_Foldable, Stock_Traversable);
+
+   --  GHC's per-instance overlap flags (M148): OVERLAPPING may override a
+   --  less specific instance, OVERLAPPABLE may be overridden, OVERLAPS
+   --  is both, INCOHERENT also never blocks on an undecided match.
+   type Overlap_Kind is
+     (No_Overlap, Overlapping, Overlappable, Overlaps, Incoherent);
+
    type Instance_Info is record
       Of_Class    : Class_Id := No_Class;
       Head        : TyCon_Id := No_TyCon;
@@ -299,6 +310,8 @@ package AHC.Core is
       --  representation's, i.e. the instance of Of_Class at GND_Target.
       Is_GND      : Boolean := False;
       GND_Target  : Type_Id := No_Type;
+      Stock_Derive : Stock_Derive_Kind := No_Stock_Derive;
+      Overlap      : Overlap_Kind := No_Overlap;
       Context     : Constraint_Vectors.Vector;
       Dict_Global : Var_Id := No_Var;
       --  True only for an instance DECLARATION in user/Prelude source

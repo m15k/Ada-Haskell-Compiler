@@ -1,0 +1,11 @@
+(Just (Node (Node Leaf 1 Leaf) 2 (Node Leaf 3 Leaf)),Nothing)
+[Two 1 [2] (Just 3),Two 1 [2] (Just 13),Two 1 [12] (Just 3),Two 1 [12] (Just 13),Two 11 [2] (Just 3),Two 11 [2] (Just 13),Two 11 [12] (Just 3),Two 11 [12] (Just 13)]
+1
+2
+3
+Node (Node Leaf 1 Leaf) 4 (Node Leaf 9 Leaf)
+(Just (Two 1 [2] Nothing),[Two 1 [] Nothing,Two 2 [] Nothing])
+'a'
+'b'
+'c'
+'d'

@@ -1,0 +1,2 @@
+before
+ahc: error: non-exhaustive guards in multi-way if

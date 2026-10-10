@@ -142,6 +142,20 @@ package body AHC.Desugar is
             Lit => (Kind => Core.L_String,
                     Text => Names.Name_Id (Table.Intern (S))))));
 
+      --  The parser's MultiWayIf rewrite (M148): one alternative whose
+      --  pattern is the unspellable variable `mwif$`.
+      function Is_Multi_Way_If (N : Expr_Node) return Boolean is
+      begin
+         if N.Kind /= Case_E or else Natural (N.Alts.Length) /= 1 then
+            return False;
+         end if;
+         declare
+            P : constant Pat_Node := Arena.Node (Arena.Node (N.Alts (1)).Pat);
+         begin
+            return P.Kind = Var_P and then Table.Text (P.Var) = "mwif$";
+         end;
+      end Is_Multi_Way_If;
+
       function Error_Call
         (Msg : String; Span : Diagnostics.Source_Span)
          return Core.Real_Expr_Id
@@ -333,6 +347,12 @@ package body AHC.Desugar is
                for F of N.Rec_Fields loop
                   Bound_Vars (F.Value, Into);
                end loop;
+               --  RecordWildCards (M148): the `..` variables.
+               if Res.Wild_Pat.Contains (Positive (Pat)) then
+                  for W of Res.Wild_Pat.Element (Positive (Pat)) loop
+                     Into.Append (W.Var);
+                  end loop;
+               end if;
             when Sig_P =>
                Bound_Vars (N.Sig_Pat, Into);
             when others =>
@@ -697,6 +717,17 @@ package body AHC.Desugar is
                   --  binds nothing at all.
                   if Is_Newtype_Con (R.Con) then
                      if N.Rec_Fields.Is_Empty then
+                        --  `N{..}` (M148) binds the one field.
+                        if Res.Wild_Pat.Contains (Positive (Pat))
+                          and then not Res.Wild_Pat.Element
+                                         (Positive (Pat)).Is_Empty
+                        then
+                           return Let1
+                             (Core.Real_Var_Id
+                                (Res.Wild_Pat.Element
+                                   (Positive (Pat)).First_Element.Var),
+                              Newtype_Projection (R.Con), Inner, Span);
+                        end if;
                         return Inner;
                      end if;
                      return Newtype_Field_Match
@@ -717,6 +748,17 @@ package body AHC.Desugar is
                            B : Core.Real_Var_Id := Fresh ("$f", Span);
                            Matched : Boolean := False;
                         begin
+                           --  RecordWildCards (M148): a `..` field binds
+                           --  its variable directly.
+                           if Res.Wild_Pat.Contains (Positive (Pat)) then
+                              for W of Res.Wild_Pat.Element (Positive (Pat))
+                              loop
+                                 if W.Field = Info.Field_Names.Element (FI)
+                                 then
+                                    B := Core.Real_Var_Id (W.Var);
+                                 end if;
+                              end loop;
+                           end if;
                            for F of N.Rec_Fields loop
                               if F.Field.Name = Info.Field_Names.Element (FI)
                               then
@@ -1211,6 +1253,23 @@ package body AHC.Desugar is
                end;
 
             when Case_E =>
+               if N.Alts.Is_Empty then
+                  --  EmptyCase (M148): force the scrutinee; if it ever
+                  --  returns, the case has no alternative for it.
+                  declare
+                     Seq_C : constant Builtins.Var_Maps.Cursor :=
+                       Env.Values.Find (Table.Intern ("seq"));
+                     Scrut : constant Core.Real_Expr_Id :=
+                       Ds_Expr (N.Scrutinee);
+                     Err : constant Core.Real_Expr_Id :=
+                       Error_Call ("empty case", Span);
+                  begin
+                     return App2
+                       (Global (Core.Var_Id
+                          (Builtins.Var_Maps.Element (Seq_C)), Span),
+                        Scrut, Err, Span);
+                  end;
+               end if;
                declare
                   S : constant Core.Real_Var_Id := Fresh ("$s", Span);
                   Fail_V : constant Core.Real_Var_Id :=
@@ -1262,7 +1321,10 @@ package body AHC.Desugar is
                   return Let1
                     (S, Ds_Expr (N.Scrutinee),
                      Let1 (Fail_V,
-                           Error_Call ("non-exhaustive case", Span),
+                           Error_Call
+                             ((if Is_Multi_Way_If (N)
+                               then "non-exhaustive guards in multi-way if"
+                               else "non-exhaustive case"), Span),
                            Result, Span),
                      Span);
                end;
@@ -1368,6 +1430,17 @@ package body AHC.Desugar is
                                  Arg := Ds_Expr (F.Value);
                               end if;
                            end loop;
+                           --  RecordWildCards (M148): a `..` field reads
+                           --  its variable.
+                           if Res.Wild_Expr.Contains (Positive (E)) then
+                              for W of Res.Wild_Expr.Element (Positive (E))
+                              loop
+                                 if W.Field = Info.Field_Names.Element (FI)
+                                 then
+                                    Arg := VarE (Core.Real_Var_Id (W.Var), Span);
+                                 end if;
+                              end loop;
+                           end if;
                            Result := App1 (Result, Arg, Span);
                         end;
                      end loop;

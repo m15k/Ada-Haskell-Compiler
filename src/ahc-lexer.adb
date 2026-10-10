@@ -280,7 +280,12 @@ package body AHC.Lexer is
          Word  : constant String := Slice (Start, Pos);
          Kind  : constant Token_Kind := Word_Kind (Word);
       begin
-         if Kind = Varid then
+         if Kind = Varid and then Word = "cases"
+           and then not Result.Is_Empty
+           and then Result.Last_Element.Kind = Backslash
+         then
+            Emit_Plain (Kw_Cases, Start);   --  `\cases` (M148)
+         elsif Kind = Varid then
             Emit ((Kind => Varid, Name => Table.Intern (Word),
                    others => <>), Start);
          else

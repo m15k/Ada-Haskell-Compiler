@@ -218,6 +218,7 @@ package body AHC.Builtins is
            ((Of_Class => Class_Id (Cl), Head => TyCon_Id (Head),
              Head_Vars => Head_Vars, Context => Context,
              Head_Type => No_Type, Is_GND => False, GND_Target => No_Type,
+             Stock_Derive => No_Stock_Derive, Overlap => No_Overlap,
              Dict_Global => Var_Id (Dict),
              From_Source => False,   --  wired; Prelude_Core binds it
              Method_Binds => Bind_Vectors.Empty_Vector,

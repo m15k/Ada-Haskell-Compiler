@@ -782,6 +782,7 @@ package body AHC.Typechecker is
             Hits : Natural := 0;
             Hit  : Real_Instance_Id := 1;
             Hit_Args : Type_Id_Vectors.Vector;
+            Hit_Ids : Instance_Id_Vectors.Vector;   --  every Matched (M148)
             Pending : Boolean := False;
             Heads : Unbounded_String;
          begin
@@ -852,13 +853,17 @@ package body AHC.Typechecker is
                            Hits := Hits + 1;
                            Hit := Inst_Id;
                            Hit_Args := A;
+                           Hit_Ids.Append (Inst_Id);
                            if Hits > 1 then
                               Append (Heads, ", ");
                            end if;
                            Append (Heads, Type_Str (IT));
                         end if;
                      when Inst_Match.Undecided =>
-                        Pending := True;
+                        --  An INCOHERENT instance never blocks (M148).
+                        if Inst.Overlap /= Incoherent then
+                           Pending := True;
+                        end if;
                      when Inst_Match.No_Match =>
                         null;
                   end case;
@@ -871,6 +876,31 @@ package body AHC.Typechecker is
                --  residual, answered by a given or reported as a
                --  missing context, exactly as before M147.
                return;
+            end if;
+            if Hits > 1 then
+               --  Overlap pragmas (M148): the most specific candidate,
+               --  when every other is overlappable or it is overlapping.
+               declare
+                  P : constant Natural := Inst_Match.Pick (M, Env, Hit_Ids);
+               begin
+                  if P /= 0 then
+                     Hit := Real_Instance_Id (P);
+                     declare
+                        Ign : constant Inst_Match.Match_Result :=
+                          Match_TC (M, Env, M.Info (Hit), W.C.Arg, Hit_Args);
+                        pragma Unreferenced (Ign);
+                     begin
+                        Hits := 1;
+                     end;
+                  end if;
+               end;
+            end if;
+            --  An INCOHERENT choice ignores the instances that might
+            --  match later (GHC's lookupInstEnv).
+            if Hits = 1
+              and then M.Info (Hit).Overlap = Incoherent
+            then
+               Pending := False;
             end if;
             if Hits > 1 then
                if not Probing then
@@ -1947,6 +1977,7 @@ package body AHC.Typechecker is
             Pending : Boolean := False;
             Hit : Real_Instance_Id := II;
             Hit_Args : Type_Id_Vectors.Vector;
+            Hit_Ids : Instance_Id_Vectors.Vector;
          begin
             if Failed or else D > 40 then
                return;
@@ -2005,12 +2036,34 @@ package body AHC.Typechecker is
                         Hits := Hits + 1;
                         Hit := J;
                         Hit_Args := A;
-                     elsif Inst_Match."=" (MR, Inst_Match.Undecided) then
+                        Hit_Ids.Append (J);
+                     elsif Inst_Match."=" (MR, Inst_Match.Undecided)
+                       and then M.Info (J).Overlap /= Incoherent
+                     then
                         Pending := True;
                      end if;
                   end;
                end if;
             end loop;
+            if Hits > 1 then
+               declare
+                  P : constant Natural := Inst_Match.Pick (M, Env, Hit_Ids);
+               begin
+                  if P /= 0 then
+                     Hit := Real_Instance_Id (P);
+                     declare
+                        Ign : constant Inst_Match.Match_Result :=
+                          Match_TC (M, Env, M.Info (Hit), T, Hit_Args);
+                        pragma Unreferenced (Ign);
+                     begin
+                        Hits := 1;
+                     end;
+                  end if;
+               end;
+            end if;
+            if Hits = 1 and then M.Info (Hit).Overlap = Incoherent then
+               Pending := False;
+            end if;
             if Hits = 0 and then not Pending then
                Fail ("no instance '" & Shown (C, T) & "'");
                return;

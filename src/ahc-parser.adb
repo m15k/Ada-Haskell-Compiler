@@ -38,10 +38,6 @@ package body AHC.Parser is
       --  `\case` shadows an outer one harmlessly, since nothing but
       --  the generated scrutinee ever names it.
       LC_Name : constant Names.Real_Name_Id := Table.Intern ("lc$");
-      --  `\cases` (GHC 9.4's LambdaCase) is not implemented; with the
-      --  extension always on it must be an error, not a lambda over a
-      --  variable named `cases` (M147 review).
-      Cases_Name : constant Names.Real_Name_Id := Table.Intern ("cases");
 
       ------------------------------------------------------------------
       --  Token plumbing
@@ -202,6 +198,15 @@ package body AHC.Parser is
           or else Tok.Kind = Colon
           or else Tok.Kind = Backtick);
 
+      --  Report 10.3's parse-error(t) for operators (M148): no
+      --  statement, alternative or declaration starts with an operator
+      --  - except `-` (negation) and `!` (a bang pattern); `~` is a
+      --  reserved symbol, never At_Op - so one at a block's column ends
+      --  the block and continues the enclosing expression: `do { ...;
+      --  pure x` / `<|>` / `pure [] }` (cnyegun/json-haskell).
+      function Op_Closes_Block return Boolean
+      is (At_Op and then not Is_Minus and then not Is_Bang);
+
       --  Consume an operator occurrence: symbol or `name`.
       function Parse_Op return Op_Occ is
          R : Op_Occ;
@@ -322,6 +327,12 @@ package body AHC.Parser is
       function Parse_Qual return Real_Stmt_Id;
       procedure Parse_Stmt_Block (Into : in out Stmt_Id_Vectors.Vector);
       procedure Parse_Alt_Block (Into : in out Alt_Id_Vectors.Vector);
+
+      --  The alternatives of `\cases` (M148): each is apat+ with the
+      --  same count n in every alternative; the patterns become one
+      --  tuple pattern (or the single pattern when n = 1).
+      procedure Parse_Cases_Block
+        (Into : in out Alt_Id_Vectors.Vector; Arity : out Natural);
 
       ------------------------------------------------------------------
       --  Types (Report 4.1.2)
@@ -606,8 +617,15 @@ package body AHC.Parser is
                      Advance;
                      declare
                         Fields : Field_Pat_Vectors.Vector;
+                        Dotdot : Boolean := False;
                      begin
                         while not At_K (Right_Brace) loop
+                           if At_K (Dot_Dot) then
+                              --  RecordWildCards (M148): last item.
+                              Advance;
+                              Dotdot := True;
+                              exit;
+                           end if;
                            declare
                               F : QName;
                            begin
@@ -616,10 +634,27 @@ package body AHC.Parser is
                               end if;
                               F := Tok_QName;
                               Advance;
-                              Expect (Equals, "'='");
-                              Fields.Append
-                                (Field_Pat'(Field => F,
-                                            Value => Parse_Pat));
+                              if At_K (Equals) then
+                                 Advance;
+                                 Fields.Append
+                                   (Field_Pat'(Field => F,
+                                               Value => Parse_Pat));
+                              else
+                                 --  NamedFieldPuns (M148): C{x} is
+                                 --  C{x = x}; GHC rejects a qualified
+                                 --  pun.
+                                 if F.Qualifier /= Names.No_Name then
+                                    Fail ("a punned field cannot be "
+                                          & "qualified");
+                                 end if;
+                                 Fields.Append
+                                   (Field_Pat'(Field => F,
+                                               Value => Arena.Add
+                                                 (Pat_Node'
+                                                    (Kind => Var_P,
+                                                     Span => Span,
+                                                     Var => F.Name))));
+                              end if;
                            end;
                            exit when not At_K (Comma);
                            Advance;
@@ -627,7 +662,8 @@ package body AHC.Parser is
                         Expect (Right_Brace, "'}'");
                         return Arena.Add
                           (Pat_Node'(Kind => Rec_P, Span => Span,
-                                     Rec_Con => C, Rec_Fields => Fields));
+                                     Rec_Con => C, Rec_Fields => Fields,
+                                     Rec_Dotdot => Dotdot));
                      end;
                   end if;
                   return Arena.Add
@@ -786,8 +822,15 @@ package body AHC.Parser is
                   Fields  : Field_Assign_Vectors.Vector;
                   Base    : constant Expr_Node := Arena.Node (Result);
                   Is_Con  : constant Boolean := Base.Kind = Con_E;
+                  Dotdot  : Boolean := False;
                begin
                   while not At_K (Right_Brace) loop
+                     if At_K (Dot_Dot) then
+                        --  RecordWildCards (M148): last item.
+                        Advance;
+                        Dotdot := True;
+                        exit;
+                     end if;
                      declare
                         F : QName;
                      begin
@@ -796,24 +839,46 @@ package body AHC.Parser is
                         end if;
                         F := Tok_QName;
                         Advance;
-                        Expect (Equals, "'='");
-                        Fields.Append
-                          (Field_Assign'(Field => F, Value => Parse_Expr));
+                        if At_K (Equals) then
+                           Advance;
+                           Fields.Append
+                             (Field_Assign'(Field => F, Value => Parse_Expr));
+                        else
+                           --  NamedFieldPuns (M148): C{x} is C{x = x}.
+                           if F.Qualifier /= Names.No_Name then
+                              Fail ("a punned field cannot be qualified");
+                           end if;
+                           Fields.Append
+                             (Field_Assign'
+                                (Field => F,
+                                 Value => Arena.Add
+                                   (Expr_Node'(Kind => Var_E, Span => Span,
+                                               Name => (Name => F.Name,
+                                                        Qualifier =>
+                                                          Names.No_Name)))));
+                        end if;
                      end;
                      exit when not At_K (Comma);
                      Advance;
                   end loop;
                   Expect (Right_Brace, "'}'");
+                  if Dotdot and then not Is_Con then
+                     Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error,
+                              Span, "a record update cannot use '..'");
+                     raise Parse_Failure;
+                  end if;
                   if Is_Con then
                      Result := Arena.Add
                        (Expr_Node'(Kind => Rec_Con_E, Span => Span,
                                    Rec_Base => Result,
-                                   Rec_Fields => Fields));
+                                   Rec_Fields => Fields,
+                                   Rec_Dotdot => Dotdot));
                   else
                      Result := Arena.Add
                        (Expr_Node'(Kind => Rec_Update_E, Span => Span,
                                    Rec_Base => Result,
-                                   Rec_Fields => Fields));
+                                   Rec_Fields => Fields,
+                                   Rec_Dotdot => Dotdot));
                   end if;
                end;
             end loop;
@@ -880,12 +945,51 @@ package body AHC.Parser is
          case Tok.Kind is
             when Backslash =>
                Advance;
-               if Tok.Kind = Varid
-                 and then Tok_QName.Name = Names.Name_Id (Cases_Name)
-               then
-                  Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error,
-                           Span, "\cases is not supported");
-                  raise Parse_Failure;
+               if Tok.Kind = Kw_Cases then
+                  --  `\cases alts` (M148) is `\c1$ .. cn$ -> case
+                  --  (c1$, .., cn$) of alts`, the alternatives' pattern
+                  --  rows read as tuple patterns (no tuple for n = 1);
+                  --  left-to-right matching is the same, and building
+                  --  the tuple forces nothing.
+                  Advance;
+                  declare
+                     Alts  : Alt_Id_Vectors.Vector;
+                     Arity : Natural;
+                     Pats  : Pat_Id_Vectors.Vector;
+                     Items : Expr_Id_Vectors.Vector;
+                  begin
+                     Parse_Cases_Block (Alts, Arity);
+                     for I in 1 .. Arity loop
+                        declare
+                           Img : constant String := Natural'Image (I);
+                           Nm  : constant Names.Name_Id := Names.Name_Id
+                             (Table.Intern
+                                ("c" & Img (Img'First + 1 .. Img'Last) & "$"));
+                        begin
+                           Pats.Append (Arena.Add
+                             (Pat_Node'(Kind => Var_P, Span => Span,
+                                        Var => Nm)));
+                           Items.Append (Arena.Add
+                             (Expr_Node'(Kind => Var_E, Span => Span,
+                                         Name => (Name => Nm,
+                                                  Qualifier =>
+                                                    Names.No_Name))));
+                        end;
+                     end loop;
+                     return Arena.Add
+                       (Expr_Node'(Kind => Lambda_E, Span => Span,
+                                   L_Pats => Pats,
+                                   L_Body => Arena.Add
+                                     (Expr_Node'
+                                        (Kind => Case_E, Span => Span,
+                                         Scrutinee =>
+                                           (if Arity = 1 then Items (1)
+                                            else Arena.Add
+                                              (Expr_Node'(Kind => Tuple_E,
+                                                          Span => Span,
+                                                          Items => Items))),
+                                         Alts => Alts))));
+                  end;
                end if;
                if Tok.Kind = Kw_Case then
                   Advance;
@@ -894,16 +998,7 @@ package body AHC.Parser is
                      Pats  : Pat_Id_Vectors.Vector;
                      Scrut : Real_Expr_Id;
                   begin
-                     Parse_Alt_Block (Alts);
-                     if Alts.Is_Empty then
-                        --  At the `\case` itself (M147 review: Fail
-                        --  reported the token after the block).
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Parse_Error, Span,
-                                 "empty \case block (EmptyCase is not "
-                                 & "supported)");
-                        raise Parse_Failure;
-                     end if;
+                     Parse_Alt_Block (Alts);   --  may be empty (M148)
                      Pats.Append (Arena.Add
                        (Pat_Node'(Kind => Var_P, Span => Span,
                                   Var => Names.Name_Id (LC_Name))));
@@ -949,6 +1044,74 @@ package body AHC.Parser is
                end;
             when Kw_If =>
                Advance;
+               if At_K (V_Left_Brace) or else At_K (Left_Brace)
+                 or else At_K (Pipe)
+               then
+                  --  MultiWayIf (M148): `if | g1 -> e1 | g2 -> e2` is
+                  --  `case () of _ | g1 -> e1 | g2 -> e2`. The guards
+                  --  sit in a layout block the layout pass opened.
+                  declare
+                     Explicit : constant Boolean := At_K (Left_Brace);
+                     Guards : Guarded_Rhs_Vectors.Vector;
+                     Alts : Alt_Id_Vectors.Vector;
+                  begin
+                     if not At_K (Pipe) then
+                        Advance;   --  '{' or the virtual one
+                     end if;
+                     loop
+                        while At_K (Semicolon) or else At_K (V_Semicolon)
+                        loop
+                           Advance;
+                        end loop;
+                        if At_K (Pipe) then
+                           Advance;
+                           declare
+                              Quals : Stmt_Id_Vectors.Vector;
+                           begin
+                              loop
+                                 Quals.Append (Parse_Qual);
+                                 exit when not At_K (Comma);
+                                 Advance;
+                              end loop;
+                              Expect (Right_Arrow, "'->'");
+                              Guards.Append
+                                (Guarded_Rhs'(Quals => Quals,
+                                              G_Body => Parse_Expr));
+                           end;
+                        elsif At_K (Right_Brace) or else At_K (V_Right_Brace)
+                        then
+                           Advance;
+                           exit;
+                        elsif not Explicit and then Try_Layout_Close then
+                           null;   --  closed by parse-error(t); loop
+                        else
+                           exit;   --  no block (a bare `if |` on one line)
+                        end if;
+                     end loop;
+                     if Guards.Is_Empty then
+                        Fail ("multi-way if needs at least one guard");
+                     end if;
+                     Alts.Append (Arena.Add
+                       (Alt_Node'(Span => Span,
+                                  --  `mwif$` (unspellable) marks the
+                                  --  alternative so desugar's failure
+                                  --  message names the multi-way if.
+                                  Pat => Arena.Add
+                                    (Pat_Node'(Kind => Var_P, Span => Span,
+                                               Var => Names.Name_Id
+                                                 (Table.Intern ("mwif$")))),
+                                  Alt_Rhs => Rhs'(Guarded => True,
+                                                  Guards => Guards),
+                                  Where_Ds => Decl_Id_Vectors.Empty_Vector)));
+                     return Arena.Add
+                       (Expr_Node'(Kind => Case_E, Span => Span,
+                                   Scrutinee => Arena.Add
+                                     (Expr_Node'(Kind => Con_E, Span => Span,
+                                                 Name => (Unit_Name,
+                                                          Names.No_Name))),
+                                   Alts => Alts));
+                  end;
+               end if;
                declare
                   C : constant Real_Expr_Id := Parse_Expr;
                begin
@@ -977,9 +1140,8 @@ package body AHC.Parser is
                begin
                   Expect (Kw_Of, "'of'");
                   Parse_Alt_Block (Alts);
-                  if Alts.Is_Empty then
-                     Fail ("empty case block");
-                  end if;
+                  --  An empty block is EmptyCase (M148): desugar forces
+                  --  the scrutinee.
                   return Arena.Add
                     (Expr_Node'(Kind => Case_E, Span => Span,
                                 Scrutinee => Scrut, Alts => Alts));
@@ -1079,6 +1241,50 @@ package body AHC.Parser is
       function Parse_Paren_Exp
         (Span : Diagnostics.Source_Span) return Real_Expr_Id
       is
+         --  TupleSections (M148): a missing tuple component is a hole,
+         --  bound by an unspellable lambda parameter ts<n>$ (numbered
+         --  left to right), so `(,True)` is `\ts1$ -> (ts1$, True)`.
+         Hole_Pats : Pat_Id_Vectors.Vector;
+
+         function Hole return Real_Expr_Id is
+            Img : constant String :=
+              Natural'Image (Natural (Hole_Pats.Length) + 1);
+            Nm  : constant Names.Name_Id := Names.Name_Id
+              (Table.Intern ("ts" & Img (Img'First + 1 .. Img'Last) & "$"));
+         begin
+            Hole_Pats.Append (Arena.Add
+              (Pat_Node'(Kind => Var_P, Span => Span, Var => Nm)));
+            return Arena.Add
+              (Expr_Node'(Kind => Var_E, Span => Span,
+                          Name => (Name => Nm, Qualifier => Names.No_Name)));
+         end Hole;
+
+         --  The rest of a tuple after its first item: each `,` starts
+         --  an item, a hole when `,` or `)` follows at once.
+         function Finish_Tuple (Items : in out Expr_Id_Vectors.Vector)
+           return Real_Expr_Id
+         is
+            T : Real_Expr_Id;
+         begin
+            while At_K (Comma) loop
+               Advance;
+               if At_K (Comma) or else At_K (Right_Paren) then
+                  Items.Append (Hole);
+               else
+                  Items.Append (Parse_Expr);
+               end if;
+            end loop;
+            Expect (Right_Paren, "')'");
+            Check_Tuple_Width (Natural (Items.Length), Span);
+            T := Arena.Add
+              (Expr_Node'(Kind => Tuple_E, Span => Span, Items => Items));
+            if Hole_Pats.Is_Empty then
+               return T;
+            end if;
+            return Arena.Add
+              (Expr_Node'(Kind => Lambda_E, Span => Span,
+                          L_Pats => Hole_Pats, L_Body => T));
+         end Finish_Tuple;
       begin
          Advance;  --  '('
 
@@ -1090,7 +1296,8 @@ package body AHC.Parser is
                           Name => (Unit_Name, Names.No_Name)));
          end if;
 
-         --  Tuple constructors (,) (,,) ...
+         --  Tuple constructors (,) (,,) ... - or a tuple section with
+         --  leading holes, `(,True)` / `(,,x)` (TupleSections, M148).
          if At_K (Comma) then
             declare
                Commas : Natural := 0;
@@ -1099,6 +1306,17 @@ package body AHC.Parser is
                   Commas := Commas + 1;
                   Advance;
                end loop;
+               if not At_K (Right_Paren) then
+                  declare
+                     Items : Expr_Id_Vectors.Vector;
+                  begin
+                     for I in 1 .. Commas loop
+                        Items.Append (Hole);
+                     end loop;
+                     Items.Append (Parse_Expr);
+                     return Finish_Tuple (Items);
+                  end;
+               end if;
                Expect (Right_Paren, "')'");
                declare
                   Text : String (1 .. Commas + 2);
@@ -1176,15 +1394,7 @@ package body AHC.Parser is
                   Items : Expr_Id_Vectors.Vector;
                begin
                   Items.Append (First);
-                  while At_K (Comma) loop
-                     Advance;
-                     Items.Append (Parse_Expr);
-                  end loop;
-                  Expect (Right_Paren, "')'");
-                  Check_Tuple_Width (Natural (Items.Length), Span);
-                  return Arena.Add
-                    (Expr_Node'(Kind => Tuple_E, Span => Span,
-                                Items => Items));
+                  return Finish_Tuple (Items);
                end;
             end if;
             Expect (Right_Paren, "')'");
@@ -1358,9 +1568,10 @@ package body AHC.Parser is
             --  implicit block via the parse-error(t) rule ('where'
             --  at the same indentation as the do statements).
             if not Explicit
-              and then Tok.Kind in Kw_Where | Kw_In | Kw_Then
-                         | Kw_Else | Right_Paren | Right_Bracket
-                         | Comma
+              and then (Tok.Kind in Kw_Where | Kw_In | Kw_Then
+                          | Kw_Else | Right_Paren | Right_Bracket
+                          | Comma
+                        or else Op_Closes_Block)
               and then Try_Layout_Close
             then
                null;   --  Tok is the V_Right_Brace; loop exits above
@@ -1386,6 +1597,73 @@ package body AHC.Parser is
       --  Alternatives (case blocks)
       ------------------------------------------------------------------
 
+      procedure Parse_Cases_Block
+        (Into : in out Alt_Id_Vectors.Vector; Arity : out Natural)
+      is
+         Explicit : constant Boolean := At_K (Left_Brace);
+         Known : Boolean := False;
+      begin
+         Arity := 0;
+         if not (Explicit or else At_K (V_Left_Brace)) then
+            Fail ("expected \cases alternatives");
+         end if;
+         Advance;
+         loop
+            while At_K (Semicolon) or else At_K (V_Semicolon) loop
+               Advance;
+            end loop;
+            exit when (Explicit and then At_K (Right_Brace))
+              or else (not Explicit and then At_K (V_Right_Brace));
+            declare
+               Span : constant Diagnostics.Source_Span := Tok.Span;
+               Ps   : Pat_Id_Vectors.Vector;
+               P    : Real_Pat_Id;
+               W    : Decl_Id_Vectors.Vector;
+            begin
+               while Can_Start_APat loop
+                  Ps.Append (Parse_APat);
+               end loop;
+               if Ps.Is_Empty then
+                  Fail ("expected the patterns of a \cases alternative");
+               elsif Known and then Natural (Ps.Length) /= Arity then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
+                           "\cases alternatives have different numbers "
+                           & "of patterns");
+                  raise Parse_Failure;
+               end if;
+               Arity := Natural (Ps.Length);
+               Known := True;
+               P := (if Arity = 1 then Ps (1)
+                     else Arena.Add (Pat_Node'(Kind => Tuple_P, Span => Span,
+                                               Items => Ps)));
+               declare
+                  R : constant Rhs := Parse_Guarded (Right_Arrow, "'->'");
+               begin
+                  Parse_Where (W);
+                  Into.Append
+                    (Arena.Add
+                       (Alt_Node'(Span => Span, Pat => P,
+                                  Alt_Rhs => R, Where_Ds => W)));
+               end;
+            end;
+            if At_K (Semicolon) or else At_K (V_Semicolon) then
+               Advance;
+            elsif (Explicit and then At_K (Right_Brace))
+              or else (not Explicit and then At_K (V_Right_Brace))
+            then
+               null;
+            elsif not Explicit and then Try_Layout_Close then
+               null;
+            else
+               Fail ("expected ';' or end of \cases block");
+            end if;
+         end loop;
+         Advance;
+         if not Known then
+            Fail ("empty \cases block");
+         end if;
+      end Parse_Cases_Block;
+
       procedure Parse_Alt_Block (Into : in out Alt_Id_Vectors.Vector) is
          Explicit : constant Boolean := At_K (Left_Brace);
       begin
@@ -1404,6 +1682,10 @@ package body AHC.Parser is
                   Fail ("unterminated '{' block");
                end if;
                return;
+            end if;
+            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            then
+               exit;   --  Tok is the V_Right_Brace (M148 operator rule)
             end if;
             declare
                Span : constant Diagnostics.Source_Span := Tok.Span;
@@ -2231,6 +2513,10 @@ package body AHC.Parser is
                            Tok.Span, "unterminated '{' block");
                end if;
                return;
+            end if;
+            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            then
+               exit;   --  Tok is the V_Right_Brace (M148 operator rule)
             end if;
             begin
                Into.Append (Parse_Decl);

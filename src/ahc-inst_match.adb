@@ -247,7 +247,7 @@ package body AHC.Inst_Match is
             declare
                A : constant Real_Type_Id :=
                  M.Add (Type_Node'(Kind => TVar_T,
-                                   Tv => Real_TyVar_Id (HV)));
+                                   Tv => HV));
             begin
                H := Builtins.Make_App (M, Env, H, A);
             end;
@@ -298,5 +298,80 @@ package body AHC.Inst_Match is
    begin
       return Go (A, B);
    end Heads_Equal;
+
+   -------------------
+   -- More_Specific --
+   -------------------
+
+   function More_Specific
+     (M : in out Core_Module; Env : Builtins.Global_Env;
+      A, B : Instance_Info) return Boolean
+   is
+      function Id (T : Real_Type_Id) return Real_Type_Id is (T);
+      function Match is new Match_Head (Id);
+      HA : constant Real_Type_Id := Instance_Type (M, Env, A);
+      HB : constant Real_Type_Id := Instance_Type (M, Env, B);
+      Ignore : Type_Id_Vectors.Vector;
+      B_Covers_A : constant Boolean :=
+        Match (M, Env, HB, B.Head_Vars, HA, Ignore) = Matched;
+      A_Covers_B : constant Boolean :=
+        Match (M, Env, HA, A.Head_Vars, HB, Ignore) = Matched;
+   begin
+      return B_Covers_A and then not A_Covers_B;
+   end More_Specific;
+
+   ----------
+   -- Pick --
+   ----------
+
+   function Pick
+     (M : in out Core_Module; Env : Builtins.Global_Env;
+      Cands : Instance_Id_Vectors.Vector) return Natural
+   is
+      function Overlapping (I : Instance_Info) return Boolean is
+        (I.Overlap in Overlapping | Overlaps | Incoherent);
+      function Overlappable (I : Instance_Info) return Boolean is
+        (I.Overlap in Overlappable | Overlaps | Incoherent);
+      Coherent : Natural := 0;   --  the non-incoherent survivors
+      Choice   : Natural := 0;
+      Any      : Natural := 0;
+   begin
+      for X of Cands loop
+         declare
+            XI : constant Instance_Info := M.Info (X);
+            Dropped : Boolean := False;
+         begin
+            for Y of Cands loop
+               if Y /= X then
+                  declare
+                     YI : constant Instance_Info := M.Info (Y);
+                  begin
+                     if More_Specific (M, Env, YI, XI)
+                       and then (Overlappable (XI) or else Overlapping (YI))
+                     then
+                        Dropped := True;
+                     end if;
+                  end;
+               end if;
+            end loop;
+            if not Dropped then
+               if Any = 0 then
+                  Any := Natural (X);
+               end if;
+               if XI.Overlap /= Incoherent then
+                  Coherent := Coherent + 1;
+                  Choice := Natural (X);
+               end if;
+            end if;
+         end;
+      end loop;
+      if Coherent = 1 then
+         return Choice;
+      elsif Coherent = 0 then
+         return Any;
+      else
+         return 0;
+      end if;
+   end Pick;
 
 end AHC.Inst_Match;

@@ -62,4 +62,20 @@ package AHC.Inst_Match is
    function Heads_Equal
      (M : Core_Module; A, B : Real_Type_Id) return Boolean;
 
+   --  A is strictly more specific than B: B's head matches A's head
+   --  (A's type variables rigid) and not the other way round (M148).
+   function More_Specific
+     (M : in out Core_Module; Env : Builtins.Global_Env;
+      A, B : Instance_Info) return Boolean;
+
+   --  GHC's overlap resolution among the instances that all MATCH a
+   --  wanted: drop every candidate IX for which some IY is strictly
+   --  more specific and IX is overlappable or IY overlapping; then the
+   --  one non-incoherent survivor, or any survivor when all of them
+   --  are incoherent. 0 when there is no legal choice (the overlap
+   --  error).
+   function Pick
+     (M : in out Core_Module; Env : Builtins.Global_Env;
+      Cands : Instance_Id_Vectors.Vector) return Natural;
+
 end AHC.Inst_Match;

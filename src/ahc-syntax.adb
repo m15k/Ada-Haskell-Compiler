@@ -79,8 +79,8 @@ package body AHC.Syntax is
             return Ok (A, N.Cond) and then Ok (A, N.Then_E)
               and then Ok (A, N.Else_E);
          when Case_E =>
-            return N.Alts.Length >= 1
-              and then Ok (A, N.Scrutinee) and then All_Ok (A, N.Alts);
+            --  EmptyCase (M148): zero alternatives are legal.
+            return Ok (A, N.Scrutinee) and then All_Ok (A, N.Alts);
          when Do_E =>
             return N.Stmts.Length >= 1 and then All_Ok (A, N.Stmts);
          when Tuple_E =>

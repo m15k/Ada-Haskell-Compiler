@@ -38,7 +38,13 @@ package AHC.Tokens is
       --  Inserted by AHC.Layout, never by the lexer
       V_Left_Brace, V_Right_Brace, V_Semicolon,
 
-      End_Of_File, Error_Token);
+      End_Of_File, Error_Token,
+
+      --  `cases` right after `\` (LambdaCase's `\cases`, M148): the
+      --  lexer's one context-sensitive keyword, so the layout pass can
+      --  open a block after it as after `of`. Elsewhere `cases` is an
+      --  ordinary variable.
+      Kw_Cases);
 
    subtype Reserved_Word_Kind is Token_Kind range Kw_Case .. Underscore;
    subtype Reserved_Op_Kind   is Token_Kind range Dot_Dot .. Fat_Arrow;

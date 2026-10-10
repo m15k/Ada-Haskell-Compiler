@@ -80,6 +80,17 @@ package AHC.Rename is
    package Field_Res_Maps is new Ada.Containers.Ordered_Maps
      (Positive, Core.Var_Id_Vectors.Vector, "=" => Core.Var_Id_Vectors."=");
 
+   --  RecordWildCards (M148): the fields a `..` filled, by field name
+   --  within its one constructor, and the variable each binds (in a
+   --  pattern) or reads (in a construction).
+   type Wild_Entry is record
+      Field : Names.Name_Id;
+      Var   : Core.Var_Id;
+   end record;
+   package Wild_Vectors is new Ada.Containers.Vectors (Positive, Wild_Entry);
+   package Wild_Maps is new Ada.Containers.Ordered_Maps
+     (Positive, Wild_Vectors.Vector, "=" => Wild_Vectors."=");
+
    function Var_Hash (V : Core.Real_Var_Id) return Ada.Containers.Hash_Type
    is (Ada.Containers.Hash_Type (V));
 
@@ -134,6 +145,8 @@ package AHC.Rename is
       Decl_Inst  : Inst_Res_Vectors.Vector;
       Syn_Res    : Syn_Res_Maps.Map;          --  Con_T -> synonym
       Field_Res  : Field_Res_Maps.Map;        --  Rec_Update_E fields
+      Wild_Pat   : Wild_Maps.Map;             --  Rec_P `..` (M148)
+      Wild_Expr  : Wild_Maps.Map;             --  Rec_Con_E `..` (M148)
       Own_Syns   : Builtins.Syn_Maps.Map;     --  this module's, uncached
       Own_Values : Builtins.Var_Maps.Map;     --  this module's top level
       Var_Sig   : Var_Sig_Maps.Map;           --  binder -> signature type

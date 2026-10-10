@@ -93,6 +93,7 @@ package body AHC.Tokens is
          when V_Semicolon   => return ";v";
          when End_Of_File   => return "<eof>";
          when Error_Token   => return "<error>";
+         when Kw_Cases      => return "cases";
       end case;
    end Image;
 

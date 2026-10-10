@@ -1,0 +1,4 @@
+(P {px = 3, py = 4, name = "pt"},25)
+(P {px = 2, py = 2, name = "pt"},P {px = 0, py = 0, name = "renamed"})
+box:pt11
+(9,0)
