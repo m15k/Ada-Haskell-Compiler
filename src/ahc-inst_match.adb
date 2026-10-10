@@ -21,7 +21,7 @@ package body AHC.Inst_Match is
    ----------------
 
    function Match_Head
-     (M      : Core_Module;
+     (M      : in out Core_Module;
       Env    : Builtins.Global_Env;
       Pat    : Real_Type_Id;
       Vars   : TyVar_Id_Vectors.Vector;
@@ -30,12 +30,44 @@ package body AHC.Inst_Match is
    is
       B : Bind_Maps.Map;
 
+      --  `x -> y` spelled as the application `(->) x y`, so a head
+      --  written with a variable in function position (`C (f a)`) or
+      --  as `(->) r` meets a function type (M147 review).
+      function As_App (T : Real_Type_Id) return Real_Type_Id is
+         N : constant Type_Node := M.Node (T);
+      begin
+         if N.Kind /= TFun_T then
+            return T;
+         end if;
+         declare
+            Arrow : constant Real_Type_Id :=
+              M.Add (Type_Node'(Kind => TCon_T,
+                                Con => Real_TyCon_Id (Env.Arrow_TC),
+                                Refine => No_Refinement));
+            Partial : constant Real_Type_Id :=
+              M.Add (Type_Node'(Kind => TApp_T, T_Fun => Arrow,
+                                T_Arg => N.From));
+         begin
+            return M.Add (Type_Node'(Kind => TApp_T, T_Fun => Partial,
+                                     T_Arg => N.To));
+         end;
+      end As_App;
+
       --  Structural equality, for a head variable that occurs twice
       --  (`instance C (Either a a)`). A metavariable makes it
       --  undecided unless both sides are that same metavariable.
-      function Same (X, Y : Real_Type_Id) return Match_Result is
-         NX : constant Type_Node := M.Node (Norm (X));
-         NY : constant Type_Node := M.Node (Norm (Y));
+      function Same (X0, Y0 : Real_Type_Id) return Match_Result is
+         XN : constant Real_Type_Id := Norm (X0);
+         YN : constant Real_Type_Id := Norm (Y0);
+         --  the two spellings of a function type compare equal
+         X : constant Real_Type_Id :=
+           (if M.Node (XN).Kind = TFun_T and then M.Node (YN).Kind = TApp_T
+            then As_App (XN) else XN);
+         Y : constant Real_Type_Id :=
+           (if M.Node (YN).Kind = TFun_T and then M.Node (XN).Kind = TApp_T
+            then As_App (YN) else YN);
+         NX : constant Type_Node := M.Node (X);
+         NY : constant Type_Node := M.Node (Y);
       begin
          if NX.Kind = TMeta_T or else NY.Kind = TMeta_T then
             return (if NX.Kind = TMeta_T and then NY.Kind = TMeta_T
@@ -83,6 +115,13 @@ package body AHC.Inst_Match is
             return Matched;
          elsif TN.Kind = TMeta_T then
             return Undecided;
+         elsif TN.Kind = TVar_T then
+            --  A rigid type variable where the head has structure: it
+            --  matches only for some instantiation of the variable, so
+            --  committing to another instance now would be incoherent
+            --  (GHC: "the choice depends on the instantiation"). The
+            --  wanted stays residual (M147 review).
+            return Undecided;
          end if;
          case PN.Kind is
             when TCon_T =>
@@ -96,28 +135,10 @@ package body AHC.Inst_Match is
                      return Combine (R1, Go (PN.T_Arg, TN.T_Arg));
                   end;
                elsif TN.Kind = TFun_T then
-                  --  A head spelled `(->) a b` against `x -> y` (M142:
-                  --  a function type unifies with (->) applied).
-                  declare
-                     PF : constant Type_Node := M.Node (PN.T_Fun);
-                  begin
-                     if PF.Kind = TApp_T then
-                        declare
-                           PH : constant Type_Node := M.Node (PF.T_Fun);
-                        begin
-                           if PH.Kind = TCon_T
-                             and then TyCon_Id (PH.Con) = Env.Arrow_TC
-                           then
-                              declare
-                                 R1 : constant Match_Result :=
-                                   Go (PF.T_Arg, TN.From);
-                              begin
-                                 return Combine (R1, Go (PN.T_Arg, TN.To));
-                              end;
-                           end if;
-                        end;
-                     end if;
-                  end;
+                  --  `x -> y` as `(->) x y` (M142: a function type
+                  --  unifies with (->) applied; M147 review: also for
+                  --  a variable head, `C (f a)`).
+                  return Go (P, As_App (T));
                end if;
                return No_Match;
             when TFun_T =>
@@ -127,6 +148,8 @@ package body AHC.Inst_Match is
                   begin
                      return Combine (R1, Go (PN.To, TN.To));
                   end;
+               elsif TN.Kind = TApp_T then
+                  return Go (As_App (P), T);   --  `(->) x y` spelled out
                end if;
                return No_Match;
             when TVar_T | TMeta_T =>
@@ -152,7 +175,7 @@ package body AHC.Inst_Match is
    --------------------
 
    function Match_Instance
-     (M      : Core_Module;
+     (M      : in out Core_Module;
       Env    : Builtins.Global_Env;
       Inst   : Instance_Info;
       Target : Real_Type_Id;

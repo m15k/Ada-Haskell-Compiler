@@ -154,7 +154,7 @@ package body AHC.Layout is
             elsif T.First_On_Line and then not S.Newline_Done
               and then not S.Stack.Is_Empty and then Top (S) /= 0
             then
-               if N = Top (S) and then T.Kind = Kw_Where then
+               if N = Top (S) and then T.Kind in Kw_Where | Kw_In then
                   --  Report 10.3's parse-error(t) rule, in the one
                   --  shape that matters: `where` can never begin a
                   --  declaration, statement or alternative, so the
@@ -163,7 +163,10 @@ package body AHC.Layout is
                   --  implicit block instead. The `where` then attaches
                   --  to the enclosing declaration, which is what a
                   --  case whose alternatives and `where` share a
-                  --  column means (found by M141 in magetron/hson).
+                  --  column means (found by M141 in magetron/hson). The
+                  --  same holds for `in` (M147's scout: `let x = e` /
+                  --  `in body` with `in` at the binding's column in a
+                  --  do block, cnyegun/json-haskell).
                   Close_Implicit (S, T);
                elsif N = Top (S) then
                   S.Newline_Done := True;
@@ -182,6 +185,16 @@ package body AHC.Layout is
                      Enqueue (S, T);
 
                   when Right_Brace =>
+                     --  Report 10.3's parse-error(t) rule: an explicit
+                     --  `}` closes any implicit blocks opened inside its
+                     --  explicit `{` first - `\case { Just f -> \case
+                     --  0 -> f; _ -> 1 }`, or a `case` in a record
+                     --  field (M147 review).
+                     if S.Stack.Contains (0) then
+                        while Top (S) /= 0 loop
+                           Close_Implicit (S, T);
+                        end loop;
+                     end if;
                      if not S.Stack.Is_Empty and then Top (S) = 0 then
                         Pop (S);
                      else

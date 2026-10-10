@@ -233,3 +233,26 @@ out of scope.
   contexts already allow;
 - `TemplateHaskell`;
 - gating extensions on `LANGUAGE` pragmas.
+
+## Errata (after implementation and the adversarial review)
+
+- **Default language.** GHC 9.4.8's default language is GHC2021, which enables
+  FlexibleInstances, TypeSynonymInstances, GeneralizedNewtypeDeriving,
+  FlexibleContexts, DeriveFunctor and EmptyCase. Only LambdaCase needs a
+  pragma under `runghc`.
+- **`Parser` example.** GHC accepts `newtype Parser a = Parser (String ->
+  [(a, String)]) deriving Functor` through stock DeriveFunctor. AHC rejects it
+  (no stock DeriveFunctor; EXCLUSIONS). The GND precondition test uses a
+  contravariant field instead.
+- **`\case {}`.** It is accepted by `runghc` (EmptyCase is in GHC2021).
+  Rejecting it is a documented gap, as is `\cases`.
+- **Where things landed.**
+  - Unit 1's `Lambda_Case_E` became a parser rewrite over an unspellable binder.
+  - Unit 3a's desugar erasure became codegen erasure: one place covers every
+    Core producer.
+- **Tests.**
+  - The "wrapped State" GND test landed as `m147r_gnd_function_rep` (a reader
+    over `e -> a`), once the review made function representations eta-reduce.
+  - Newtype keys in `Data.Map` were probed by the review and agree with GHC.
+  - Newtypes in FFI signatures are rejected ("not marshallable"), which is
+    recorded in EXCLUSIONS rather than tested.

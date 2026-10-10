@@ -401,6 +401,21 @@ package body AHC.Discharge is
                   elsif Nm = "GT" then
                      return Mk ((Kind => V_Ord3, O => 1));
                   end if;
+                  --  A newtype constructor is the identity at run time
+                  --  (M147) and a strict field forces its argument, so
+                  --  either applied to bottom is bottom: treating it as
+                  --  a value made `N undefined `seq` True` discharge as
+                  --  True. Leave such a constructor Stuck - incomplete,
+                  --  never wrong (M147 review).
+                  declare
+                     DI : constant Core.DataCon_Info := M.Info (N.Con);
+                  begin
+                     if M.Info (Core.Real_TyCon_Id (DI.TyCon)).Is_Newtype
+                       or else DI.Stricts.Contains (True)
+                     then
+                        return Stuck;
+                     end if;
+                  end;
                   return Mk ((Kind => V_Con, Con => N.Con,
                               others => <>));
                end;

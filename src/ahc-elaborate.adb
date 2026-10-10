@@ -70,9 +70,23 @@ package body AHC.Elaborate is
          NA : constant Type_Node := M2.Node (A);
          NB : constant Type_Node := M2.Node (B);
       begin
-         --  Post-kinds instance contexts constrain plain tyvars.
-         return NA.Kind = TVar_T and then NB.Kind = TVar_T
-           and then NA.Tv = NB.Tv;
+         --  Structural (M147 review): an inferred or GND context may
+         --  constrain a constructed type (`C (Maybe a)`), not only a
+         --  plain tyvar.
+         if NA.Kind /= NB.Kind then
+            return False;
+         end if;
+         case NA.Kind is
+            when TVar_T => return NA.Tv = NB.Tv;
+            when TMeta_T => return NA.Meta = NB.Meta;
+            when TCon_T => return NA.Con = NB.Con;
+            when TApp_T =>
+               return Same_Head_Arg (M2, NA.T_Fun, NB.T_Fun)
+                 and then Same_Head_Arg (M2, NA.T_Arg, NB.T_Arg);
+            when TFun_T =>
+               return Same_Head_Arg (M2, NA.From, NB.From)
+                 and then Same_Head_Arg (M2, NA.To, NB.To);
+         end case;
       end Same_Head_Arg;
 
       --  T with the instance head variables replaced (Subst maps
@@ -323,11 +337,58 @@ package body AHC.Elaborate is
                           (Given_Ev'(C => Inst.Context (CI), D => D));
                      end;
                   end loop;
-                  Dict := Solve_Ev
-                    (Constraint'(Class => Inst.Of_Class,
-                                 Arg => Real_Type_Id (Inst.GND_Target),
-                                 Span => Span),
-                     Givens, Span, 0);
+                  --  A fresh record: the methods are the
+                  --  representation's (selected out of its dictionary,
+                  --  bound once), but the superclass slots are the
+                  --  NEWTYPE's own instances - with a hand-written
+                  --  `Eq Age`, (==) through an `Ord Age` dictionary
+                  --  is Age's, as in GHC (M147 review: the slots were
+                  --  the representation's).
+                  declare
+                     Cl : constant Real_Class_Id :=
+                       Real_Class_Id (Inst.Of_Class);
+                     Cl_Info : constant Class_Info := M.Info (Cl);
+                     Rep_V : constant Real_Var_Id := M.Mint_Var
+                       ((Name => Table.Intern ("$drep"), Span => Span,
+                         others => <>));
+                     Rep_D : constant Real_Expr_Id := Solve_Ev
+                       (Constraint'(Class => Inst.Of_Class,
+                                    Arg => Real_Type_Id (Inst.GND_Target),
+                                    Span => Span),
+                        Givens, Span, 0);
+                     Head_T : constant Real_Type_Id :=
+                       Inst_Match.Instance_Type (M, Env, Inst);
+                     Supers : Expr_Id_Vectors.Vector;
+                     Methods : Expr_Id_Vectors.Vector;
+                     Binds : Bind_Vectors.Vector;
+                  begin
+                     for Super of Cl_Info.Supers loop
+                        Supers.Append
+                          (Solve_Ev
+                             (Constraint'(Class => Super, Arg => Head_T,
+                                          Span => Span),
+                              Givens, Span, 0));
+                     end loop;
+                     for MI in 1 .. Cl_Info.Methods.Last_Index loop
+                        declare
+                           Sel : constant Real_Expr_Id := M.Add (Expr_Node'
+                             (Kind => Var_C, Span => Span,
+                              V => Real_Var_Id
+                                     (Cl_Info.Methods.Element (MI).Selector)));
+                           Rep : constant Real_Expr_Id := M.Add (Expr_Node'
+                             (Kind => Var_C, Span => Span, V => Rep_V));
+                        begin
+                           Methods.Append (M.Add (Expr_Node'
+                             (Kind => App_C, Span => Span,
+                              Fun => Sel, Arg => Rep)));
+                        end;
+                     end loop;
+                     Binds.Append (Bind_Pair'(Binder => Rep_V, Rhs => Rep_D));
+                     Dict := M.Add (Expr_Node'
+                       (Kind => Let_C, Span => Span, Is_Rec => False,
+                        Binds => Binds,
+                        Let_Body => Mk_Dict (M, Cl, Supers, Methods, Span)));
+                  end;
                   for PI in reverse 1 .. Params.Last_Index loop
                      Dict := M.Add (Expr_Node'
                        (Kind => Lam_C, Span => Span,
@@ -732,13 +793,10 @@ package body AHC.Elaborate is
                                           return No_Expr;
                                        end if;
                                        declare
-                                          H : Real_Type_Id :=
-                                            M.Add (Type_Node'
-                                              (Kind => TCon_T,
-                                               Con => Real_TyCon_Id
-                                                 (Inst.Head),
-                                               Refine =>
-                                                 No_Refinement));
+                                          --  The full instance head (M147 review: a flexible
+                                          --  `Monad (P Int)` was rebuilt as bare `P`).
+                                          H : constant Real_Type_Id :=
+                                            Inst_Match.Instance_Type (M, Env, Inst);
                                           --  Monad does NOT have
                                           --  Applicative as a
                                           --  superclass here, so the
@@ -798,14 +856,6 @@ package body AHC.Elaborate is
                                                 & " 'return'");
                                              return No_Expr;
                                           end if;
-                                          for HV of Inst.Head_Vars
-                                          loop
-                                             H := Builtins.Make_App
-                                               (M, Env, H, M.Add
-                                                  (Type_Node'
-                                                    (Kind => TVar_T,
-                                                     Tv => HV)));
-                                          end loop;
                                           return Expr_Id
                                             (Ap2E (Real_Expr_Id
                                                      (PureF),

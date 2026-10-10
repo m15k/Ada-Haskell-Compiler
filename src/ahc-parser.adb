@@ -38,6 +38,10 @@ package body AHC.Parser is
       --  `\case` shadows an outer one harmlessly, since nothing but
       --  the generated scrutinee ever names it.
       LC_Name : constant Names.Real_Name_Id := Table.Intern ("lc$");
+      --  `\cases` (GHC 9.4's LambdaCase) is not implemented; with the
+      --  extension always on it must be an error, not a lambda over a
+      --  variable named `cases` (M147 review).
+      Cases_Name : constant Names.Real_Name_Id := Table.Intern ("cases");
 
       ------------------------------------------------------------------
       --  Token plumbing
@@ -876,6 +880,13 @@ package body AHC.Parser is
          case Tok.Kind is
             when Backslash =>
                Advance;
+               if Tok.Kind = Varid
+                 and then Tok_QName.Name = Names.Name_Id (Cases_Name)
+               then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error,
+                           Span, "\cases is not supported");
+                  raise Parse_Failure;
+               end if;
                if Tok.Kind = Kw_Case then
                   Advance;
                   declare
@@ -885,7 +896,13 @@ package body AHC.Parser is
                   begin
                      Parse_Alt_Block (Alts);
                      if Alts.Is_Empty then
-                        Fail ("empty \case block");
+                        --  At the `\case` itself (M147 review: Fail
+                        --  reported the token after the block).
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Parse_Error, Span,
+                                 "empty \case block (EmptyCase is not "
+                                 & "supported)");
+                        raise Parse_Failure;
                      end if;
                      Pats.Append (Arena.Add
                        (Pat_Node'(Kind => Var_P, Span => Span,
@@ -1793,6 +1810,42 @@ package body AHC.Parser is
             Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
                      "newtype needs exactly one constructor");
             raise Parse_Failure;
+         end if;
+
+         --  Report 4.2.3: a newtype's one constructor has exactly one
+         --  field, which is not strict. Since newtypes are erased (M147)
+         --  the constructor IS the identity, so `newtype T = T Int Int`,
+         --  `newtype Z = Z` and `newtype S = S !Int` would miscompile
+         --  rather than merely differ (M147 review); GHC rejects them.
+         if Is_Newtype then
+            declare
+               CN : constant Con_Node := Arena.Node (Cons (1));
+               Fields : Natural := 0;
+               Strict : Boolean := False;
+            begin
+               case CN.Shape is
+                  when Prefix_Con | Infix_Con =>
+                     Fields := Natural (CN.Args.Length);
+                     for B of CN.Stricts loop
+                        Strict := Strict or else B;
+                     end loop;
+                  when Record_Con =>
+                     for F of CN.Fields loop
+                        Fields := Fields + Natural (F.Names_List.Length);
+                        Strict := Strict or else F.Strict;
+                     end loop;
+               end case;
+               if Fields /= 1 then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
+                           "a newtype constructor must have exactly one "
+                           & "field");
+                  raise Parse_Failure;
+               elsif Strict then
+                  Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
+                           "a newtype constructor field cannot be strict");
+                  raise Parse_Failure;
+               end if;
+            end;
          end if;
 
          if Is_Newtype then

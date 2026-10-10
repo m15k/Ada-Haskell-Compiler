@@ -28,7 +28,7 @@ package AHC.Inst_Match is
    generic
       with function Norm (T : Real_Type_Id) return Real_Type_Id;
    function Match_Head
-     (M      : Core_Module;
+     (M      : in out Core_Module;
       Env    : Builtins.Global_Env;
       Pat    : Real_Type_Id;
       Vars   : TyVar_Id_Vectors.Vector;
@@ -44,7 +44,7 @@ package AHC.Inst_Match is
    generic
       with function Norm (T : Real_Type_Id) return Real_Type_Id;
    function Match_Instance
-     (M      : Core_Module;
+     (M      : in out Core_Module;
       Env    : Builtins.Global_Env;
       Inst   : Instance_Info;
       Target : Real_Type_Id;
