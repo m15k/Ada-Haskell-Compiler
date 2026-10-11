@@ -25,12 +25,19 @@ jobs:
 
       - name: Install GHC 9.4.8
         run: |
-          if [ ! -x "$HOME/.ghcup/bin/runghc" ]; then
+          if [ ! -x "$HOME/.ghcup/bin/ghcup" ]; then
             curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org \
               | BOOTSTRAP_HASKELL_NONINTERACTIVE=1 BOOTSTRAP_HASKELL_MINIMAL=1 sh
-            "$HOME/.ghcup/bin/ghcup" install ghc 9.4.8 --set
           fi
-          "$HOME/.ghcup/bin/runghc" --version
+          # The runner image ships its own ghcup with a newer GHC (9.14
+          # in October 2026), so an existing runghc proves nothing: the
+          # oracle must BE 9.4.8, or every differential silently checks
+          # against another compiler.
+          "$HOME/.ghcup/bin/ghcup" install ghc 9.4.8
+          "$HOME/.ghcup/bin/ghcup" set ghc 9.4.8
+          v=$("$HOME/.ghcup/bin/runghc" --version)
+          echo "$v"
+          case "$v" in *" 9.4.8"*) ;; *) echo "oracle is not GHC 9.4.8"; exit 1;; esac
 
       - name: System packages (collector + pkg-config discovery)
         run: |
