@@ -52,6 +52,7 @@ main = do
   t "overlong utf8" (readProcess "printf" ["ab\\300\\200z"] "" >>= say . show)
   t "raise in stdin" (readProcess "cat" [] ("abc" ++ error "boom") >>= say . show)
   t "raise in stdin, child ignores it" (readProcess "true" [] ("abc" ++ error "boom2") >>= say . show)
+  t "raise in stdin, child closed it first" (readProcess "sh" ["-c", "exec 0<&-; sleep 0.2"] ("abc" ++ error "boom3") >>= say . show)
   _ <- c_signal 20 (nullPtr `plusPtr` 1)
   t "waitpid fails" (readProcessWithExitCode "false" [] "" >>= say . show)
   t "system, waitpid fails" (system "exit 3" >>= say . show)

@@ -6689,6 +6689,22 @@ static AhcNode *proc_decode_error(StrBuf *b, int fd) {
    the captured outputs. Returns NULL, or an IOError for a poll
    failure. Forcing FEED may raise; the caller's catch frame cleans
    up. */
+/* Encode the next stretch of the String into pr->pend, forcing as it
+   goes; returns the rest (NULL at its end). */
+static AhcNode *proc_fill(ProcRun *pr, AhcNode *feed) {
+  pr->pend_off = pr->pend_len = 0;
+  while (pr->pend_len + 4 <= sizeof pr->pend) {
+    AhcNode *cell = ahc_eval(feed);
+    unsigned char enc[4];
+    int el, j;
+    if (cell->u.con.contag != CONS_TAG) return NULL;
+    el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
+    for (j = 0; j < el; j++) pr->pend[pr->pend_len++] = enc[j];
+    feed = cell->u.con.fields[1];
+  }
+  return feed;
+}
+
 static AhcNode *proc_pump(ProcRun *pr, AhcNode *feed) {
   while (pr->in_w >= 0 || pr->out_r >= 0 || pr->err_r >= 0) {
     struct pollfd pf[3];
@@ -6713,22 +6729,17 @@ static AhcNode *proc_pump(ProcRun *pr, AhcNode *feed) {
       if (!re) continue;
       if (pf[k].fd == pr->in_w) {
         if (!(re & POLLOUT)) {          /* the child closed its stdin */
+          /* GHC fills its handle buffer - forcing the input - before
+             the write that meets the closed pipe, so a raise in the
+             next stretch propagates however fast the child exits
+             (tests/exec/process_streams flaked on a busy CI runner). */
+          if (pr->pend_off == pr->pend_len && feed)
+            (void)proc_fill(pr, feed);
           close_fd(&pr->in_w);
           continue;
         }
-        if (pr->pend_off == pr->pend_len && feed) {
-          /* encode the next stretch of the String, forcing as we go */
-          pr->pend_off = pr->pend_len = 0;
-          while (pr->pend_len + 4 <= sizeof pr->pend) {
-            AhcNode *cell = ahc_eval(feed);
-            unsigned char enc[4];
-            int el, j;
-            if (cell->u.con.contag != CONS_TAG) { feed = NULL; break; }
-            el = utf8_encode(ahc_eval(cell->u.con.fields[0])->u.c, enc);
-            for (j = 0; j < el; j++) pr->pend[pr->pend_len++] = enc[j];
-            feed = cell->u.con.fields[1];
-          }
-        }
+        if (pr->pend_off == pr->pend_len && feed)
+          feed = proc_fill(pr, feed);
         if (pr->pend_off < pr->pend_len) {
           ssize_t m = write(pr->in_w, pr->pend + pr->pend_off,
                             pr->pend_len - pr->pend_off);

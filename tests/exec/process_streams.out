@@ -15,5 +15,6 @@ surrogate utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequenc
 overlong utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 192)
 raise in stdin: boom
 raise in stdin, child ignores it: boom2
+raise in stdin, child closed it first: boom3
 waitpid fails: waitForProcess: does not exist (No child processes)
 system, waitpid fails: waitForProcess: does not exist (No child processes)
