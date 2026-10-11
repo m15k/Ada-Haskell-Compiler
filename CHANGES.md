@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.19 (unreleased)
+## v1.19 (2026-10-11)
 
 **M148 - the second extension round.** These are the extensions the
 M147 scout found blocking real repositories next. All are always on.

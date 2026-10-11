@@ -588,6 +588,15 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.19** — the second extension round (M148): `TupleSections`,
+  `MultiWayIf`, `\cases`, `EmptyCase`, `RecordWildCards` and
+  `NamedFieldPuns` with GHC's scoping, stock `DeriveFunctor`,
+  `DeriveFoldable` and `DeriveTraversable` with GHC's inferred contexts,
+  and overlapping instances (the four per-instance pragmas and
+  `OverlappingInstances`/`IncoherentInstances`) under GHC's
+  lookupInstEnv rule. An adversarial review found 22 defects after a
+  green gate and three older ones (among them `any`/`all` never
+  returning on infinite lists), all fixed and pinned.
 - **v1.18** — the extensions release (M147): `LambdaCase`,
   `FlexibleInstances`, `TypeSynonymInstances` and
   `GeneralizedNewtypeDeriving`, always on as in GHC 9.4.8. Instance
