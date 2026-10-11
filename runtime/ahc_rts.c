@@ -6609,7 +6609,24 @@ static void proc_release(ProcRun *pr, int kill_child) {
    running - a daemonising grandchild must not hold our pipe open. */
 static int fd_hi_cloexec(int fd) {
   if (fd >= 3) return fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 ? fd : -1;
+#ifdef F_DUPFD_CLOEXEC
   return fcntl(fd, F_DUPFD_CLOEXEC, 3);
+#else
+  /* glibc declares F_DUPFD_CLOEXEC only for POSIX 2008, and the
+     _XOPEN_SOURCE 600 above (which Darwin's ucontext needs) hides it:
+     duplicate, then mark. Only a fork from another thread between the
+     two calls could leak the descriptor. */
+  {
+    int d = fcntl(fd, F_DUPFD, 3);
+    if (d >= 0 && fcntl(d, F_SETFD, FD_CLOEXEC) != 0) {
+      int e = errno;
+      close(d);
+      errno = e;
+      return -1;
+    }
+    return d;
+  }
+#endif
 }
 static int pipe_hi(int fds[2]) {
   int p[2], k, e;
