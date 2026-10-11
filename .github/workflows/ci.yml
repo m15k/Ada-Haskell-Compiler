@@ -62,7 +62,7 @@ jobs:
                  cat /tmp/b.log; exit 1; }
           /tmp/hello
 
-      - name: Unit tests (219)
+      - name: Unit tests (343)
         run: |
           cd tests
           alr -n build
