@@ -2,6 +2,12 @@ Conformance programs: each *.hs here is compiled by AHC and its stdout
 compared byte-for-byte with the .out beside it, which is GHC 9.4.8's
 output (scripts/run_conformance.sh; --oracle regenerates).
 
+A NAME.<uname -s>.out (multi/: expected.<uname -s>.out) beside it wins
+on that platform. It exists only where GHC's own output differs by
+platform: floating-point primops GHC hands to the C library (atanh,
+asinh, ...) can differ in the last digit between Darwin's libm and
+glibc, and AHC calls the same functions, so it matches GHC on each.
+
 Oracle packages
 ---------------
 

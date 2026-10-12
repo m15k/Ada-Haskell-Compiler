@@ -24,6 +24,10 @@ shopt -s nullglob
 for hs in tests/conformance/*.hs; do
   base=$(basename "$hs" .hs)
   exp="tests/conformance/$base.out"
+  # A libm-dependent last digit (GHC calls the C library too, so GHC
+  # itself differs by platform) gets a per-platform golden.
+  [ -f "tests/conformance/$base.$(uname -s).out" ] \
+    && exp="tests/conformance/$base.$(uname -s).out"
   n=$((n+1))
   if [ "$mode" = "--oracle" ]; then
     [ -x "$GHC" ] || { echo "no GHC oracle at $GHC" >&2; exit 2; }
@@ -46,7 +50,7 @@ for hs in tests/conformance/*.hs; do
   if [ ! -f "$exp" ]; then
     echo "MISSING $exp (run with --oracle)"; fail=1
   elif ! diff -u "$exp" <(printf '%s\n' "$got") > "$tmp/diff"; then
-    echo "FAIL $hs"; head -12 "$tmp/diff"; fail=1
+    echo "FAIL $hs"; head -40 "$tmp/diff"; fail=1
   else
     echo "ok   $hs"
   fi
@@ -61,6 +65,7 @@ for main in tests/conformance/multi/*/Main.hs; do
   dir=$(dirname "$main")
   base=$(basename "$dir")
   exp="$dir/expected.out"
+  [ -f "$dir/expected.$(uname -s).out" ] && exp="$dir/expected.$(uname -s).out"
   n=$((n+1))
   if [ -f "$dir/expected.err" ]; then
     if [ "$mode" = "--oracle" ]; then
@@ -104,7 +109,7 @@ for main in tests/conformance/multi/*/Main.hs; do
     echo "MISSING $exp (run with --oracle)"; fail=1
   elif ! diff -u "$exp" <(printf '%s
 ' "$got") > "$tmp/diff"; then
-    echo "FAIL $main"; head -12 "$tmp/diff"; fail=1
+    echo "FAIL $main"; head -40 "$tmp/diff"; fail=1
   else
     echo "ok   $main"
   fi
