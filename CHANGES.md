@@ -1,5 +1,36 @@
 # AHC Changelog
 
+## v1.19.1 (2026-10-12)
+
+**Linux works again.** No Linux release tarball had shipped since
+v1.16, and ubuntu CI had stopped at the runtime build since then. This
+release fixes everything that blocked it, and its tarball is the first
+Linux build since v1.15's.
+
+- **The runtime compiles on glibc.** `pipe_hi` (v1.16) used
+  `F_DUPFD_CLOEXEC`, which glibc hides under the runtime's
+  `_XOPEN_SOURCE 600`, so every Linux program failed at the runtime's
+  compile. Without that flag the runtime now duplicates with `F_DUPFD`
+  and then sets `FD_CLOEXEC`.
+- **A stdin race in `System.Process`.** When a child exited before
+  AHC first polled its stdin, AHC closed the pipe without forcing the
+  next stretch of the input. GHC forces its buffer before the write
+  that meets the closed pipe, so `readProcess "true" [] ("abc" ++
+  error "e")` raised in GHC and returned normally in AHC. It now
+  forces the buffer the same way.
+- **CI's oracle really is GHC 9.4.8.** The ubuntu image's own ghcup
+  served GHC 9.14.1, so CI's differentials had been comparing against
+  the wrong compiler. The install step now pins and verifies 9.4.8.
+- **Per-platform goldens where GHC itself differs:** `atanh 0.5` is
+  one ulp apart under Darwin's libm and glibc in GHC and AHC alike, so
+  `run_conformance.sh` accepts a `NAME.<uname -s>.out`.
+- **`process_streams` used Darwin's `SIGCHLD` number** (20, which is
+  `SIGTSTP` on Linux). It now picks the platform's number.
+- **The ubuntu jobs are pinned to `ubuntu-24.04`** ahead of the
+  runner image's move to Ubuntu 26.
+
+CI is green on both jobs for the first time since v1.14.
+
 ## v1.19 (2026-10-11)
 
 **M148 - the second extension round.** These are the extensions the

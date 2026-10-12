@@ -588,6 +588,10 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.19.1** — Linux works again: the runtime compiles on glibc
+  (broken since v1.16), a `System.Process` stdin race is fixed, CI's
+  oracle is really GHC 9.4.8, and the first Linux tarball since v1.15
+  ships.
 - **v1.19** — the second extension round (M148): `TupleSections`,
   `MultiWayIf`, `\cases`, `EmptyCase`, `RecordWildCards` and
   `NamedFieldPuns` with GHC's scoping, stock `DeriveFunctor`,
