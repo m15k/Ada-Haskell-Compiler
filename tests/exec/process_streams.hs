@@ -53,6 +53,8 @@ main = do
   t "raise in stdin" (readProcess "cat" [] ("abc" ++ error "boom") >>= say . show)
   t "raise in stdin, child ignores it" (readProcess "true" [] ("abc" ++ error "boom2") >>= say . show)
   t "raise in stdin, child closed it first" (readProcess "sh" ["-c", "exec 0<&-; sleep 0.2"] ("abc" ++ error "boom3") >>= say . show)
-  _ <- c_signal 20 (nullPtr `plusPtr` 1)
+  -- SIGCHLD is 20 on Darwin and 17 on Linux (20 there is SIGTSTP).
+  sys <- readProcess "uname" ["-s"] ""
+  _ <- c_signal (if sys == "Darwin\n" then 20 else 17) (nullPtr `plusPtr` 1)
   t "waitpid fails" (readProcessWithExitCode "false" [] "" >>= say . show)
   t "system, waitpid fails" (system "exit 3" >>= say . show)
