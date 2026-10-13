@@ -5,14 +5,61 @@ Five programs embed it — in C, C++, Rust, Go, and GHC — and each one
 exercises **both directions at once**: the host calls the Haskell
 exports, and the Haskell library calls back out into the host.
 
-    scripts/ahc-build.sh --lib examples/ffi/engine/Engine.hs engine.a
-    ahc bindgen cpp  examples/ffi/engine/Engine.hs engine.a  # .hpp
-    ahc bindgen rust examples/ffi/engine/Engine.hs engine.a  # .rs
-    ahc bindgen go   examples/ffi/engine/Engine.hs engine.a  # ahc.go
-    ahc bindgen ghc  examples/ffi/engine/Engine.hs engine.a  # AhcLib.hs
+    ahc build --lib  examples/ffi/engine/Engine.hs engine.a
+    ahc bindgen cpp  examples/ffi/engine/Engine.hs engine.a  # engine.a.build/ahc_exports.hpp
+    ahc bindgen rust examples/ffi/engine/Engine.hs engine.a  # engine.a.build/ahc_exports.rs
+    ahc bindgen go   examples/ffi/engine/Engine.hs engine.a  # engine.a.build/ahc.go
+    ahc bindgen ghc  examples/ffi/engine/Engine.hs engine.a  # engine.a.build/AhcLib.hs
 
+Every line names the same library on purpose: `OUT` in
+`ahc bindgen LANG FILE.hs OUT` is the archive, not the binding.
+Each language's wrapper lands beside `ahc_exports.h` in
+`engine.a.build/`, so all five hosts link the one `engine.a`.
 C needs no generator: `engine.a.build/ahc_exports.h` *is* the C
 binding, and the other four are generated wrappers over it.
+
+## Building each host
+
+Run these from the repository root, after the `ahc build --lib` and
+`ahc bindgen` lines above. `ahc build --lib` ends its output with a
+`link with:` line: the flags every host must add to pull in the
+collector the archive was built against. Set `LINK` to whatever it
+printed, as an array so the flags split the same way in bash and
+zsh (`LINK=()` when built without Boehm):
+
+    LINK=(-L"$(brew --prefix bdw-gc)/lib" -lgc)   # from "link with:"
+
+**C** — include the generated header, link the archive:
+
+    clang -I engine.a.build -o c_main examples/ffi/c/main.c engine.a "${LINK[@]}"
+
+**C++** — `ahc_exports.hpp` sits beside `ahc_exports.h`:
+
+    clang++ -std=c++17 -I engine.a.build -o cpp_main \
+      examples/ffi/cpp/main.cpp engine.a "${LINK[@]}"
+
+**Rust** — `main.rs` says `mod ahc_exports;`, so the generated
+module must sit beside it; the archive goes to the linker:
+
+    mkdir -p rust_build
+    cp examples/ffi/rust/main.rs engine.a.build/ahc_exports.rs rust_build/
+    rustc --edition 2021 -O rust_build/main.rs \
+      -C link-args="engine.a ${LINK[*]}" -o rust_main
+
+**Go** — the binding is the `ahcgo/ahc` package; its cgo preamble
+links `${SRCDIR}/engine.a`, so the archive and header travel with it:
+
+    mkdir -p go_build/ahc
+    cp examples/ffi/go/main.go examples/ffi/go/go.mod go_build/
+    cp engine.a.build/ahc.go engine.a.build/ahc_exports.h engine.a go_build/ahc/
+    (cd go_build && CGO_LDFLAGS="${LINK[*]}" go build -o ../go_main .)
+
+**GHC** — compile `Main.hs` with the generated `AhcLib.hs`:
+
+    ghc -O -outputdir ghc_build -o ghc_main \
+      examples/ffi/ghc/Main.hs engine.a.build/AhcLib.hs engine.a "${LINK[@]}"
+
+Each binary's output should match its directory's `expected.out`.
 
 ## What the engine exports, and why
 
