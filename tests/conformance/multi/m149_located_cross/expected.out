@@ -1,0 +1,10 @@
+head in Lib => Prelude.head: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List
+  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List
+  head, called at ./Lib.hs:6:14 in main:Lib
+error in Lib => Lib refused: no
+CallStack (from HasCallStack):
+  error, called at ./Lib.hs:9:15 in main:Lib
+done

@@ -11,6 +11,7 @@
 # Usage: scripts/run_conformance.sh [--oracle]
 set -u
 cd "$(dirname "$0")/.."
+root=$(pwd)
 
 GHC="${GHC:-$HOME/.ghcup/bin/runghc}"
 mode="${1:-}"
@@ -101,7 +102,11 @@ for main in tests/conformance/multi/*/Main.hs; do
     fi
     continue
   fi
-  if ! scripts/ahc-build.sh "$main" "$tmp/mm_$base" >/dev/null 2>"$tmp/err"; then
+  # Built from inside the case directory, as the oracle runs: GHC's
+  # call stacks name files as it found them (Main.hs, ./Lib.hs), so
+  # the paths must agree (M149).
+  if ! ( cd "$dir" && "$root/bin/ahc" build Main.hs -o "$tmp/mm_$base" ) \
+       >/dev/null 2>"$tmp/err"; then
     echo "BUILD-FAIL $main"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
   fi
   got=$("$tmp/mm_$base" 2>/dev/null)
