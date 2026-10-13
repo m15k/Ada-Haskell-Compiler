@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with AHC.Inst_Match;
 with AHC.Diagnostics;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
@@ -475,11 +476,38 @@ package body AHC.Prelude_Core is
       end From_E;
 
       --  toEnum as a fresh lambda: eq-chain over tags.
+      --  GHC 9.4.8's texts (M149): the Prelude's own enumerations say
+      --  "Prelude.Enum.T.toEnum: bad argument"; a derived one names the
+      --  tag and the range. (GHC also prints a call stack at the
+      --  deriving clause there, which AHC does not - EXCLUSIONS.)
       function To_E_Lam (TC : Real_TyCon_Id) return Real_Expr_Id is
          I : constant Real_Var_Id := Fresh ("i");
          N : constant Positive := M.Info (TC).Cons.Last_Index;
-         Body_E : Real_Expr_Id := Err ("toEnum: bad argument");
+         Name : constant String :=
+           Table.Text (Names.Real_Name_Id (M.Info (TC).Name));
+         function Img (K : Natural) return String is
+           (Ada.Strings.Fixed.Trim (Natural'Image (K), Ada.Strings.Left));
+         Body_E : Real_Expr_Id;
       begin
+         if TyCon_Id (TC) = Env.Bool_TC or else TyCon_Id (TC) = Env.Ordering_TC
+         then
+            Body_E := Err ("Prelude.Enum." & Name & ".toEnum: bad argument");
+         else
+            declare
+               Shown : constant Real_Expr_Id :=
+                 Ap (V (P_ShowI), V (Var_Id (I)));
+               Tail_S : constant Real_Expr_Id :=
+                 Str (") is outside of enumeration's range (0,"
+                      & Img (N - 1) & ")");
+               Rest : constant Real_Expr_Id :=
+                 Ap2 (V (Lookup ("++")), Shown, Tail_S);
+               Msg : constant Real_Expr_Id :=
+                 Ap2 (V (Lookup ("++")),
+                      Str ("toEnum{" & Name & "}: tag ("), Rest);
+            begin
+               Body_E := Ap (V (Env.Error_V), Msg);
+            end;
+         end if;
          for K in reverse 1 .. N loop
             Body_E := Bool_Case
               (Ap2 (V (P_EqP), V (Var_Id (I)), IntE (K - 1)),
@@ -1653,6 +1681,12 @@ package body AHC.Prelude_Core is
          BP ("primEvaluate", "ahc_prim_evaluate");
          BP ("primExcKind", "ahc_prim_exc_kind");
          BP ("primExcMessage", "ahc_prim_exc_message");
+         BP ("primFailMatch", "ahc_prim_fail_match");
+         BP ("primErrorAt", "ahc_prim_error_at");
+         BP ("primErrorAtNote", "ahc_prim_error_at_note");
+         BP ("primErrorLoc", "ahc_prim_error_loc");
+         BP ("primExcLocation", "ahc_prim_exc_location");
+         BP ("primExcPatternFail", "ahc_prim_exc_pattern_fail");
          BP ("primExcCode", "ahc_prim_exc_code");
          BP ("primExcIO", "ahc_prim_exc_io");
          BP ("primExcErrorCall", "ahc_prim_exc_error_call");

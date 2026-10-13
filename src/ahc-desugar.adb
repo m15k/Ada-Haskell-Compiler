@@ -2,7 +2,11 @@ with Ada.Containers.Vectors;
 
 with Ada.Containers.Hashed_Sets;
 
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+
 with AHC.Exhaustive;
+with AHC.Source_Text;
 
 package body AHC.Desugar is
 
@@ -28,7 +32,8 @@ package body AHC.Desugar is
       Annos : Kinds.Anno_Maps.Map;
       Preds : Kinds.Pred_Vectors.Vector :=
         Kinds.Pred_Vectors.Empty_Vector;
-      Warn_Matches : Boolean := False)
+      Warn_Matches : Boolean := False;
+      Ctx : Sites.Site_Context := Sites.No_Context)
    is
       --  A guarded right-hand side is "total" when some alternative
       --  is an unconditional otherwise/True guard - those clauses
@@ -160,6 +165,514 @@ package body AHC.Desugar is
         (Msg : String; Span : Diagnostics.Source_Span)
          return Core.Real_Expr_Id
       is (App1 (Global (Env.Error_V, Span), Str_Lit (Msg, Span), Span));
+
+      --  The enclosing top-level binding (M149): set by Ds_Group at
+      --  depth 1 and by instance-method desugaring.
+      Current_Top : Unbounded_String;
+      Group_Depth : Natural := 0;
+
+      --  The source text of Span, with a pattern's surrounding `~` and
+      --  one layer of parentheses removed: GHC names a failed let or
+      --  lazy pattern by its text ("Just y").
+      function Pat_Text (Span : Diagnostics.Source_Span) return String is
+         T : constant String :=
+           (if Sites.Enabled (Ctx) then Ctx.Src.Slice (Span.Start, Span.Stop)
+            else "");
+         F : Natural := T'First;
+         L : Natural := T'Last;
+      begin
+         if F <= L and then T (F) = '~' then
+            F := F + 1;
+         end if;
+         if F < L and then T (F) = '(' and then T (L) = ')' then
+            F := F + 1;
+            L := L - 1;
+         end if;
+         --  An extent can end past a closing parenthesis the pattern
+         --  does not open (`~(Just z)`'s inner pattern): drop
+         --  unbalanced ones.
+         declare
+            Depth : Integer := 0;
+         begin
+            for I in F .. L loop
+               if T (I) = '(' then
+                  Depth := Depth + 1;
+               elsif T (I) = ')' then
+                  Depth := Depth - 1;
+               end if;
+            end loop;
+            while Depth < 0 and then L >= F and then T (L) = ')' loop
+               L := L - 1;
+               Depth := Depth + 1;
+            end loop;
+         end;
+         return T (F .. L);
+      end Pat_Text;
+
+      --  A construct's full extent, recorded by the parser (M149);
+      --  its own span when none was recorded.
+      function Ext_E (E : Syntax.Expr_Id; Span : Diagnostics.Source_Span)
+        return Diagnostics.Source_Span
+      is (if Arena.Expr_Extents.Contains (Positive (E))
+          then Arena.Expr_Extents.Element (Positive (E)) else Span);
+
+      function Ext_P (P : Syntax.Pat_Id) return Diagnostics.Source_Span
+      is (if Arena.Pat_Extents.Contains (Positive (P))
+          then Arena.Pat_Extents.Element (Positive (P))
+          else Arena.Node (P).Span);
+
+      function Ext_D (D : Syntax.Decl_Id) return Diagnostics.Source_Span
+      is (if Arena.Decl_Extents.Contains (Positive (D))
+          then Arena.Decl_Extents.Element (Positive (D))
+          else Arena.Node (D).Span);
+
+      --  The construct a lazy pattern's failure is reported at: GHC
+      --  names the enclosing lambda, equation group or case (M149).
+      Match_Context : Diagnostics.Source_Span;
+      Have_Context  : Boolean := False;
+
+      --  The Prelude's located entities (M149), resolved once: Plain
+      --  (No_Var when the Prelude lacks it) and its located variant.
+      type Located_Pair is record
+         Plain, Located : Core.Var_Id := Core.No_Var;
+      end record;
+      Located_Vars : array (Sites.Located_Index) of Located_Pair;
+      Located_Known : Boolean := False;
+
+      function Prelude_Var (Name : String) return Core.Var_Id is
+         C : constant Builtins.Var_Maps.Cursor :=
+           Env.Values.Find (Table.Intern (Name));
+      begin
+         return (if Builtins.Var_Maps.Has_Element (C)
+                 then Core.Var_Id (Builtins.Var_Maps.Element (C))
+                 else Core.No_Var);
+      end Prelude_Var;
+
+      --  A reference to V at Span: V itself, or - when V is one of the
+      --  Prelude's located entities and this module builds sites - its
+      --  located variant applied to the site literal (M149).
+      function Located_Ref
+        (V : Core.Real_Var_Id; Span : Diagnostics.Source_Span)
+         return Core.Real_Expr_Id
+      is
+      begin
+         if not Sites.Enabled (Ctx) then
+            return VarE (V, Span);
+         end if;
+         if not Located_Known then
+            for I in Sites.Located_Index loop
+               Located_Vars (I) :=
+                 (Plain => Prelude_Var (Sites.Located_Plain (I)),
+                  Located => Prelude_Var (Sites.Located_Name (I)));
+            end loop;
+            Located_Known := True;
+         end if;
+         for I in Sites.Located_Index loop
+            if Located_Vars (I).Plain = Core.Var_Id (V)
+              and then Located_Vars (I).Located /= Core.No_Var
+            then
+               declare
+                  Key : constant String := Sites.Located_Stack_Key (I);
+                  S : Sites.Site;
+               begin
+                  S.Ghc_Stack := To_Unbounded_String
+                    (Sites.Call_Stack (Ctx, Key, Span));
+                  --  (!!) has two stacks: "too large" above, "negative"
+                  --  in the note field.
+                  if Key = "!!/large" then
+                     S.Note := To_Unbounded_String
+                       (Sites.Call_Stack (Ctx, "!!/negative", Span));
+                  end if;
+                  S.Headline := To_Unbounded_String
+                    (Sites.Located_Headline (I));
+                  S.Span := Span;
+                  S.Enclosing := Current_Top;
+                  declare
+                     Lit : constant Core.Real_Expr_Id :=
+                       Str_Lit (Sites.Encode (Ctx, S), Span);
+                     Fn : constant Core.Real_Expr_Id :=
+                       VarE (Core.Real_Var_Id (Located_Vars (I).Located),
+                             Span);
+                  begin
+                     return App1 (Fn, Lit, Span);
+                  end;
+               end;
+            end if;
+         end loop;
+         return VarE (V, Span);
+      end Located_Ref;
+
+      --  Where a section's operator is (M149: GHC's call site for a
+      --  located operator): after the `(` of `(op e)`, after the
+      --  operand of `(e op)`, skipping blanks; a variable's own span.
+      function Op_Span
+        (N : Expr_Node; Span : Diagnostics.Source_Span)
+         return Diagnostics.Source_Span
+      is
+         use type AHC.Source_Text.Byte_Offset;
+         P : AHC.Source_Text.Byte_Offset;
+      begin
+         if not Sites.Enabled (Ctx) or else N.Kind = Var_E then
+            return Span;
+         end if;
+         P := (if N.Kind = Right_Section_E then Span.Start + 1
+               else Ext_E (N.Sec_Expr, Arena.Node (N.Sec_Expr).Span).Stop);
+         while Ctx.Src.In_Range (P)
+           and then Ctx.Src.Char_At (P) in ' ' | ASCII.HT | ASCII.LF
+         loop
+            P := P + 1;
+         end loop;
+         if not Ctx.Src.In_Range (P) then
+            return Span;
+         end if;
+         return (Start => P, Stop => P + 1);
+      end Op_Span;
+
+      --  The render schema (M149): what the runtime needs to name a
+      --  failing value's constructors, since a constructor node holds
+      --  only its tag. Delimiters are control characters (constructor
+      --  names may contain any operator symbol):
+      --    schema := TYPE STX con { EOT con } ETX
+      --    con    := NAME ENQ ARITY { ACK code }
+      --    code   := i | d | f | c | z | s | l code | ? | schema
+      --  (Int Double Float Char Integer String list unknown).
+      Sch_Open  : constant Character := ASCII.STX;
+      Sch_Close : constant Character := ASCII.ETX;
+      Sch_Con   : constant Character := ASCII.EOT;
+      Sch_Arity : constant Character := ASCII.ENQ;
+      Sch_Field : constant Character := ASCII.ACK;
+
+      function TyCon_Schema
+        (TC : Core.TyCon_Id; Depth : Natural) return String;
+
+      function Type_Code (T : Core.Type_Id; Depth : Natural) return String is
+         use type Core.Type_Kind;
+         use type Core.TyCon_Id;
+         use type Core.Type_Id;
+      begin
+         if T = Core.No_Type then
+            return "?";
+         end if;
+         declare
+            N : constant Core.Type_Node := M.Node (Core.Real_Type_Id (T));
+         begin
+            case N.Kind is
+               when Core.TCon_T =>
+                  declare
+                     C : constant Core.TyCon_Id := Core.TyCon_Id (N.Con);
+                  begin
+                     return
+                       (if C = Env.Int_TC then "i"
+                        elsif C = Env.Double_TC then "d"
+                        elsif C = Env.Float_TC then "f"
+                        elsif C = Env.Char_TC then "c"
+                        elsif C = Env.Integer_TC then "z"
+                        elsif Depth > 0 then TyCon_Schema (C, Depth - 1)
+                        else "?");
+                  end;
+               when Core.TApp_T =>
+                  declare
+                     F : constant Core.Type_Node := M.Node (N.T_Fun);
+                     H : Core.Real_Type_Id := N.T_Fun;
+                  begin
+                     if F.Kind = Core.TCon_T
+                       and then Core.TyCon_Id (F.Con) = Env.List_TC
+                     then
+                        declare
+                           E : constant Core.Type_Node := M.Node (N.T_Arg);
+                        begin
+                           if E.Kind = Core.TCon_T
+                             and then Core.TyCon_Id (E.Con) = Env.Char_TC
+                           then
+                              return "s";
+                           end if;
+                           return "l" & Type_Code (Core.Type_Id (N.T_Arg),
+                                                   Depth);
+                        end;
+                     end if;
+                     while M.Node (H).Kind = Core.TApp_T loop
+                        H := M.Node (H).T_Fun;
+                     end loop;
+                     if M.Node (H).Kind = Core.TCon_T and then Depth > 0 then
+                        return TyCon_Schema
+                          (Core.TyCon_Id (M.Node (H).Con), Depth - 1);
+                     end if;
+                     return "?";
+                  end;
+               when others =>
+                  return "?";
+            end case;
+         end;
+      end Type_Code;
+
+      function TyCon_Schema
+        (TC : Core.TyCon_Id; Depth : Natural) return String
+      is
+         use type Core.TyCon_Id;
+         use type Core.Type_Kind;
+         use type Core.Type_Id;
+         use type Core.Scheme_Id;
+         R : Unbounded_String;
+      begin
+         if TC = Core.No_TyCon then
+            return "?";
+         end if;
+         declare
+            TI : constant Core.TyCon_Info := M.Info (Core.Real_TyCon_Id (TC));
+         begin
+            Append (R, Table.Text (Names.Real_Name_Id (TI.Name)) & Sch_Open);
+            for CI in 1 .. TI.Cons.Last_Index loop
+               declare
+                  DI : constant Core.DataCon_Info := M.Info (TI.Cons (CI));
+                  T : Core.Type_Id := Core.No_Type;
+               begin
+                  if CI > 1 then
+                     Append (R, Sch_Con);
+                  end if;
+                  Append (R, Table.Text (Names.Real_Name_Id (DI.Name))
+                          & Sch_Arity
+                          & Ada.Strings.Fixed.Trim
+                              (Natural'Image (DI.Arity), Ada.Strings.Left));
+                  if DI.Con_Scheme /= Core.No_Scheme then
+                     T := M.Node (Core.Real_Scheme_Id (DI.Con_Scheme)).S_Body;
+                  end if;
+                  for K in 1 .. DI.Arity loop
+                     if T /= Core.No_Type
+                       and then M.Node (Core.Real_Type_Id (T)).Kind
+                                  = Core.TFun_T
+                     then
+                        Append (R, Sch_Field & Type_Code
+                          (Core.Type_Id
+                             (M.Node (Core.Real_Type_Id (T)).From), Depth));
+                        T := Core.Type_Id (M.Node (Core.Real_Type_Id (T)).To);
+                     else
+                        Append (R, Sch_Field & "?");
+                     end if;
+                  end loop;
+               end;
+            end loop;
+            Append (R, Sch_Close);
+            return To_String (R);
+         end;
+      end TyCon_Schema;
+
+      --  The type a pattern's top-level constructor belongs to, or
+      --  No_TyCon (a variable, wildcard or literal).
+      function Pat_TyCon (P : Syntax.Pat_Id) return Core.TyCon_Id is
+         N : constant Pat_Node := Arena.Node (P);
+      begin
+         case N.Kind is
+            when Con_P | Rec_P =>
+               declare
+                  R : constant Resolution := Res.Pat_Res (Positive (P));
+               begin
+                  if R.Kind = Data_Res then
+                     return M.Info (R.Con).TyCon;
+                  end if;
+               end;
+            when Lazy_P =>
+               return Pat_TyCon (N.Lazy_Pat);
+            when As_P =>
+               return Pat_TyCon (N.As_Pat);
+            when others =>
+               null;
+         end case;
+         return Core.No_TyCon;
+      end Pat_TyCon;
+
+      --  The constructors patterns name, distinct, joined by RS.
+      procedure Add_Handled (P : Syntax.Pat_Id; Into : in out Unbounded_String)
+      is
+         N : constant Pat_Node := Arena.Node (P);
+      begin
+         if N.Kind in Con_P | Rec_P then
+            declare
+               R : constant Resolution := Res.Pat_Res (Positive (P));
+            begin
+               if R.Kind = Data_Res then
+                  declare
+                     Nm : constant String :=
+                       Table.Text (Names.Real_Name_Id (M.Info (R.Con).Name));
+                  begin
+                     if Ada.Strings.Fixed.Index
+                          (ASCII.RS & To_String (Into) & ASCII.RS,
+                           ASCII.RS & Nm & ASCII.RS) = 0
+                     then
+                        if Length (Into) > 0 then
+                           Append (Into, ASCII.RS);
+                        end if;
+                        Append (Into, Nm);
+                     end if;
+                  end;
+               end if;
+            end;
+         elsif N.Kind = As_P then
+            Add_Handled (N.As_Pat, Into);
+         end if;
+      end Add_Handled;
+
+      Schema_Depth : constant := 3;
+
+      function Handled_Of_One (P : Syntax.Pat_Id) return String is
+         R : Unbounded_String;
+      begin
+         Add_Handled (P, R);
+         return To_String (R);
+      end Handled_Of_One;
+
+      function Alts_Handled (Alts : Alt_Id_Vectors.Vector) return String is
+         R : Unbounded_String;
+      begin
+         for A of Alts loop
+            Add_Handled (Arena.Node (A).Pat, R);
+         end loop;
+         return To_String (R);
+      end Alts_Handled;
+
+      --  The schema of the values a pattern can see: its type's, or
+      --  "?" for a variable, wildcard or literal.
+      function Pat_Schema (P : Syntax.Pat_Id) return String is
+         use type Core.TyCon_Id;
+         TC : constant Core.TyCon_Id := Pat_TyCon (P);
+      begin
+         return (if TC = Core.No_TyCon then "?"
+                 else TyCon_Schema (TC, Schema_Depth - 1));
+      end Pat_Schema;
+
+      function Alts_Schema (Alts : Alt_Id_Vectors.Vector) return String is
+      begin
+         for A of Alts loop
+            declare
+               Sch : constant String := Pat_Schema (Arena.Node (A).Pat);
+            begin
+               if Sch /= "?" then
+                  return Sch;
+               end if;
+            end;
+         end loop;
+         return "?";
+      end Alts_Schema;
+
+      --  A function's failing value is its argument, or the tuple of
+      --  its arguments: one schema per column, from the first equation
+      --  whose pattern there names a constructor.
+      function Unit_Schema (U : Binding_Unit) return String is
+         Cols : Unbounded_String;
+         Tup : constant String :=
+           "(" & [1 .. Natural'Max (U.Arity - 1, 0) => ','] & ")";
+         function Col (C : Positive) return String is
+         begin
+            for D of U.Equations loop
+               declare
+                  N : constant Decl_Node := Arena.Node (D);
+               begin
+                  if C <= N.Fun_Pats.Last_Index then
+                     declare
+                        Sch : constant String := Pat_Schema (N.Fun_Pats (C));
+                     begin
+                        if Sch /= "?" then
+                           return Sch;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+            return "?";
+         end Col;
+      begin
+         if U.Arity = 1 then
+            return Col (1);
+         elsif U.Arity not in 2 .. Builtins.Max_Tuple then
+            return "?";
+         end if;
+         for C in 1 .. U.Arity loop
+            Append (Cols, Sch_Field & Col (C));
+         end loop;
+         return Tup & Sch_Open & Tup & Sch_Arity
+           & Ada.Strings.Fixed.Trim (Natural'Image (U.Arity), Ada.Strings.Left)
+           & To_String (Cols) & Sch_Close;
+      end Unit_Schema;
+
+      function Unit_Handled (U : Binding_Unit) return String is
+         R : Unbounded_String;
+      begin
+         if U.Arity = 1 then
+            for D of U.Equations loop
+               Add_Handled (Arena.Node (D).Fun_Pats (1), R);
+            end loop;
+         end if;
+         return To_String (R);
+      end Unit_Handled;
+
+      --  The failing value a function's site reports: its one
+      --  argument, the tuple of several (up to the widest tuple), or
+      --  () when there are none or too many.
+      function Args_Value
+        (Vars : Core.Var_Id_Vectors.Vector;
+         Span : Diagnostics.Source_Span) return Core.Real_Expr_Id
+      is
+         K : constant Natural := Natural (Vars.Length);
+      begin
+         if K = 1 then
+            return VarE (Vars.First_Element, Span);
+         elsif K in 2 .. Builtins.Max_Tuple then
+            declare
+               R : Core.Real_Expr_Id :=
+                 ConE (Core.Real_DataCon_Id (Env.Tuple_DCs (K)), Span);
+            begin
+               for V of Vars loop
+                  declare
+                     A : constant Core.Real_Expr_Id :=
+                       VarE (V, Span);
+                  begin
+                     R := App1 (R, A, Span);
+                  end;
+               end loop;
+               return R;
+            end;
+         end if;
+         return ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
+      end Args_Value;
+
+      --  A pattern-match failure site (M149): primFailMatch with the
+      --  site literal and the failing value. Ghc_Text is the whole
+      --  shown text when GHC's wording is not "Non-exhaustive patterns
+      --  in KIND". Without a site context, the plain error call.
+      function Fail_Match
+        (Kind    : String;
+         Span    : Diagnostics.Source_Span;
+         Value   : Core.Real_Expr_Id;
+         Plain   : String;
+         Handled : String := "";
+         Ghc_Text : String := "";
+         Schema  : String := "";
+         Headline : String := "pattern match failure")
+         return Core.Real_Expr_Id
+      is
+         S : Sites.Site;
+      begin
+         if not Sites.Enabled (Ctx) then
+            return Error_Call (Plain, Span);
+         end if;
+         S.Ghc_Text := To_Unbounded_String
+           (if Ghc_Text /= "" then Ghc_Text
+            else Sites.Ghc_Span (Ctx, Span)
+                 & ": Non-exhaustive patterns in " & Kind & ASCII.LF);
+         S.Headline := To_Unbounded_String (Headline);
+         S.Span := Span;
+         S.Enclosing := Current_Top;
+         S.Handled := To_Unbounded_String (Handled);
+         S.Schema := To_Unbounded_String (Schema);
+         declare
+            Lit : constant Core.Real_Expr_Id :=
+              Str_Lit (Sites.Encode (Ctx, S), Span);
+            Fm : constant Core.Real_Expr_Id :=
+              Global (Env.Fail_Match_V, Span);
+            F1 : constant Core.Real_Expr_Id := App1 (Fm, Lit, Span);
+         begin
+            return App1 (F1, Value, Span);
+         end;
+      end Fail_Match;
 
       --  case Scrut of True -> Then_E; _ -> Else_E
       function Bool_Case
@@ -375,9 +888,17 @@ package body AHC.Desugar is
          for V of Vars loop
             declare
                --  v = case scrut of pat -> v
+               --  GHC names the failed pattern by its text (M149).
+               Fail : constant Core.Real_Expr_Id :=
+                 Fail_Match (Pat_Text (Ext_P (Pat)),
+                             (if Have_Context then Match_Context
+                              else Span),
+                             VarE (Scrut, Span),
+                             "irrefutable pattern failed",
+                             Handled => Handled_Of_One (Pat),
+                             Schema => Pat_Schema (Pat));
                Sel : constant Core.Real_Expr_Id := Match_One
-                 (Scrut, Pat, VarE (V, Span),
-                  Error_Call ("irrefutable pattern failed", Span));
+                 (Scrut, Pat, VarE (V, Span), Fail);
             begin
                Result := Let1 (V, Sel, Result, Span);
             end;
@@ -1107,7 +1628,7 @@ package body AHC.Desugar is
                begin
                   case R.Kind is
                      when Var_Res =>
-                        Op_E := VarE (R.Var, Span);
+                        Op_E := Located_Ref (R.Var, Op_Span (N, Span));
                      when Data_Res =>
                         Op_E := ConE (R.Con, Span);
                      when Unresolved =>
@@ -1208,9 +1729,13 @@ package body AHC.Desugar is
                --  pattern becomes the binder directly.
                declare
                   Body_E : Core.Real_Expr_Id := Ds_Expr (N.L_Body);
-                  Fail_E : constant Core.Real_Expr_Id :=
-                    Error_Call ("lambda pattern match failed", Span);
+                  L_Span : constant Diagnostics.Source_Span :=
+                    Ext_E (E, Span);
+                  Saved : constant Diagnostics.Source_Span := Match_Context;
+                  Saved_Have : constant Boolean := Have_Context;
                begin
+                  Match_Context := L_Span;
+                  Have_Context := True;
                   for I in reverse 1 .. N.L_Pats.Last_Index loop
                      declare
                         P : constant Real_Pat_Id := N.L_Pats (I);
@@ -1225,6 +1750,13 @@ package body AHC.Desugar is
                            declare
                               X : constant Core.Real_Var_Id :=
                                 Fresh ("$l", Span);
+                              --  One failure per pattern, holding the
+                              --  argument that failed (M149).
+                              Fail_E : constant Core.Real_Expr_Id :=
+                                Fail_Match ("lambda", L_Span, VarE (X, Span),
+                                            "lambda pattern match failed",
+                                            Handled => Handled_Of_One (P),
+                                            Schema => Pat_Schema (P));
                            begin
                               Body_E := Lam
                                 (X,
@@ -1234,6 +1766,8 @@ package body AHC.Desugar is
                         end if;
                      end;
                   end loop;
+                  Match_Context := Saved;
+                  Have_Context := Saved_Have;
                   return Body_E;
                end;
 
@@ -1270,8 +1804,10 @@ package body AHC.Desugar is
                        Env.Values.Find (Table.Intern ("seq"));
                      Scrut : constant Core.Real_Expr_Id :=
                        Ds_Expr (N.Scrutinee);
+                     Unit_V : constant Core.Real_Expr_Id :=
+                       ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
                      Err : constant Core.Real_Expr_Id :=
-                       Error_Call ("empty case", Span);
+                       Fail_Match ("case", Span, Unit_V, "empty case");
                   begin
                      return App2
                        (Global (Core.Var_Id
@@ -1330,10 +1866,22 @@ package body AHC.Desugar is
                   return Let1
                     (S, Ds_Expr (N.Scrutinee),
                      Let1 (Fail_V,
-                           Error_Call
-                             ((if Is_Multi_Way_If (N)
-                               then "non-exhaustive guards in multi-way if"
-                               else "non-exhaustive case"), Span),
+                           (if Is_Multi_Way_If (N)
+                            then Fail_Match
+                              ("multi-way if", Ext_E (E, Span), VarE (S, Span),
+                               "non-exhaustive guards in multi-way if",
+                               Headline => "no guard is true",
+                               Ghc_Text =>
+                                 (if Sites.Enabled (Ctx)
+                                  then Sites.Ghc_Span (Ctx, Ext_E (E, Span))
+                                       & ": Non-exhaustive guards in "
+                                       & "multi-way if" & ASCII.LF
+                                  else ""))
+                            else Fail_Match
+                              ("case", Ext_E (E, Span), VarE (S, Span),
+                               "non-exhaustive case",
+                               Handled => Alts_Handled (N.Alts),
+                               Schema => Alts_Schema (N.Alts))),
                            Result, Span),
                      Span);
                end;
@@ -1430,12 +1978,30 @@ package body AHC.Desugar is
                      --  positional constructor, Report 3.15.2).
                      for FI in 1 .. Info.Arity loop
                         declare
-                           Arg : Core.Real_Expr_Id :=
-                             Error_Call
-                               ("missing field in record construction",
-                                Span);
                            Named : constant Boolean :=
                              FI <= Info.Field_Names.Last_Index;
+                           Unit_V : constant Core.Real_Expr_Id :=
+                             ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
+                           --  GHC: "SPAN: Missing field in record
+                           --  construction FIELD", no trailing newline.
+                           Arg : Core.Real_Expr_Id :=
+                             Fail_Match
+                               ("", Ext_E (E, Span), Unit_V,
+                                "missing field in record construction",
+                                Ghc_Text =>
+                                  (if not Sites.Enabled (Ctx) then ""
+                                   elsif Named
+                                   then Sites.Ghc_Span (Ctx, Ext_E (E, Span))
+                                        & ": Missing field in record "
+                                        & "construction "
+                                        & Table.Text
+                                            (Names.Real_Name_Id
+                                               (Info.Field_Names.Element
+                                                  (FI)))
+                                        & ASCII.LF
+                                   else Sites.Ghc_Span (Ctx, Ext_E (E, Span))
+                                        & ": Missing field in record "
+                                        & "construction" & ASCII.LF));
                         begin
                            for F of N.Rec_Fields loop
                               if Named
@@ -1536,7 +2102,9 @@ package body AHC.Desugar is
                   Alts.Append (M.Add (Core.Alt_Node'
                     (Kind => Core.Default_Alt, Span => Span,
                      Alt_Body =>
-                       Error_Call ("record update failed", Span))));
+                       Fail_Match ("record update", Ext_E (E, Span),
+                                   VarE (R_V, Span),
+                                   "record update failed"))));
                   return Let1
                     (R_V, Ds_Expr (N.Rec_Base),
                      M.Add (Core.Expr_Node'
@@ -1556,6 +2124,11 @@ package body AHC.Desugar is
         (U : Binding_Unit) return Core.Real_Expr_Id
       is
          Span : constant Diagnostics.Source_Span := U.Span;
+         --  GHC's span for the function's failure: the first equation's
+         --  start to the last one's end (M149).
+         F_Span : constant Diagnostics.Source_Span :=
+           (Start => Ext_D (U.Equations.First_Element).Start,
+            Stop => Ext_D (U.Equations.Last_Element).Stop);
          Args : Core.Var_Id_Vectors.Vector;
          Fail_V : constant Core.Real_Var_Id := Fresh ("$fail", Span);
          Result : Core.Real_Expr_Id;
@@ -1599,12 +2172,22 @@ package body AHC.Desugar is
                end loop;
                if All_Vars then
                   declare
-                     Body_E : Core.Real_Expr_Id :=
-                       Ds_Rhs (N.Fun_Rhs, N.Fun_Where,
-                               Error_Call
-                                 ("non-exhaustive guards", Span),
-                               Span);
+                     --  All-variable equation whose guards all fail:
+                     --  GHC reports it as the function's failure.
+                     Arg_Vars : Core.Var_Id_Vectors.Vector;
+                     Body_E : Core.Real_Expr_Id;
                   begin
+                     for P of N.Fun_Pats loop
+                        Arg_Vars.Append
+                          (Core.Var_Id (Res.Pat_Res (Positive (P)).Var));
+                     end loop;
+                     Body_E :=
+                       Ds_Rhs (N.Fun_Rhs, N.Fun_Where,
+                               Fail_Match
+                                 ("function " & Table.Text (U.Name), F_Span,
+                                  Args_Value (Arg_Vars, Span),
+                                  "non-exhaustive guards"),
+                               Span);
                      for I in reverse 1 .. N.Fun_Pats.Last_Index loop
                         declare
                            PR : constant Resolution :=
@@ -1649,7 +2232,11 @@ package body AHC.Desugar is
 
          Result := Let1
            (Fail_V,
-            Error_Call ("non-exhaustive patterns in function", Span),
+            Fail_Match ("function " & Table.Text (U.Name), F_Span,
+                        Args_Value (Args, Span),
+                        "non-exhaustive patterns in function",
+                        Handled => Unit_Handled (U),
+                        Schema => Unit_Schema (U)),
             Result, Span);
 
          for I in reverse 1 .. Natural (Args.Length) loop
@@ -1665,7 +2252,17 @@ package body AHC.Desugar is
          Units : constant Unit_Vectors.Vector :=
            Rename.Group (Arena, Decls, Bag);
       begin
+         Group_Depth := Group_Depth + 1;
          for U of Units loop
+            --  The enclosing top-level binding of every site inside
+            --  (M149).
+            if Group_Depth = 1 then
+               Current_Top := To_Unbounded_String
+                 (if U.Kind = Fun_Unit then Table.Text (U.Name)
+                  elsif Sites.Enabled (Ctx)
+                  then Pat_Text (Arena.Node (U.Equations.Element (1)).Span)
+                  else "");
+            end if;
             case U.Kind is
                when Fun_Unit =>
                   declare
@@ -1720,15 +2317,21 @@ package body AHC.Desugar is
                                    (Binder => V,
                                     Rhs => Match_One
                                       (PB, N.Pat, VarE (V, Span),
-                                       Error_Call
-                                         ("irrefutable pattern failed",
-                                          Span))));
+                                       --  GHC: the binding's span, the
+                                       --  pattern's text (M149).
+                                       Fail_Match
+                                         (Pat_Text (Ext_P (N.Pat)),
+                                          Ext_D (D), VarE (PB, Span),
+                                          "irrefutable pattern failed",
+                                          Handled => Handled_Of_One (N.Pat),
+                                          Schema => Pat_Schema (N.Pat)))));
                            end loop;
                         end;
                      end if;
                   end;
             end case;
          end loop;
+         Group_Depth := Group_Depth - 1;
       end Ds_Group;
 
       ------------------------------------------------------------------
@@ -2326,7 +2929,7 @@ package body AHC.Desugar is
                            Alts.Append (M.Add (Core.Alt_Node'
                              (Kind => Core.Default_Alt, Span => Span,
                               Alt_Body => Error_Call
-                                ("no match in record selector "
+                                ("No match in record selector "
                                  & Table.Text
                                      (Names.Real_Name_Id
                                         (Info.Field_Names.Element (FI))),

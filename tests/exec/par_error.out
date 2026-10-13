@@ -1,3 +1,8 @@
 500500
 alive after the spark ran
-ahc: error: sparked boom
+ahc: runtime error: error called
+   --> tests/exec/par_error.hs:10:14
+   |
+10 |   let boom = error "sparked boom" :: Int
+   |              ^^^^^ sparked boom
+   = in: main

@@ -461,6 +461,13 @@ package AHC.Syntax is
    type Overlap_Pragma is
      (No_Pragma, Pragma_Overlapping, Pragma_Overlappable, Pragma_Overlaps,
       Pragma_Incoherent);
+   --  Where a construct ENDS (M149): node spans cover a construct's
+   --  first token, but GHC's runtime-error spans cover all of it, so
+   --  the parser records the end of the last real token for the
+   --  expressions, patterns and declarations a failure site can name.
+   package Stop_Maps is new Ada.Containers.Ordered_Maps
+     (Positive, Diagnostics.Source_Span, "=" => Diagnostics."=");
+
    package Overlap_Maps is new Ada.Containers.Ordered_Maps
      (Positive, Overlap_Pragma);   --  Instance_D decl id -> pragma
 
@@ -484,6 +491,11 @@ package AHC.Syntax is
       Lang_Overlapping : Boolean := False;
       --  {-# LANGUAGE IncoherentInstances #-}: all of them INCOHERENT.
       Lang_Incoherent  : Boolean := False;
+      --  Full extents (Start of the node, Stop after its last token),
+      --  keyed by node id (M149).
+      Expr_Extents     : Stop_Maps.Map;
+      Pat_Extents      : Stop_Maps.Map;
+      Decl_Extents     : Stop_Maps.Map;
       Exports         : Entity_Vectors.Vector;
       Imports         : Import_Vectors.Vector;
       Top_Decls       : Decl_Id_Vectors.Vector;

@@ -1399,6 +1399,22 @@ AhcNode *ahc_mk_string_lit(const char *s, size_t len) {
   return mk_string_gen(s, len, 1);
 }
 
+/* A long source literal, built on first force (M149): S is static
+   (codegen's C literal), so the thunk keeps only a pointer to it. */
+static AhcNode *lit_lazy_code(AhcNode **env) {
+  return ahc_mk_string_lit((const char *)env[0]->u.p,
+                           (size_t)env[1]->u.i);
+}
+
+AhcNode *ahc_mk_string_lit_lazy(const char *s, size_t len) {
+  AhcNode *p = ahc_mk_ptr((void *)s);     /* children first: own GC */
+  AhcNode *n = ahc_mk_int((long)len);
+  AhcNode **e = ahc_env(2);
+  e[0] = p;
+  e[1] = n;
+  return ahc_mk_thunk(lit_lazy_code, e);
+}
+
 AhcNode *ahc_mk_string(const char *s) {
   /* Reached from export/callback argument marshalling, where the
      host controls the pointer: die into the armed frame rather
@@ -3320,13 +3336,19 @@ static AhcNode *mk_just(AhcNode *v) {
    primitives at the end of this block (SomeException and
    IOException are opaque wired types, so no Haskell constructor
    ever spells these shapes - one table, here). */
-#define EXC_ERROR_CALL 1   /* [message :: String]                     */
+#define EXC_ERROR_CALL 1   /* [message :: String, location :: String]:
+                              the location is GHC's CallStack block
+                              ("" when none), shown after the message
+                              by SomeException's Show (M149) */
 #define EXC_ARITH      2   /* [code :: Int] - ArithException's index  */
 #define EXC_IO         3   /* [ioe :: IOException]                    */
 #define EXC_EXIT       4   /* [c :: Int]: 0 = ExitSuccess, else
                               ExitFailure n encoded as 2n+1, so that
                               ExitFailure 0 (legal for throwIO; only
                               exitWith rejects it) stays distinct */
+#define EXC_PATTERN    5   /* [message :: String] - PatternMatchFail;
+                              the message is GHC's, trailing newline
+                              included (M149) */
 #define EXIT_ENCODE(n) ((n) == 0 ? 1 : 2 * (n) + 1)  /* ExitFailure n */
 #define EXIT_DECODE(c) ((c) >> 1)                    /* floor, like div */
 
@@ -3374,10 +3396,18 @@ static int ioe_type_of_errno(int e) {
   }
 }
 
-static AhcNode *exc_error_call(AhcNode *msg) {
-  AhcNode *e = ahc_mk_con(EXC_ERROR_CALL, 1);
+/* msg and loc exist before the node: the own collector's
+   allocation order. */
+static AhcNode *exc_error_call_at(AhcNode *msg, AhcNode *loc) {
+  AhcNode *e = ahc_mk_con(EXC_ERROR_CALL, 2);
   e->u.con.fields[0] = msg;
+  e->u.con.fields[1] = loc;
   return e;
+}
+
+static AhcNode *exc_error_call(AhcNode *msg) {
+  AhcNode *loc = ahc_mk_string("");
+  return exc_error_call_at(msg, loc);
 }
 
 static AhcNode *exc_arith(long code) {
@@ -3468,6 +3498,9 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
     n = exc_put_c(buf, n, cap, "error: ");
     exc_put_list(buf, n, cap, exc->u.con.fields[0]);
     break;
+  case EXC_PATTERN:
+    exc_put_list(buf, n, cap, exc->u.con.fields[0]);
+    break;
   case EXC_ARITH: {
     long c = ahc_eval(exc->u.con.fields[0])->u.i;
     exc_put_c(buf, n, cap,
@@ -3514,6 +3547,9 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
 /* No frame at all: main, outside every catch. ExitCode exits with
    its code and prints nothing (GHC's top-level handler); anything
    else prints and exits 1, the shape ahc_die always had. */
+/* M149: the uncaught-error report (defined with the site code). */
+static int report_print(AhcNode *exc, const char *msg);
+
 static void exc_uncaught(AhcNode *exc) __attribute__((noreturn));
 static void exc_uncaught(AhcNode *exc) {
   size_t cap = 2048;
@@ -3534,6 +3570,16 @@ static void exc_uncaught(AhcNode *exc) {
   buf = (char *)malloc(cap);
   if (!buf) ahc_die("out of memory");
   exc_render(e, buf, cap);
+  {
+    /* A located failure prints AHC's report instead (M149). */
+    const char *m = buf;
+    if (e->u.con.contag == EXC_ERROR_CALL && strncmp(m, "error: ", 7) == 0)
+      m += 7;
+    if (report_print(e, m)) {
+      free(buf);
+      exit(1);
+    }
+  }
   fputs("ahc: ", stderr);
   if (strlen(buf) + 8 < cap) {
     fputs(buf, stderr);
@@ -4071,7 +4117,21 @@ static AhcNode *p_exc_kind(AhcNode *e) {
   return ahc_mk_int(ahc_eval(e)->u.con.contag);
 }
 static AhcNode *p_exc_message(AhcNode *e) {
+  AhcNode *v = ahc_eval(e);
+  if (v->tag == AHC_CON && v->u.con.contag == EXC_PATTERN)
+    return v->u.con.fields[0];
   return exc_field(e, EXC_ERROR_CALL, "primExcMessage");
+}
+static AhcNode *p_exc_location(AhcNode *e) {
+  AhcNode *v = ahc_eval(e);
+  if (v->tag == AHC_CON && v->u.con.contag == EXC_ERROR_CALL)
+    return v->u.con.fields[1];
+  return ahc_mk_string("");
+}
+static AhcNode *p_exc_pattern_fail(AhcNode *msg) {
+  AhcNode *e = ahc_mk_con(EXC_PATTERN, 1);
+  e->u.con.fields[0] = msg;
+  return e;
 }
 static AhcNode *p_exc_code(AhcNode *e) {
   AhcNode *v = ahc_eval(e);
@@ -6569,6 +6629,73 @@ static void sb_mem(StrBuf *b, const char *p, size_t n) {
   b->len += n;
 }
 
+/* ----- M149: runtime failure sites --------------------------------
+   A site literal (src/ahc-sites.ads) is one String of ten fields
+   separated by U+001F. The runtime reads it only on the failure path,
+   so forcing it here costs nothing in a run that does not fail. */
+static void site_field_buf(AhcNode *site, int k, StrBuf *b) {
+  AhcNode *cell = ahc_eval(site);
+  int f = 0;
+  while (cell->tag == AHC_CON && cell->u.con.contag == CONS_TAG) {
+    long c = ahc_eval(cell->u.con.fields[0])->u.c;
+    if (c == 0x1f) {
+      if (++f > k) break;
+    } else if (f == k) {
+      unsigned char enc[4];
+      int el = utf8_encode(c, enc);
+      sb_mem(b, (const char *)enc, (size_t)el);
+    }
+    cell = ahc_eval(cell->u.con.fields[1]);
+  }
+}
+
+static AhcNode *site_field(AhcNode *site, int k) {
+  StrBuf b = {0, 0, 0};
+  AhcNode *r;
+  site_field_buf(site, k, &b);
+  r = ahc_mk_string_len(b.p ? b.p : "", b.len);
+  free(b.p);
+  return r;
+}
+
+static void report_note(AhcNode *exc, AhcNode *site, AhcNode *value);
+
+/* primFailMatch site value: a pattern-match failure. The exception is
+   GHC's PatternMatchFail with the site's text; VALUE is what failed to
+   match, kept for the uncaught report (M149 phase D). */
+static AhcNode *p_fail_match(AhcNode *site, AhcNode *value) {
+  AhcNode *msg = site_field(site, 0);
+  AhcNode *e;
+  fflush(stdout);            /* output already produced precedes it */
+  e = ahc_mk_con(EXC_PATTERN, 1);
+  e->u.con.fields[0] = msg;
+  report_note(e, site, value);
+  ahc_throw(e);
+}
+
+/* primErrorAt site msg: an ErrorCall whose location is the site's
+   CallStack block (field 1) - GHC's text for error, undefined and the
+   located partial functions. primErrorAtNote takes the note field
+   (field 9), (!!)'s second stack. primErrorLoc msg loc: a constant
+   location, for the stacks GHC prints entirely inside base. */
+static AhcNode *error_at_field(AhcNode *site, AhcNode *msg, int field) {
+  AhcNode *loc = site_field(site, field);
+  AhcNode *e = exc_error_call_at(msg, loc);
+  fflush(stdout);
+  report_note(e, site, NULL);
+  ahc_throw(e);
+}
+static AhcNode *p_error_at(AhcNode *site, AhcNode *msg) {
+  return error_at_field(site, msg, 1);
+}
+static AhcNode *p_error_at_note(AhcNode *site, AhcNode *msg) {
+  return error_at_field(site, msg, 9);
+}
+static AhcNode *p_error_loc(AhcNode *msg, AhcNode *loc) {
+  fflush(stdout);
+  ahc_throw(exc_error_call_at(msg, loc));
+}
+
 static void close_fd(int *fd) {
   if (*fd >= 0) { close(*fd); *fd = -1; }
 }
@@ -7855,6 +7982,365 @@ static void fmt_double(char *buf, size_t n, double v) {
   }
 }
 
+/* ----- M149: the uncaught-error report ---------------------------
+   A located failure (primFailMatch, primErrorAt) records its site and
+   failing value beside the exception it raises; exc_uncaught asks for
+   that record and, when there is one, prints AHC's report instead of
+   GHC's one-liner. The table is a ring of the most recent records;
+   the exception node is the key (both collectors are non-moving, and
+   a rethrow passes the same node). It lives in .bss, which both
+   collectors scan, so its nodes stay alive while recorded. */
+#define REPORT_SLOTS 32
+static struct { AhcNode *exc, *site, *value; } reports[REPORT_SLOTS];
+static unsigned report_next;
+static pthread_mutex_t report_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void report_note(AhcNode *exc, AhcNode *site, AhcNode *value) {
+  pthread_mutex_lock(&report_mu);
+  reports[report_next % REPORT_SLOTS].exc = exc;
+  reports[report_next % REPORT_SLOTS].site = site;
+  reports[report_next % REPORT_SLOTS].value = value;
+  report_next++;
+  pthread_mutex_unlock(&report_mu);
+}
+
+static int report_find(AhcNode *exc, AhcNode **site, AhcNode **value) {
+  int found = 0;
+  unsigned k;
+  pthread_mutex_lock(&report_mu);
+  for (k = 0; k < REPORT_SLOTS && k < report_next; k++) {
+    unsigned i = (report_next - 1 - k) % REPORT_SLOTS;
+    if (reports[i].exc == exc) {
+      *site = reports[i].site;
+      *value = reports[i].value;
+      found = 1;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&report_mu);
+  return found;
+}
+
+/* ----- rendering a value WITHOUT forcing it ----------------------
+   Nothing here calls ahc_eval: an unevaluated part prints as `_`, so
+   the report can neither diverge nor raise a second error. The schema
+   (src/ahc-desugar.adb, "render schema") names constructors, since a
+   constructor node carries only its 1-based tag. */
+#define R_STX 2
+#define R_ETX 3
+#define R_EOT 4
+#define R_ENQ 5
+#define R_ACK 6
+#define RENDER_CAP 60
+
+typedef struct { StrBuf b; int full; } RBuf;
+
+static void rb_put(RBuf *r, const char *s) {
+  if (r->full) return;
+  while (*s) {
+    if (r->b.len >= RENDER_CAP) { r->full = 1; return; }
+    sb_ch(&r->b, *s++);
+  }
+}
+
+static AhcNode *no_ind(AhcNode *n) {
+  int hops = 0;
+  while (n && n->tag == AHC_IND && hops++ < 64) n = n->u.ind;
+  return n;
+}
+
+static int unevaluated(AhcNode *n) {
+  return !n || n->tag == AHC_THUNK || n->tag == AHC_BLACKHOLE
+         || n->tag == AHC_IND;
+}
+
+/* Past one code: a letter, l<code>, or NAME STX ... ETX (nested). */
+static const char *skip_code(const char *p) {
+  int depth = 0;
+  if (!*p) return p;
+  if (*p == 'l') return skip_code(p + 1);
+  if (strchr("idfczs?", *p) && (p[1] == 0 || p[1] == R_ACK || p[1] == R_ETX
+                                || p[1] == R_EOT))
+    return p + 1;
+  for (; *p; p++) {
+    if (*p == R_STX) depth++;
+    else if (*p == R_ETX && --depth == 0) return p + 1;
+  }
+  return p;
+}
+
+static void render(RBuf *r, AhcNode *n, const char *code, int depth,
+                   int nested);
+
+/* The TAG-th constructor of schema S (NAME STX con EOT con ... ETX):
+   its name into NAME, and a pointer to its first field code (or NULL
+   when it has none). Returns 0 when the schema has no such entry. */
+static int schema_con(const char *s, int tag, char *name, size_t cap,
+                      const char **fields, int *arity) {
+  const char *p = strchr(s, R_STX);
+  int k = 1;
+  if (!p) return 0;
+  p++;
+  while (*p && *p != R_ETX) {
+    const char *q = p;
+    size_t len;
+    while (*q && *q != R_ENQ) q++;
+    if (!*q) return 0;
+    if (k == tag) {
+      len = (size_t)(q - p) < cap - 1 ? (size_t)(q - p) : cap - 1;
+      memcpy(name, p, len);
+      name[len] = 0;
+      *arity = atoi(q + 1);
+      q++;
+      while (*q && *q != R_ACK && *q != R_EOT && *q != R_ETX) q++;
+      *fields = (*q == R_ACK) ? q + 1 : NULL;
+      return 1;
+    }
+    /* skip to this constructor's end: past its fields */
+    q++;
+    while (*q && *q != R_ACK && *q != R_EOT && *q != R_ETX) q++;
+    while (*q == R_ACK) q = skip_code(q + 1);
+    if (*q == R_EOT) q++;
+    p = q;
+    k++;
+  }
+  return 0;
+}
+
+static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
+                        int is_string) {
+  int first = 1;
+  StrBuf sb = {0, 0, 0};
+  /* fully evaluated spine: [a,b] / "ab"; otherwise a : b : _ */
+  AhcNode *c = n;
+  int complete = 1, count = 0;
+  while (1) {
+    c = no_ind(c);
+    if (unevaluated(c)) { complete = 0; break; }
+    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) break;
+    if (is_string && unevaluated(no_ind(c->u.con.fields[0]))) complete = 0;
+    c = c->u.con.fields[1];
+    if (++count > RENDER_CAP) { complete = 0; break; }
+  }
+  if (is_string && complete) {
+    int esc = 0;               /* show's \& state between characters */
+    c = n;
+    sb_ch(&sb, '"');
+    while (1) {
+      c = no_ind(c);
+      if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) break;
+      sb_show_cp(&sb, no_ind(c->u.con.fields[0])->u.c, &esc);
+      c = c->u.con.fields[1];
+    }
+    sb_ch(&sb, '"');
+    sb_ch(&sb, 0);
+    rb_put(r, sb.p);
+    free(sb.p);
+    return;
+  }
+  free(sb.p);
+  if (complete) {
+    rb_put(r, "[");
+    for (c = no_ind(n); c->tag == AHC_CON && c->u.con.contag == CONS_TAG;
+         c = no_ind(c->u.con.fields[1])) {
+      if (!first) rb_put(r, ",");
+      first = 0;
+      render(r, c->u.con.fields[0], elem, depth + 1, 0);
+      if (r->full) return;
+    }
+    rb_put(r, "]");
+    return;
+  }
+  for (c = n;;) {
+    c = no_ind(c);
+    if (unevaluated(c)) { rb_put(r, "_"); return; }
+    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) { rb_put(r, "[]"); return; }
+    render(r, c->u.con.fields[0], elem, depth + 1, 1);
+    rb_put(r, " : ");
+    if (r->full) return;
+    c = c->u.con.fields[1];
+  }
+}
+
+static void render(RBuf *r, AhcNode *n, const char *code, int depth,
+                   int nested) {
+  char tmp[64];
+  n = no_ind(n);
+  if (r->full) return;
+  if (unevaluated(n) || n->tag == AHC_FUN) { rb_put(r, "_"); return; }
+  switch (n->tag) {
+  case AHC_INT:
+    snprintf(tmp, sizeof tmp, (nested && n->u.i < 0) ? "(%ld)" : "%ld",
+             n->u.i);
+    rb_put(r, tmp);
+    return;
+  case AHC_DOUBLE:
+    fmt_double(tmp, sizeof tmp, n->u.d);
+    if (nested && n->u.d < 0) { rb_put(r, "("); rb_put(r, tmp); rb_put(r, ")"); }
+    else rb_put(r, tmp);
+    return;
+  case AHC_CHAR: {
+    char cb[16];
+    size_t k = 1;
+    cb[0] = '\'';
+    if (n->u.c == '\'') { cb[1] = '\\'; cb[2] = '\''; k = 3; }
+    else k += show_lit_char(cb + 1, n->u.c, NULL);
+    cb[k] = '\'';
+    cb[k + 1] = 0;
+    rb_put(r, cb);
+    return;
+  }
+  case AHC_BIGINT: {
+    char *s = big_image(n);
+    if (nested && s[0] == '-') { rb_put(r, "("); rb_put(r, s); rb_put(r, ")"); }
+    else rb_put(r, s);
+    free(s);
+    return;
+  }
+  case AHC_CON:
+    break;
+  default:
+    rb_put(r, "_");
+    return;
+  }
+  /* a constructor: lists and strings, else through the schema */
+  if (code && (code[0] == 's' || code[0] == 'l')) {
+    render_list(r, n, code[0] == 'l' ? code + 1 : "c", depth,
+                code[0] == 's');
+    return;
+  }
+  {
+    char name[128];
+    const char *fields = NULL;
+    int arity = 0, i;
+    if (!code || depth >= 3
+        || !schema_con(code, n->u.con.contag, name, sizeof name, &fields,
+                       &arity)) {
+      rb_put(r, "_");
+      return;
+    }
+    if (name[0] == '(' && name[1] == ',') {   /* a tuple */
+      rb_put(r, "(");
+      for (i = 0; i < n->u.con.arity; i++) {
+        if (i) rb_put(r, ",");
+        render(r, n->u.con.fields[i], fields, depth + 1, 0);
+        if (fields) {
+          fields = skip_code(fields);
+          fields = (*fields == R_ACK) ? fields + 1 : NULL;
+        }
+      }
+      rb_put(r, ")");
+      return;
+    }
+    if (nested && n->u.con.arity > 0) rb_put(r, "(");
+    if (name[0] == ':') { rb_put(r, "("); rb_put(r, name); rb_put(r, ")"); }
+    else rb_put(r, name);
+    for (i = 0; i < n->u.con.arity; i++) {
+      rb_put(r, " ");
+      render(r, n->u.con.fields[i], fields, depth + 1, 1);
+      if (fields) {
+        fields = skip_code(fields);
+        fields = (*fields == R_ACK) ? fields + 1 : NULL;
+      }
+    }
+    if (nested && n->u.con.arity > 0) rb_put(r, ")");
+  }
+}
+
+/* ----- the report ------------------------------------------------ */
+
+/* Field K of a site literal as a malloc'd C string. */
+static char *site_cstr(AhcNode *site, int k) {
+  StrBuf b = {0, 0, 0};
+  site_field_buf(site, k, &b);
+  sb_ch(&b, 0);
+  return b.p;
+}
+
+/* Prints the report for EXC when one was recorded; returns 0 (and
+   prints nothing) otherwise. MSG is GHC's text for the exception. */
+static int report_print(AhcNode *exc, const char *msg) {
+  AhcNode *site, *value;
+  char *headline, *file, *span, *in, *snippet, *handled, *schema;
+  int l1 = 0, c1 = 0, l2 = 0, c2 = 0, width = 1, is_pattern;
+  if (!report_find(exc, &site, &value)) return 0;
+  is_pattern = exc->u.con.contag == EXC_PATTERN;
+  headline = site_cstr(site, 2);
+  file = site_cstr(site, 3);
+  span = site_cstr(site, 4);
+  in = site_cstr(site, 5);
+  snippet = site_cstr(site, 6);
+  handled = site_cstr(site, 7);
+  schema = site_cstr(site, 8);
+  sscanf(span, "%d:%d-%d:%d", &l1, &c1, &l2, &c2);
+  {
+    int m = l2 > l1 ? l2 : l1;
+    while (m >= 10) { m /= 10; width++; }
+  }
+  fprintf(stderr, "ahc: runtime error: %s\n", headline);
+  fprintf(stderr, "%*s--> %s:%d:%d\n", width + 1, "", file, l1, c1);
+  fprintf(stderr, "%*s |\n", width, "");
+  {
+    /* The spanned lines; a one-line span gets a caret line under it,
+       a longer one is explained in a note after the lines. */
+    char *line = snippet, *next;
+    int first = 1, multi = l2 > l1, unevaluated_shown = 0;
+    char detail[RENDER_CAP + 64];
+    if (is_pattern && strcmp(headline, "no guard is true") == 0) {
+      /* a multi-way if has guards, not a value to show */
+      snprintf(detail, sizeof detail, "every guard is False");
+    } else if (is_pattern) {
+      RBuf rb = {{0, 0, 0}, 0};
+      render(&rb, value, schema[0] ? schema : NULL, 0, 0);
+      sb_ch(&rb.b, 0);
+      snprintf(detail, sizeof detail, "no pattern matches `%s%s`",
+               rb.b.p ? rb.b.p : "_", rb.full ? "..." : "");
+      unevaluated_shown = rb.b.p && strchr(rb.b.p, '_') != NULL;
+      free(rb.b.p);
+    } else {
+      snprintf(detail, sizeof detail, "%s", msg);
+    }
+    while (line && *line) {
+      char *bar;
+      next = strchr(line, 0x1e);
+      if (next) *next++ = 0;
+      bar = strchr(line, '|');
+      if (bar) {
+        *bar = 0;
+        fprintf(stderr, "%*s | %s\n", width, line, bar + 1);
+        if (first && !multi) {
+          int from = c1 > 0 ? c1 : 1;
+          int to = c2 >= from ? c2 : from;
+          int k;
+          fprintf(stderr, "%*s | ", width, "");
+          for (k = 1; k < from; k++) fputc(' ', stderr);
+          for (k = from; k <= to && k < from + 80; k++) fputc('^', stderr);
+          fprintf(stderr, " %s\n", detail);
+        }
+        first = 0;
+      }
+      line = next;
+    }
+    if (multi) fprintf(stderr, "%*s = %s\n", width, "", detail);
+    if (unevaluated_shown)
+      fprintf(stderr, "%*s = note: `_` is a part not yet evaluated - "
+              "the report never forces it\n", width, "");
+  }
+  if (is_pattern && handled[0]) {
+    char *h;
+    fprintf(stderr, "%*s = note: the patterns handle ", width, "");
+    for (h = handled; *h; h++) {
+      if (*h == 0x1e) fputs(", ", stderr);
+      else fputc(*h, stderr);
+    }
+    fputc('\n', stderr);
+  }
+  if (in[0]) fprintf(stderr, "%*s = in: %s\n", width, "", in);
+  free(headline); free(file); free(span); free(in); free(snippet);
+  free(handled); free(schema);
+  return 1;
+}
+
 static AhcNode *p_showsprec_d(AhcNode *d, AhcNode *x) {
   long dv = ahc_eval(d)->u.i;
   double v = ahc_eval(x)->u.d;
@@ -8045,6 +8531,9 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_evaluate,
   *ahc_prim_exc_kind, *ahc_prim_exc_message, *ahc_prim_exc_code,
   *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
+  *ahc_prim_exc_location, *ahc_prim_exc_pattern_fail,
+  *ahc_prim_fail_match, *ahc_prim_error_at, *ahc_prim_error_at_note,
+  *ahc_prim_error_loc,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
@@ -8319,6 +8808,12 @@ void ahc_rts_init(void) {
   ahc_prim_exc_code = mk_prim1(p_exc_code);
   ahc_prim_exc_io = mk_prim1(p_exc_io);
   ahc_prim_exc_error_call = mk_prim1(p_exc_error_call);
+  ahc_prim_exc_location = mk_prim1(p_exc_location);
+  ahc_prim_exc_pattern_fail = mk_prim1(p_exc_pattern_fail);
+  ahc_prim_fail_match = mk_prim2(p_fail_match);
+  ahc_prim_error_at = mk_prim2(p_error_at);
+  ahc_prim_error_at_note = mk_prim2(p_error_at_note);
+  ahc_prim_error_loc = mk_prim2(p_error_loc);
   ahc_prim_exc_arith = mk_prim1(p_exc_arith);
   ahc_prim_exc_from_io = mk_prim1(p_exc_from_io);
   ahc_prim_exc_exit = mk_prim1(p_exc_exit);

@@ -3,9 +3,9 @@ module Data.Maybe
   , listToMaybe, maybeToList, catMaybes, mapMaybe
   ) where
 
-fromJust :: Maybe a -> a
-fromJust (Just x) = x
-fromJust Nothing  = error "Maybe.fromJust: Nothing"
+-- fromJust is the Prelude's own (not in the user Prelude's export
+-- list), re-exported here: one entity, so a user's use of it is
+-- located like head's (M149).
 
 listToMaybe :: [a] -> Maybe a
 listToMaybe []      = Nothing

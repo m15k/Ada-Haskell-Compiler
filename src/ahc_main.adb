@@ -28,6 +28,7 @@ with AHC.Contracts;
 with AHC.Core.Printer;
 with AHC.Deps;
 with AHC.Derive_Functor;
+with AHC.Sites;
 with AHC.Desugar;
 with AHC.Diagnostics;
 with AHC.Elaborate;
@@ -1020,7 +1021,18 @@ procedure AHC_Main is
                   AHC.Desugar.Desugar_Module
                     (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
                      L_Annos, L_Preds,
-                     Warn_Matches => Is_Root);
+                     Warn_Matches => Is_Root,
+                     --  Runtime failure sites (M149) for the user's
+                     --  own modules; a library module's failures are
+                     --  base's in GHC, so they keep the plain text.
+                     Ctx =>
+                       (if L.Ref.Is_Library then AHC.Sites.No_Context
+                        else (File => L.Path,
+                              Module =>
+                                Ada.Strings.Unbounded.To_Unbounded_String
+                                  (Table.Text
+                                     (AHC.Names.Real_Name_Id (L.Name))),
+                              Src => L.Text)));
                end if;
                Unit_Spans.Append
                  (Unit_Span'

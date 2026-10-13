@@ -1,0 +1,6 @@
+ahc: runtime error: fromJust Nothing
+  --> tests/exec/m149_report_fromjust.hs:7:10
+  |
+7 |   print (fromJust m)
+  |          ^^^^^^^^ Maybe.fromJust: Nothing
+  = in: main

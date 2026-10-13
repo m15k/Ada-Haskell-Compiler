@@ -1,0 +1,24 @@
+own head => my head: empty
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m149_located_uses.hs:11:11 in main:Main
+qualified => Prelude.head: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List
+  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List
+  head, called at tests/conformance/m149_located_uses.hs:23:28 in main:Main
+unapplied => Prelude.head: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List
+  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List
+  head, called at tests/conformance/m149_located_uses.hs:24:37 in main:Main
+section => Prelude.!!: index too large
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List
+  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List
+  !!, called at tests/conformance/m149_located_uses.hs:25:27 in main:Main
+error in where => zero
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m149_located_uses.hs:30:11 in main:Main
+done

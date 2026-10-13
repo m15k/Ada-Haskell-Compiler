@@ -1,0 +1,10 @@
+4.0
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_report_function.hs:6:1
+  |
+6 | area (Circle r) = pi * r * r
+7 | area (Square s) = s * s
+  = no pattern matches `Triangle _ _`
+  = note: `_` is a part not yet evaluated - the report never forces it
+  = note: the patterns handle Circle, Square
+  = in: area

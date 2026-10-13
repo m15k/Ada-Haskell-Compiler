@@ -1,0 +1,7 @@
+20
+ahc: runtime error: index out of range
+  --> tests/exec/m149_report_index.hs:6:13
+  |
+6 |   print (xs !! 7)
+  |             ^^ Prelude.!!: index too large
+  = in: main

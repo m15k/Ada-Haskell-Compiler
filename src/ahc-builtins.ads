@@ -99,6 +99,9 @@ package AHC.Builtins is
       Enum_From_Then_To_V,
       From_Integer_V, From_Rational_V, From_String_V, Negate_V,
       Error_V, Otherwise_V : Core.Var_Id := Core.No_Var;
+      --  primFailMatch :: String -> a -> b (M149): a pattern-match
+      --  failure at a site (AHC.Sites), given the failing value.
+      Fail_Match_V : Core.Var_Id := Core.No_Var;
    end record;
 
    --  `a -> b` IS `(->) a b` (Report 4.1.2), but AHC keeps one

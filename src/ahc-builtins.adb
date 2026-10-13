@@ -1087,6 +1087,22 @@ package body AHC.Builtins is
             Env.Error_V := Var_Id (Def_Global
               ("error", Poly1 (A, FN (String_T, TV (A)))));
             Ignore := Def_Global ("undefined", Poly1 (A, TV (A)));
+            declare
+               Bv : constant Real_TyVar_Id := New_Tv ("b");
+            begin
+               Env.Fail_Match_V := Var_Id (Def_Global
+                 ("primFailMatch",
+                  Poly2 (A, Bv, FN (String_T, TV (A), TV (Bv)))));
+            end;
+            --  M149: an ErrorCall located at a site (its CallStack
+            --  field, or the note field for (!!)'s second stack), and
+            --  one with a constant location (base-only stacks).
+            Ignore := Def_Global
+              ("primErrorAt", Poly1 (A, FN (String_T, String_T, TV (A))));
+            Ignore := Def_Global
+              ("primErrorAtNote", Poly1 (A, FN (String_T, String_T, TV (A))));
+            Ignore := Def_Global
+              ("primErrorLoc", Poly1 (A, FN (String_T, String_T, TV (A))));
             Ignore := Def_Global
               ("id", Poly1 (A, FN (TV (A), TV (A))));
             Ignore := Def_Global
@@ -1326,6 +1342,11 @@ package body AHC.Builtins is
                     ("primEvaluate", Poly1 (A2, FN (TV (A2), IO_T (TV (A2)))));
                   Ignore := Def_Global ("primExcKind", Mono (FN (Exc_T, Int_T)));
                   Ignore := Def_Global ("primExcMessage", Mono (FN (Exc_T, Str)));
+                  --  M149: an ErrorCall's GHC CallStack block, and a
+                  --  PatternMatchFail from its message.
+                  Ignore := Def_Global ("primExcLocation", Mono (FN (Exc_T, Str)));
+                  Ignore := Def_Global
+                    ("primExcPatternFail", Mono (FN (Str, Exc_T)));
                   Ignore := Def_Global ("primExcCode", Mono (FN (Exc_T, Int_T)));
                   Ignore := Def_Global ("primExcIO", Mono (FN (Exc_T, IOExc_T)));
                   Ignore := Def_Global

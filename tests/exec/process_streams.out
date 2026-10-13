@@ -14,7 +14,13 @@ truncated utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequenc
 surrogate utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 237)
 overlong utf8: fd:N: hGetContents: invalid argument (cannot decode byte sequence starting from 192)
 raise in stdin: boom
+CallStack (from HasCallStack):
+  error, called at tests/exec/process_streams.hs:53:54 in main:Main
 raise in stdin, child ignores it: boom2
+CallStack (from HasCallStack):
+  error, called at tests/exec/process_streams.hs:54:73 in main:Main
 raise in stdin, child closed it first: boom3
+CallStack (from HasCallStack):
+  error, called at tests/exec/process_streams.hs:55:104 in main:Main
 waitpid fails: waitForProcess: does not exist (No child processes)
 system, waitpid fails: waitForProcess: does not exist (No child processes)

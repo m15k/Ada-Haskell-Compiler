@@ -610,8 +610,16 @@ package body AHC.CodeGen is
                         Lit_Map.Include (K, Lit_Next);
                         Append (Decl, "static AhcNode *ls_"
                                 & Img (Lit_Next) & ";" & ASCII.LF);
+                        --  A long literal is built when first forced,
+                        --  not at start-up (M149): a built String stays
+                        --  live for the whole run, and the runtime-error
+                        --  site literals are long and almost never
+                        --  forced - eager, they cost every program GC
+                        --  time.
                         Append (Lit_Init, "  ls_" & Img (Lit_Next)
-                                & " = ahc_mk_string_lit("""
+                                & (if S'Length > 64
+                                   then " = ahc_mk_string_lit_lazy("""
+                                   else " = ahc_mk_string_lit(""")
                                 & C_Escape (S) & """, "
                                 & Img (S'Length) & ");" & ASCII.LF);
                         Lit_Next := Lit_Next + 1;

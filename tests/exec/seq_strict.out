@@ -1,3 +1,8 @@
 before
 const ignores its second argument
-ahc: error: seq forced its first argument
+ahc: runtime error: error called
+  --> tests/exec/seq_strict.hs:9:15
+  |
+9 |   print (seq (error "seq forced its first argument") (5 :: Int))
+  |               ^^^^^ seq forced its first argument
+  = in: main

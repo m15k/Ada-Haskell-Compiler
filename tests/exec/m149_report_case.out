@@ -1,0 +1,11 @@
+go 3
+Turn 'L'
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_report_case.hs:6:9
+  |
+6 | run c = case c of
+7 |   Go n -> "go " ++ show n
+8 |   Stop -> "stop"
+  = no pattern matches `Turn 'L'`
+  = note: the patterns handle Go, Stop
+  = in: run

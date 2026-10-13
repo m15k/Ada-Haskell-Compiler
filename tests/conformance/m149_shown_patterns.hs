@@ -38,3 +38,5 @@ main = do
   case r of
     Left (PatternMatchFail m) -> putStrLn ("by type => " ++ m)
     Right v -> print v
+  -- The harness strips trailing newlines; end on a visible line.
+  putStrLn "done"

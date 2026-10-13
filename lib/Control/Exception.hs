@@ -1,6 +1,7 @@
 module Control.Exception
   ( SomeException, Exception (..)
-  , ErrorCall (..), ArithException (..), IOException, ExitCode (..)
+  , ErrorCall (..), PatternMatchFail (..), ArithException (..)
+  , IOException, ExitCode (..)
   , throw, throwIO, catch, handle, try, evaluate
   , bracket, bracket_, finally, onException
   ) where
@@ -10,8 +11,8 @@ import System.Exit (ExitCode (..))
 -- base's Control.Exception, closed (docs/exceptions-design-note.md):
 -- SomeException is the runtime's exception value - a KIND and a
 -- payload, reached through the prim* accessors - and the Exception
--- class dispatches on that kind. Four types can be thrown and
--- caught: ErrorCall (error, undefined, pattern-match failure),
+-- class dispatches on that kind. Five types can be thrown and
+-- caught: ErrorCall (error, undefined), PatternMatchFail (M149),
 -- ArithException, IOException, and ExitCode. A program cannot
 -- declare its own (that needs Typeable; Haskell 2010 has no user
 -- exception types), which is written into EXCLUSIONS.md.
@@ -24,9 +25,14 @@ class Show e => Exception e where
 
 instance Show SomeException where
   showsPrec p se = case primExcKind se of
-    1 -> showsPrec p (ErrorCall (primExcMessage se))
+    -- An ErrorCall shows its GHC CallStack block after the message,
+    -- as base's ErrorCallWithLocation does (M149).
+    1 -> let loc = primExcLocation se
+         in showsPrec p (ErrorCall (primExcMessage se))
+              . (if null loc then id else showString ('\n' : loc))
     2 -> showsPrec p (arithFromCode (primExcCode se))
     3 -> showsPrec p (primExcIO se)
+    5 -> showsPrec p (PatternMatchFail (primExcMessage se))
     _ -> showsPrec p (exitFromCode (primExcCode se))
 
 instance Exception SomeException where
@@ -42,6 +48,19 @@ instance Exception ErrorCall where
   toException (ErrorCall m) = primExcErrorCall m
   fromException se
     | primExcKind se == 1 = Just (ErrorCall (primExcMessage se))
+    | otherwise = Nothing
+
+-- base's PatternMatchFail (M149): the message is GHC's whole text,
+-- source span and trailing newline included.
+newtype PatternMatchFail = PatternMatchFail String
+
+instance Show PatternMatchFail where
+  showsPrec _ (PatternMatchFail m) = showString m
+
+instance Exception PatternMatchFail where
+  toException (PatternMatchFail m) = primExcPatternFail m
+  fromException se
+    | primExcKind se == 5 = Just (PatternMatchFail (primExcMessage se))
     | otherwise = Nothing
 
 -- base's order; the index is the runtime's code.

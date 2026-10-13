@@ -1,3 +1,4 @@
+with AHC.Source_Text;
 with AHC.Builtins;
 with AHC.Layout;
 
@@ -43,8 +44,17 @@ package body AHC.Parser is
       --  Token plumbing
       ------------------------------------------------------------------
 
+      --  The end of the last real (non-virtual) token consumed: where
+      --  the construct just parsed ends (M149 extents).
+      Last_Stop : Diagnostics.Source_Span := (Start => 1, Stop => 1);
+
       procedure Advance is
       begin
+         if Tok.Kind not in V_Left_Brace | V_Right_Brace | V_Semicolon
+           | End_Of_File
+         then
+            Last_Stop := Tok.Span;
+         end if;
          if not Pending.Is_Empty and then P_First <= Pending.Last_Index
          then
             Tok := Pending (P_First);
@@ -60,6 +70,46 @@ package body AHC.Parser is
             Laid.Next (Bag, Tok);
          end if;
       end Advance;
+
+      --  Record a node's full extent: its own start to the end of the
+      --  last real token consumed (M149).
+      function Extent_From (Start : Diagnostics.Source_Span)
+        return Diagnostics.Source_Span
+      is (Start => Start.Start,
+          Stop => AHC.Source_Text.Byte_Offset'Max (Start.Stop, Last_Stop.Stop));
+
+      function Mark_E (E : Real_Expr_Id) return Real_Expr_Id is
+      begin
+         --  The first mark is the innermost: parentheses return the
+         --  same node, and an outer mark would take in the `)`.
+         if not Arena.Expr_Extents.Contains (Positive (E)) then
+            Arena.Expr_Extents.Insert
+              (Positive (E), Extent_From (Arena.Node (E).Span));
+         end if;
+         return E;
+      end Mark_E;
+
+      function Mark_P (P : Real_Pat_Id) return Real_Pat_Id is
+      begin
+         --  The first mark is the innermost: parentheses return the
+         --  same node, and an outer mark would take in the `)`.
+         if not Arena.Pat_Extents.Contains (Positive (P)) then
+            Arena.Pat_Extents.Insert
+              (Positive (P), Extent_From (Arena.Node (P).Span));
+         end if;
+         return P;
+      end Mark_P;
+
+      function Mark_D (D : Real_Decl_Id) return Real_Decl_Id is
+      begin
+         --  The first mark is the innermost: parentheses return the
+         --  same node, and an outer mark would take in the `)`.
+         if not Arena.Decl_Extents.Contains (Positive (D)) then
+            Arena.Decl_Extents.Insert
+              (Positive (D), Extent_From (Arena.Node (D).Span));
+         end if;
+         return D;
+      end Mark_D;
 
       --  Token N positions after Tok (Peek (1) = next token).
       function Peek (N : Positive := 1) return Token is
@@ -132,7 +182,15 @@ package body AHC.Parser is
          end if;
          Laid.Close_On_Parse_Error (Closed);
          if Closed then
-            Advance;  --  the V_Right_Brace
+            --  The failing token comes again after the V_Right_Brace:
+            --  leaving it here does not consume it, so it must not
+            --  count as the end of the construct (M149 extents).
+            declare
+               Kept : constant Diagnostics.Source_Span := Last_Stop;
+            begin
+               Advance;  --  the V_Right_Brace
+               Last_Stop := Kept;
+            end;
          end if;
          return Closed;
       end Try_Layout_Close;
@@ -552,7 +610,12 @@ package body AHC.Parser is
             | Int_Lit | Float_Lit | Char_Lit | String_Lit
             | Left_Paren | Left_Bracket | Tilde);
 
+      function Parse_APat_Inner return Real_Pat_Id;
+
       function Parse_APat return Real_Pat_Id is
+        (Mark_P (Parse_APat_Inner));
+
+      function Parse_APat_Inner return Real_Pat_Id is
          Span : constant Diagnostics.Source_Span := Tok.Span;
       begin
          case Tok.Kind is
@@ -721,7 +784,7 @@ package body AHC.Parser is
             when others =>
                Fail ("expected a pattern");
          end case;
-      end Parse_APat;
+      end Parse_APat_Inner;
 
       function Parse_Pat10 return Real_Pat_Id is
          Span : constant Diagnostics.Source_Span := Tok.Span;
@@ -773,7 +836,12 @@ package body AHC.Parser is
          return Parse_APat;
       end Parse_Pat10;
 
+      function Parse_Pat_Inner return Real_Pat_Id;
+
       function Parse_Pat return Real_Pat_Id is
+        (Mark_P (Parse_Pat_Inner));
+
+      function Parse_Pat_Inner return Real_Pat_Id is
          Span      : constant Diagnostics.Source_Span := Tok.Span;
          First     : constant Real_Pat_Id := Parse_Pat10;
          Operands  : Pat_Id_Vectors.Vector;
@@ -790,7 +858,7 @@ package body AHC.Parser is
          return Arena.Add
            (Pat_Node'(Kind => Con_Chain_P, Span => Span,
                       Operands => Operands, Operators => Operators));
-      end Parse_Pat;
+      end Parse_Pat_Inner;
 
       ------------------------------------------------------------------
       --  Expressions (Report 3)
@@ -864,17 +932,17 @@ package body AHC.Parser is
                      raise Parse_Failure;
                   end if;
                   if Is_Con then
-                     Result := Arena.Add
+                     Result := Mark_E (Arena.Add
                        (Expr_Node'(Kind => Rec_Con_E, Span => Span,
                                    Rec_Base => Result,
                                    Rec_Fields => Fields,
-                                   Rec_Dotdot => Dotdot));
+                                   Rec_Dotdot => Dotdot)));
                   else
-                     Result := Arena.Add
+                     Result := Mark_E (Arena.Add
                        (Expr_Node'(Kind => Rec_Update_E, Span => Span,
                                    Rec_Base => Result,
                                    Rec_Fields => Fields,
-                                   Rec_Dotdot => Dotdot));
+                                   Rec_Dotdot => Dotdot)));
                   end if;
                end;
             end loop;
@@ -1191,7 +1259,7 @@ package body AHC.Parser is
             Advance;
             Neg_First := True;
          end if;
-         Operands.Append (Parse_LExp);
+         Operands.Append (Mark_E (Parse_LExp));
 
          while At_Op loop
             declare
@@ -1207,7 +1275,7 @@ package body AHC.Parser is
                   Op.Neg_After := True;
                end if;
                Operators.Append (Op);
-               Operands.Append (Parse_LExp);
+               Operands.Append (Mark_E (Parse_LExp));
             end;
          end loop;
 
@@ -2455,7 +2523,12 @@ package body AHC.Parser is
                        F_Type => Parse_Type));
       end Parse_Foreign_Decl;
 
+      function Parse_Decl_Inner return Real_Decl_Id;
+
       function Parse_Decl return Real_Decl_Id is
+        (Mark_D (Parse_Decl_Inner));
+
+      function Parse_Decl_Inner return Real_Decl_Id is
          Span : constant Diagnostics.Source_Span := Tok.Span;
       begin
          case Tok.Kind is
@@ -2490,7 +2563,7 @@ package body AHC.Parser is
             when others =>
                return Parse_Binding (Span);
          end case;
-      end Parse_Decl;
+      end Parse_Decl_Inner;
 
       --  Skip to the next declaration boundary after an error.
       procedure Skip_Decl is

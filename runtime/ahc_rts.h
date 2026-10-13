@@ -70,6 +70,8 @@ AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
 AhcNode *ahc_mk_string_lit(const char *s, size_t len); /* WTF-8 lits  */
+/* The same, built when first forced (long literals, M149). */
+AhcNode *ahc_mk_string_lit_lazy(const char *s, size_t len);
 AhcNode *ahc_mk_bytes(const uint8_t *src, int32_t len); /* copies     */
 AhcNode *ahc_mk_bytes_slice(AhcNode *t, int32_t off, int32_t len);
 AhcNode *ahc_mk_missing(const char *what);     /* dies when forced    */
@@ -209,6 +211,9 @@ extern AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_evaluate,
   *ahc_prim_exc_kind, *ahc_prim_exc_message, *ahc_prim_exc_code,
   *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
+  *ahc_prim_exc_location, *ahc_prim_exc_pattern_fail,
+  *ahc_prim_fail_match, *ahc_prim_error_at, *ahc_prim_error_at_note,
+  *ahc_prim_error_loc,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,

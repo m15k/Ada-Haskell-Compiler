@@ -20,6 +20,7 @@ with Test_Manifest;
 with Test_Deps;
 with Test_Semver;
 with Test_Fetch;
+with Test_Sites;
 
 procedure AHC_Tests_Main is
 begin
@@ -42,6 +43,7 @@ begin
    Test_Deps.Run;
    Test_Semver.Run;
    Test_Fetch.Run;
+   Test_Sites.Run;
 
    Test_Harness.Summarize_And_Exit;
 end AHC_Tests_Main;

@@ -1,4 +1,9 @@
 start
 body done
 child speaks
-ahc: error: child exploded
+ahc: runtime error: error called
+   --> tests/exec/conc_child_error.hs:11:41
+   |
+11 |     spawn s (putStrLn "child speaks" >> error "child exploded")
+   |                                         ^^^^^ child exploded
+   = in: main

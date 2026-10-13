@@ -1,0 +1,7 @@
+hello
+ahc: runtime error: empty list
+  --> tests/exec/m149_report_head.hs:3:15
+  |
+3 | firstWord s = head (words s)
+  |               ^^^^ Prelude.head: empty list
+  = in: firstWord

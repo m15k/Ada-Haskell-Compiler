@@ -1,0 +1,8 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_report_noforce.hs:7:1
+  |
+7 | open Other = 0
+  | ^^^^^^^^^^^^^^ no pattern matches `Box _ _ _`
+  = note: `_` is a part not yet evaluated - the report never forces it
+  = note: the patterns handle Other
+  = in: open

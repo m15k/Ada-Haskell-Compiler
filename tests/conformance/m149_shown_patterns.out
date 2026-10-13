@@ -19,3 +19,4 @@ update => tests/conformance/m149_shown_patterns.hs:35:29-44: Non-exhaustive patt
 selector => No match in record selector ry
 by type => tests/conformance/m149_shown_patterns.hs:(10,1)-(11,23): Non-exhaustive patterns in function area
 
+done

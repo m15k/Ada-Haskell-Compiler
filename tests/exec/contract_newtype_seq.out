@@ -1,1 +1,6 @@
-ahc: error: pre of f is bottom
+ahc: runtime error: error called
+  --> tests/exec/contract_newtype_seq.hs:6:20
+  |
+6 | {-# PRE f \x -> N (error "pre of f is bottom") `seq` True #-}
+  |                    ^^^^^ pre of f is bottom
+  = in: f

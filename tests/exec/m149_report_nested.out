@@ -1,0 +1,8 @@
+Order (Item "lamp" (-2)) [1,2,3]
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_report_nested.hs:7:1
+  |
+7 | total Empty = 0
+  | ^^^^^^^^^^^^^^^ no pattern matches `Order (Item "lamp" (-2)) [1,2,3]`
+  = note: the patterns handle Empty
+  = in: total

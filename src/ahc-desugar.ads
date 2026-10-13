@@ -23,6 +23,7 @@ with AHC.Diagnostics;
 with AHC.Kinds;
 with AHC.Names;
 with AHC.Rename;
+with AHC.Sites;
 with AHC.Syntax;
 
 package AHC.Desugar is
@@ -42,7 +43,10 @@ package AHC.Desugar is
       Annos : Kinds.Anno_Maps.Map;
       Preds : Kinds.Pred_Vectors.Vector :=
         Kinds.Pred_Vectors.Empty_Vector;
-      Warn_Matches : Boolean := False)
+      Warn_Matches : Boolean := False;
+      --  M149: the module's file/name/text, so runtime failure sites
+      --  carry GHC's text; No_Context keeps the plain error calls.
+      Ctx : Sites.Site_Context := Sites.No_Context)
      --  The renamer's declaration tables cover this arena exactly: the
      --  desugarer completes the instance each declaration minted
      --  through Decl_Inst, never by span (M142), as Kinds does.

@@ -1,0 +1,7 @@
+5
+ahc: runtime error: error called
+  --> tests/exec/m149_report_error.hs:3:15
+  |
+3 | safeDiv _ 0 = error "division by zero requested"
+  |               ^^^^^ division by zero requested
+  = in: safeDiv

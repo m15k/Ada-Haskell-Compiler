@@ -2,6 +2,7 @@ module AHC.Prim
   ( primCatch, primEvaluate, primThrowIO, primThrow
   , primExcKind, primExcCode, primExcMessage, primExcIO
   , primExcErrorCall, primExcExit, primExcFromIO, primExcArith
+  , primExcLocation, primExcPatternFail
   , primIoeType, primIoeLocation, primIoeFilename, primIoeDescription
   , primMkIOError
   ) where

@@ -394,11 +394,14 @@ productList_ = foldlList_ (*) 1
 
 maximumList_ :: Ord a => [a] -> a
 maximumList_ (x : xs) = foldlList_ max x xs
-maximumList_ [] = error "Prelude.maximum: empty list"
+-- GHC 9.4.8's call stack for these is entirely inside base (M149).
+maximumList_ [] = primErrorLoc "Prelude.maximum: empty list"
+  "CallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:717:28 in base:GHC.List\n  maximum, called at libraries/base/Data/Foldable.hs:745:15 in base:Data.Foldable"
 
 minimumList_ :: Ord a => [a] -> a
 minimumList_ (x : xs) = foldlList_ min x xs
-minimumList_ [] = error "Prelude.minimum: empty list"
+minimumList_ [] = primErrorLoc "Prelude.minimum: empty list"
+  "CallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:741:28 in base:GHC.List\n  minimum, called at libraries/base/Data/Foldable.hs:746:15 in base:Data.Foldable"
 
 elemList_ :: Eq a => a -> [a] -> Bool
 elemList_ _ [] = False
@@ -659,11 +662,13 @@ unzip xs = (map fst xs, map snd xs)
 foldr1List_ :: (a -> a -> a) -> [a] -> a
 foldr1List_ _ [x] = x
 foldr1List_ f (x : xs) = f x (foldr1List_ f xs)
-foldr1List_ _ [] = error "foldr1: empty list"
+foldr1List_ _ [] = primErrorLoc "Prelude.foldr1: empty list"
+  "CallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:611:30 in base:GHC.List\n  foldr1, called at libraries/base/Data/Foldable.hs:741:15 in base:Data.Foldable"
 
 foldl1List_ :: (a -> a -> a) -> [a] -> a
 foldl1List_ f (x : xs) = foldlList_ f x xs
-foldl1List_ _ [] = error "foldl1: empty list"
+foldl1List_ _ [] = primErrorLoc "Prelude.foldl1: empty list"
+  "CallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:391:28 in base:GHC.List\n  foldl1, called at libraries/base/Data/Foldable.hs:738:15 in base:Data.Foldable"
 
 lines :: String -> [String]
 lines [] = []
@@ -2011,3 +2016,67 @@ withFileP_ path mode act =
                    (primMkIOError (primIoeType e) "withFile"
                                   (primIoeDescription e) (Just path)))
          else primThrowIO se)
+
+-- M149: the located variants. Desugar rewrites a user module's use of
+-- the plain function (identified as the Prelude's own entity) into one
+-- of these applied to a site literal (src/ahc-sites.ads). A failure
+-- then carries GHC's exact CallStack text and AHC's uncaught-error
+-- report. Each mirrors its plain definition; none is exported (the
+-- Prelude's export list is GHC's).
+error_at_ :: String -> String -> a
+error_at_ s m = primErrorAt s m
+
+undefined_at_ :: String -> a
+undefined_at_ s = primErrorAt s "Prelude.undefined"
+
+errorWithoutStackTrace_at_ :: String -> String -> a
+errorWithoutStackTrace_at_ s m = primErrorAt s m
+
+head_at_ :: String -> [a] -> a
+head_at_ _ (x : _) = x
+head_at_ s [] = primErrorAt s "Prelude.head: empty list"
+
+tail_at_ :: String -> [a] -> [a]
+tail_at_ _ (_ : xs) = xs
+tail_at_ s [] = primErrorAt s "Prelude.tail: empty list"
+
+last_at_ :: String -> [a] -> a
+last_at_ _ (x : xs) = if nullList_ xs then x else last xs
+last_at_ s [] = primErrorAt s "Prelude.last: empty list"
+
+init_at_ :: String -> [a] -> [a]
+init_at_ _ (x : xs) = if nullList_ xs then [] else x : init xs
+init_at_ s [] = primErrorAt s "Prelude.init: empty list"
+
+cycle_at_ :: String -> [a] -> [a]
+cycle_at_ s [] = primErrorAt s "Prelude.cycle: empty list"
+cycle_at_ _ xs = cycle xs
+
+index_at_ :: String -> [a] -> Int -> a
+index_at_ s xs n =
+  if n < 0 then primErrorAtNote s "Prelude.!!: negative index" else go xs n
+  where
+    go [] _ = primErrorAt s "Prelude.!!: index too large"
+    go (y : ys) k = if k == 0 then y else go ys (k - 1)
+
+-- Data.Maybe re-exports these (M149: one entity, so desugar can
+-- locate a user's fromJust).
+fromJust :: Maybe a -> a
+fromJust (Just x) = x
+fromJust Nothing = error "Maybe.fromJust: Nothing"
+
+fromJust_at_ :: String -> Maybe a -> a
+fromJust_at_ _ (Just x) = x
+fromJust_at_ s Nothing = primErrorAt s "Maybe.fromJust: Nothing"
+
+read_at_ :: Read a => String -> String -> a
+read_at_ s str =
+  case [x | (x, t) <- reads str, allSpace_ t] of
+    [x] -> x
+    _   -> primErrorAt s "Prelude.read: no parse"
+
+chr_at_ :: String -> Int -> Char
+chr_at_ s n =
+  if n < 0 || n > 1114111
+    then primErrorAt s ("Prelude.chr: bad argument: " ++ show n)
+    else chr n

@@ -1,2 +1,7 @@
 before
-ahc: error: non-exhaustive guards in multi-way if
+ahc: runtime error: no guard is true
+  --> tests/exec/multiway_if_fail.hs:5:10
+  |
+5 |   print (if | False -> 1 :: Int)
+  |          ^^^^^^^^^^^^^^^^^^^^^^ every guard is False
+  = in: main
