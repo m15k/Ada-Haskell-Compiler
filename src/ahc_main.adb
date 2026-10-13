@@ -64,9 +64,9 @@ procedure AHC_Main is
       Put_Line (Target, "       ahc core FILE.hs");
       Put_Line (Target, "       ahc check FILE.hs");
       Put_Line (Target, "       ahc build [--lib] FILE.hs [OUT]"
-                & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]");
+                & " [--unchecked] [--no-opt] [--trail] [-o OUT] [-j N] [-v]");
       Put_Line (Target, "       ahc emit FILE.hs OUT"
-                & " [--unchecked|--no-opt|--lib]"
+                & " [--unchecked|--no-opt|--lib|--trail]"
                         & "   (writes OUT.c)");
       Put_Line (Target, "       ahc bindgen cpp|rust|go|ghc"
                 & " FILE.hs OUT");
@@ -148,6 +148,7 @@ procedure AHC_Main is
      (Path     : String; Mode : Character; Out_Path : String := "";
       Refined  : Boolean := True; Optimize : Boolean := True;
       Lib      : Boolean := False;
+      Trail    : Boolean := False;   --  ahc build --trail (M149)
       Bindgen_Lang : String := "";
       Quiet    : Boolean := False;
       Manifest_Dir : String := "") is
@@ -190,6 +191,8 @@ procedure AHC_Main is
       package Unit_Span_Vectors is new Ada.Containers.Vectors
         (Positive, Unit_Span);
       Unit_Spans : Unit_Span_Vectors.Vector;
+      --  The user's own (non-library) modules: --trail traces these.
+      User_Units : AHC.CodeGen.UStr_Vectors.Vector;
 
       --  Diagnostic origin table: tag -> that module's source text,
       --  so cross-module diagnostics print against the RIGHT file.
@@ -1034,6 +1037,11 @@ procedure AHC_Main is
                                      (AHC.Names.Real_Name_Id (L.Name))),
                               Src => L.Text)));
                end if;
+               if not L.Ref.Is_Library then
+                  User_Units.Append
+                    (Ada.Strings.Unbounded.To_Unbounded_String
+                       (Table.Text (AHC.Names.Real_Name_Id (L.Name))));
+               end if;
                Unit_Spans.Append
                  (Unit_Span'
                     (Name => Ada.Strings.Unbounded.
@@ -1401,7 +1409,10 @@ procedure AHC_Main is
                     (Table, M, Env, Prims, Owners, F_Owners, Units,
                      Lib_Mode => Lib,
                      Header => Header, Exports_H => Exports_H,
-                     Files => Files);
+                     Files => Files,
+                     Trail_Units =>
+                       (if Trail then User_Units
+                        else AHC.CodeGen.UStr_Vectors.Empty_Vector));
 
                   Ada.Directories.Create_Path (Build_Dir);
                   declare
@@ -1600,6 +1611,7 @@ begin
             Refined    : Boolean := True;
             Optimize   : Boolean := True;
             Lib        : Boolean := False;
+            Trail      : Boolean := False;
             Verbose    : Boolean := False;
             Bad         : Boolean := False;
             Expect_Out  : Boolean := False;
@@ -1635,6 +1647,8 @@ begin
                      Jobs := Natural'Value (A (A'First + 2 .. A'Last));
                   elsif A = "--lib" then
                      Lib := True;
+                  elsif A = "--trail" then
+                     Trail := True;
                   elsif A = "--unchecked" then
                      Refined := False;
                   elsif A = "--no-opt" then
@@ -1736,6 +1750,7 @@ begin
                            Refined  => Refined,
                            Optimize => Optimize,
                            Lib      => Lib,
+                           Trail    => Trail,
                            Quiet    => True,
                            Manifest_Dir =>
                              (if From_Manifest then "." else ""));
@@ -1754,6 +1769,7 @@ begin
                Refined  : Boolean := True;
                Optimize : Boolean := True;
                Lib      : Boolean := False;
+               Trail    : Boolean := False;
                Bad      : Boolean := False;
             begin
                for I in 4 .. Argument_Count loop
@@ -1763,6 +1779,8 @@ begin
                      Optimize := False;
                   elsif Argument (I) = "--lib" then
                      Lib := True;
+                  elsif Argument (I) = "--trail" then
+                     Trail := True;
                   else
                      Bad := True;
                   end if;
@@ -1775,7 +1793,8 @@ begin
                   Run_Middle (Argument (2), 'b', Argument (3),
                               Refined => Refined,
                               Optimize => Optimize,
-                              Lib => Lib);
+                              Lib => Lib,
+                              Trail => Trail);
                end if;
             end;
          else

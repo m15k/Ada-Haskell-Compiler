@@ -61,6 +61,10 @@ package AHC.CodeGen is
       Lib_Mode : Boolean;
       Header   : out Ada.Strings.Unbounded.Unbounded_String;
       Exports_H : out Ada.Strings.Unbounded.Unbounded_String;
-      Files    : out Unit_File_Vectors.Vector);
+      Files    : out Unit_File_Vectors.Vector;
+      --  ahc build --trail (M149): the units whose functions push their
+      --  name onto the runtime's evaluation trail on entry (the user's
+      --  own modules); empty means no trail code at all.
+      Trail_Units : UStr_Vectors.Vector := UStr_Vectors.Empty_Vector);
 
 end AHC.CodeGen;

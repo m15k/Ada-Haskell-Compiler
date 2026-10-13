@@ -70,6 +70,10 @@ AhcNode *ahc_mk_selector(int index);           /* dict field access   */
 AhcNode *ahc_mk_string(const char *s);         /* to [Char]           */
 AhcNode *ahc_mk_string_len(const char *s, size_t len); /* NUL-safe    */
 AhcNode *ahc_mk_string_lit(const char *s, size_t len); /* WTF-8 lits  */
+/* ahc build --trail (M149): each traced function pushes its name on
+   entry; an uncaught error prints the most recent ones. */
+void ahc_trail_push(const char *name);
+#define AHC_TRAIL(n) ahc_trail_push(n)
 /* The same, built when first forced (long literals, M149). */
 AhcNode *ahc_mk_string_lit_lazy(const char *s, size_t len);
 AhcNode *ahc_mk_bytes(const uint8_t *src, int32_t len); /* copies     */

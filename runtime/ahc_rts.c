@@ -3121,6 +3121,7 @@ static AhcNode *p_scope(AhcNode *f) {
    page; this handler (on an alternate signal stack) names the
    failure instead of leaving a corrupt-looking crash. */
 static void term_restore_all(void);
+static void trail_print_raw(void);
 static void stack_overflow_handler(int sig, siginfo_t *si, void *uc) {
   char *a = (char *)si->si_addr;
   int i;
@@ -3131,6 +3132,7 @@ static void stack_overflow_handler(int sig, siginfo_t *si, void *uc) {
     static const char msg[] = "ahc: stack overflow\n";
     ssize_t r = write(2, msg, sizeof msg - 1);
     (void)r;
+    trail_print_raw();           /* --trail builds only (M149) */
     _exit(1);
   }
   for (i = 0; i < task_n; i++) {
@@ -3549,6 +3551,7 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
    else prints and exits 1, the shape ahc_die always had. */
 /* M149: the uncaught-error report (defined with the site code). */
 static int report_print(AhcNode *exc, const char *msg);
+static void trail_print(int width);
 
 static void exc_uncaught(AhcNode *exc) __attribute__((noreturn));
 static void exc_uncaught(AhcNode *exc) {
@@ -3602,6 +3605,7 @@ static void exc_uncaught(AhcNode *exc) {
     fputs(buf, stderr);    /* an IOError's fields, cut at the buffer */
   }
   fputc('\n', stderr);
+  trail_print(1);        /* --trail builds: where evaluation was (M149) */
   exit(1);
 }
 
@@ -7982,6 +7986,74 @@ static void fmt_double(char *buf, size_t n, double v) {
   }
 }
 
+/* ----- M149: the --trail ring -------------------------------------
+   The last 16 traced function entries of this OS thread, a repeat of
+   the newest name folded into a count (recursion would otherwise fill
+   the ring with one name). Only builds with --trail ever push. */
+#define TRAIL_SLOTS 16
+static __thread const char *trail_name[TRAIL_SLOTS];
+static __thread unsigned long trail_count[TRAIL_SLOTS];
+static __thread unsigned trail_next;
+
+void ahc_trail_push(const char *name) {
+  unsigned last = (trail_next - 1) % TRAIL_SLOTS;
+  if (trail_next > 0 && trail_name[last] == name) {
+    trail_count[last]++;
+    return;
+  }
+  trail_name[trail_next % TRAIL_SLOTS] = name;
+  trail_count[trail_next % TRAIL_SLOTS] = 1;
+  trail_next++;
+}
+
+/* "= most recent evaluations (newest first): a, b x3, c" - nothing
+   when this thread pushed nothing (a build without --trail). */
+static void trail_print(int width) {
+  unsigned k, n = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
+  if (n == 0) return;
+  fprintf(stderr, "%*s = most recent evaluations (newest first): ",
+          width, "");
+  for (k = 0; k < n; k++) {
+    unsigned i = (trail_next - 1 - k) % TRAIL_SLOTS;
+    if (k) fputs(", ", stderr);
+    fputs(trail_name[i], stderr);
+    if (trail_count[i] > 1) fprintf(stderr, " x%lu", trail_count[i]);
+  }
+  fputc('\n', stderr);
+}
+
+/* The trail for the stack-overflow handler: async-signal-safe (write
+   only, a static buffer), as a signal handler must be. */
+static void trail_print_raw(void) {
+  static char buf[1024];
+  size_t n = 0;
+  unsigned k, cnt = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
+  const char *head = "  = most recent evaluations (newest first): ";
+  if (cnt == 0) return;
+#define RAW_PUT(str) do { const char *q_ = (str); \
+    while (*q_ && n < sizeof buf - 2) buf[n++] = *q_++; } while (0)
+  RAW_PUT(head);
+  for (k = 0; k < cnt; k++) {
+    unsigned i = (trail_next - 1 - k) % TRAIL_SLOTS;
+    if (k) RAW_PUT(", ");
+    RAW_PUT(trail_name[i]);
+    if (trail_count[i] > 1) {
+      char num[24];
+      int d = 0;
+      unsigned long v = trail_count[i];
+      RAW_PUT(" x");
+      do { num[d++] = (char)('0' + v % 10); v /= 10; } while (v && d < 23);
+      while (d > 0 && n < sizeof buf - 2) buf[n++] = num[--d];
+    }
+  }
+#undef RAW_PUT
+  buf[n++] = '\n';
+  {
+    ssize_t r = write(2, buf, n);
+    (void)r;
+  }
+}
+
 /* ----- M149: the uncaught-error report ---------------------------
    A located failure (primFailMatch, primErrorAt) records its site and
    failing value beside the exception it raises; exc_uncaught asks for
@@ -8336,6 +8408,7 @@ static int report_print(AhcNode *exc, const char *msg) {
     fputc('\n', stderr);
   }
   if (in[0]) fprintf(stderr, "%*s = in: %s\n", width, "", in);
+  trail_print(width);
   free(headline); free(file); free(span); free(in); free(snippet);
   free(handled); free(schema);
   return 1;

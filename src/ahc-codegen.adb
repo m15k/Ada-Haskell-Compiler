@@ -20,9 +20,14 @@ package body AHC.CodeGen is
       Lib_Mode : Boolean;
       Header   : out Ada.Strings.Unbounded.Unbounded_String;
       Exports_H : out Ada.Strings.Unbounded.Unbounded_String;
-      Files    : out Unit_File_Vectors.Vector)
+      Files    : out Unit_File_Vectors.Vector;
+      Trail_Units : UStr_Vectors.Vector := UStr_Vectors.Empty_Vector)
    is
       Fns  : Unbounded_String;   --  lifted function bodies
+      --  --trail (M149): the top-level binding being emitted, when its
+      --  unit is traced; every function body emitted for it starts by
+      --  pushing that name onto the runtime's evaluation trail.
+      Trail_Name : Unbounded_String;
       Decl : Unbounded_String;   --  forward decls + CAF globals
       Init : Unbounded_String;   --  CAF initialization statements
       Fn_Counter : Natural := 0;
@@ -202,6 +207,11 @@ package body AHC.CodeGen is
          end loop;
          return To_String (R);
       end C_Escape;
+
+      function Trail_Line return String is
+        (if Length (Trail_Name) = 0 then ""
+         else "  AHC_TRAIL(""" & C_Escape (To_String (Trail_Name)) & """);"
+              & ASCII.LF);
 
       --  Parse an integer lexeme (dec/hex/oct, optional leading '-'
       --  on generated literals such as refinement bounds) to decimal
@@ -486,6 +496,7 @@ package body AHC.CodeGen is
             Append (Fns, "static AhcNode *" & Fn
                     & "(AhcNode **env, AhcNode *arg) {" & ASCII.LF
                     & "  (void)env; (void)arg;" & ASCII.LF
+                    & Trail_Line
                     & "  return " & Gen_Force (E, Inner) & ";"
                     & ASCII.LF & "}" & ASCII.LF & ASCII.LF);
          end if;
@@ -762,7 +773,7 @@ package body AHC.CodeGen is
                                    & "(AhcNode **env, AhcNode *arg) {"
                                    & ASCII.LF
                                    & "  (void)env; (void)arg;"
-                                   & ASCII.LF & "  return "
+                                   & ASCII.LF & Trail_Line & "  return "
                                    & Gen_Force (Body_E, FScope) & ";"
                                    & ASCII.LF & "}" & ASCII.LF
                                    & ASCII.LF);
@@ -1718,6 +1729,12 @@ package body AHC.CodeGen is
 
                procedure Emit (B : Core.Bind_Pair) is
                begin
+                  Trail_Name :=
+                    (if Trail_Units.Contains (To_Unbounded_String (U))
+                     then To_Unbounded_String
+                            (Table.Text (Names.Real_Name_Id
+                               (M.Info (B.Binder).Name)))
+                     else Null_Unbounded_String);
                   Append (Init, "  " & Sym_Of (B.Binder) & " = "
                           & Gen_Lazy (B.Rhs, Scope_Maps.Empty_Map)
                           & ";" & ASCII.LF);

@@ -3,7 +3,8 @@
 # AHC pipeline (Haskell -> C -> clang) and compare stdout against the
 # checked-in .out goldens. --update regenerates. A tests/exec/NAME.env
 # sidecar (VAR=value per line) sets the program's environment - e.g.
-# AHC_MAIN_STACK for a constant-stack test (M146).
+# AHC_MAIN_STACK for a constant-stack test (M146). A NAME.flags
+# sidecar adds build flags (one line, e.g. --trail; M149).
 set -u
 cd "$(dirname "$0")/.."
 update=false
@@ -14,7 +15,12 @@ shopt -s nullglob
 for hs in tests/exec/*.hs; do
   base=$(basename "$hs" .hs)
   exp="tests/exec/$base.out"
-  if ! scripts/ahc-build.sh "$hs" "$tmp/$base" >/dev/null 2>"$tmp/err"; then
+  flags=()
+  if [ -f "tests/exec/$base.flags" ]; then
+    read -r -a flags < "tests/exec/$base.flags"
+  fi
+  if ! scripts/ahc-build.sh "$hs" "$tmp/$base" ${flags[@]+"${flags[@]}"} \
+       >/dev/null 2>"$tmp/err"; then
     echo "BUILD-FAIL $hs"; sed 's/^/  /' "$tmp/err" | head -5; fail=1; continue
   fi
   envs=()

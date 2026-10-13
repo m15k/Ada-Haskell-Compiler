@@ -9,7 +9,9 @@
 #   3. the shim still translates the historical env spellings
 #      (AHC_UNCHECKED strips a range claim through it);
 #   4. a link-level failure surfaces the C toolchain's own message
-#      and a nonzero exit - never a silent half-build.
+#      and a nonzero exit - never a silent half-build;
+#   5. --trail emits trail code for the user's units only, and none
+#      at all without the flag (M149).
 set -u
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -77,6 +79,18 @@ if ( cd "$proj" && "$root/bin/ahc" build ) 2>&1 \
    | grep -q "unknown key 'bogus'"
 then step "ahc.toml: unknown key rejected with a message"
 else flunk "ahc.toml unknown key"; fi
+
+# 5. --trail (M149) is opt-in: without it no trail code is emitted at
+#    all; with it, the user's own functions push and the Prelude's
+#    do not.
+"$root/bin/ahc" build tests/exec/m149_trail.hs "$tmp/plain" >/dev/null 2>&1
+"$root/bin/ahc" build tests/exec/m149_trail.hs "$tmp/traced" --trail >/dev/null 2>&1
+plain=$(cat "$tmp"/plain.build/*.c | grep -c AHC_TRAIL)
+traced=$(grep -c AHC_TRAIL "$tmp"/traced.build/u02_*.c)
+prel=$(grep -c AHC_TRAIL "$tmp"/traced.build/u01_Prelude.c)
+if [ "$plain" = 0 ] && [ "$traced" -gt 0 ] && [ "$prel" = 0 ]
+then step "--trail: no trail code without it; user units only with it"
+else flunk "--trail emission (plain=$plain traced=$traced prelude=$prel)"; fi
 
 [ $fail -eq 0 ] && echo "ahc build harness: all green"
 exit $fail
