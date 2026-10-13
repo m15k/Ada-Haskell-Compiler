@@ -1,0 +1,79 @@
+error => boom
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m149_shown_errors.hs:20:22 in main:Main
+errorWithoutStackTrace => plain
+undefined => Prelude.undefined
+CallStack (from HasCallStack):
+  undefined, called at tests/conformance/m149_shown_errors.hs:22:25 in main:Main
+head => Prelude.head: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List
+  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List
+  head, called at tests/conformance/m149_shown_errors.hs:23:21 in main:Main
+tail => Prelude.tail: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:128:28 in base:GHC.List
+  tail, called at tests/conformance/m149_shown_errors.hs:24:29 in main:Main
+init => Prelude.init: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:178:28 in base:GHC.List
+  init, called at tests/conformance/m149_shown_errors.hs:25:29 in main:Main
+last => Prelude.last: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:156:13 in base:GHC.List
+  lastError, called at libraries/base/GHC/List.hs:151:29 in base:GHC.List
+  last, called at tests/conformance/m149_shown_errors.hs:26:21 in main:Main
+index large => Prelude.!!: index too large
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List
+  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List
+  !!, called at tests/conformance/m149_shown_errors.hs:27:38 in main:Main
+index negative => Prelude.!!: negative index
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1371:12 in base:GHC.List
+  negIndex, called at libraries/base/GHC/List.hs:1375:17 in base:GHC.List
+  !!, called at tests/conformance/m149_shown_errors.hs:28:35 in main:Main
+maximum => Prelude.maximum: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:717:28 in base:GHC.List
+  maximum, called at libraries/base/Data/Foldable.hs:745:15 in base:Data.Foldable
+minimum => Prelude.minimum: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:741:28 in base:GHC.List
+  minimum, called at libraries/base/Data/Foldable.hs:746:15 in base:Data.Foldable
+foldr1 => Prelude.foldr1: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:611:30 in base:GHC.List
+  foldr1, called at libraries/base/Data/Foldable.hs:741:15 in base:Data.Foldable
+foldl1 => Prelude.foldl1: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:391:28 in base:GHC.List
+  foldl1, called at libraries/base/Data/Foldable.hs:738:15 in base:Data.Foldable
+cycle => Prelude.cycle: empty list
+CallStack (from HasCallStack):
+  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List
+  errorEmptyList, called at libraries/base/GHC/List.hs:845:27 in base:GHC.List
+  cycle, called at tests/conformance/m149_shown_errors.hs:33:38 in main:Main
+fromJust => Maybe.fromJust: Nothing
+CallStack (from HasCallStack):
+  error, called at libraries/base/Data/Maybe.hs:150:21 in base:Data.Maybe
+  fromJust, called at tests/conformance/m149_shown_errors.hs:34:25 in main:Main
+read => Prelude.read: no parse
+toEnum => Prelude.Enum.Bool.toEnum: bad argument
+chr => Prelude.chr: bad argument: 99999999
+succ => Prelude.Enum.succ{Int}: tried to take `succ' of maxBound
+div => divide by zero
+mod => divide by zero
+quot => divide by zero
+rem => divide by zero
+divMod => divide by zero
+quotRem => divide by zero
+overflow => arithmetic overflow
