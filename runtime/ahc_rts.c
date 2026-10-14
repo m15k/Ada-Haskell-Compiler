@@ -3099,14 +3099,23 @@ static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
         if (!pending) pending = k->exc;
       }
     }
+    /* Retire the scope. Its structs are re-walked by the collector
+       only while registered, and they were mutated without a
+       barrier (sc->kids, a task's result, its saved registers), so
+       a retired struct that is already sticky-old would keep
+       dangling pointers to young objects the next minor frees:
+       harmless to the program (nothing reads a retired struct) but
+       a dangling heap pointer, and AHC_OWN_VERIFY rightly calls the
+       mark set unclosed. Scrub them: a dead struct holds nothing. */
     for (i = 0; i < sc->n; i++) {
       AhcTask *k = sc->kids[i];
-      if (k->stack) {
+      if (k->stack)
         munmap(k->stack, STACK_MAP_SIZE(AHC_TASK_STACK));
-        k->stack = NULL;
-      }
       task_reg[k->id] = NULL;
+      memset(k, 0, sizeof *k);
     }
+    if (sc->kids) memset(sc->kids, 0, sizeof(AhcTask *) * (size_t)sc->cap);
+    memset(sc, 0, sizeof *sc);
     scope_reg[si] = NULL;
     if (pending) ahc_throw(pending);
   }
@@ -4374,6 +4383,16 @@ static int prot_barrier_holds(AhcProt *p, AhcNode *barrier) {
    commit persisted, and the child parked forever - deadlock.)
    Returns 1 when it evaluated normally, 0 when the waiter got the
    exception and was unlinked + woken. */
+/* Unlink the waiter at *link and scrub it: the collector walks only
+   linked waiters, and `next` was set without a barrier, so an
+   unlinked waiter that is already sticky-old must not keep pointers
+   to young objects a minor may free (see io_scope's retire). */
+static void prot_unlink(AhcProtWaiter **link) {
+  AhcProtWaiter *w = *link;
+  *link = w->next;
+  memset(w, 0, sizeof *w);
+}
+
 static int prot_eval_for(AhcProt *p, AhcProtWaiter **link, int commit,
                          int *holds) {
   AhcProtWaiter *w = *link;
@@ -4392,10 +4411,11 @@ static int prot_eval_for(AhcProt *p, AhcProtWaiter **link, int commit,
     return 1;
   } else {
     AhcNode *exc = cur_task->exc;
+    AhcTask *t = w->task;
     cur_task->exc = NULL;
-    *link = w->next;
-    w->task->prot_exc = exc;
-    wake(w->task);
+    prot_unlink(link);
+    t->prot_exc = exc;
+    wake(t);
     return 0;
   }
 }
@@ -4409,7 +4429,7 @@ static void prot_epilogue(AhcProt *p) {
       AhcProtWaiter *w = *link;
       int holds = 0;
       if (w->task->state >= 2) {     /* died while parked */
-        *link = w->next;
+        prot_unlink(link);
         continue;
       }
       if (!prot_eval_for(p, link, 0, &holds)) {
@@ -4418,8 +4438,9 @@ static void prot_epilogue(AhcProt *p) {
       }
       if (holds) {
         if (prot_eval_for(p, link, 1, &holds)) {
-          *link = w->next;
-          wake(w->task);
+          AhcTask *t = w->task;
+          prot_unlink(link);
+          wake(t);
         }
         progressed = 1;              /* state or queue changed */
         break;
@@ -4430,10 +4451,15 @@ static void prot_epilogue(AhcProt *p) {
 }
 
 static AhcNode *io_prot_new(AhcNode **env, AhcNode *w) {
+  /* The state first: its evaluation can collect, and a struct
+     allocated before it would be sticky-old, unregistered (so not
+     re-walked) and holding a young state - the components-before-
+     owner invariant. */
+  AhcNode *st = ahc_eval(env[0]);   /* WHNF from birth (section 6.3) */
   AhcProt *p = (AhcProt *)AHC_ALLOC(sizeof(AhcProt));
   (void)w;
   if (!p) ahc_die("out of memory");
-  p->state = ahc_eval(env[0]);   /* WHNF from birth (section 6.3) */
+  p->state = st;
   p->waiters = NULL;
   return ahc_mk_int(reg_add((void ***)&prot_reg,
                             &prot_n, &prot_cap, p));
@@ -5014,33 +5040,40 @@ static void gc_trace(AhcNode *o) {
    HEADS (cell chains are covered by the tail-append barrier).
    They mutate constantly and their population is small - this is
    the remembered set for everything that is not the pure graph. */
+/* Each struct is PUSHED as well as scanned: scanning marks what it
+   points at, but the struct itself is reachable only through its
+   registry table, and a sticky-old table is not re-traced by a
+   minor - so a struct registered after the table aged was never
+   marked and the sweep freed it while registered (M150). */
+static void gc_walk_struct(const void *o, size_t n) {
+  gc_push(o);
+  gc_scan_range((const char *)o, (const char *)o + n);
+}
+
 static void gc_walk_runtime(void) {
   int i;
   for (i = 0; i < task_n; i++)
     if (task_reg[i])
-      gc_scan_range((const char *)task_reg[i],
-                    (const char *)task_reg[i] + sizeof(AhcTask));
+      gc_walk_struct(task_reg[i], sizeof(AhcTask));
   gc_scan_range((const char *)&main_task,
                 (const char *)(&main_task + 1));
   for (i = 0; i < scope_n; i++)
     if (scope_reg[i]) {
       AhcScope *sc = scope_reg[i];
-      gc_scan_range((const char *)sc, (const char *)(sc + 1));
+      gc_walk_struct(sc, sizeof *sc);
       if (sc->kids)
-        gc_scan_range((const char *)sc->kids,
-                      (const char *)(sc->kids + sc->n));
+        gc_walk_struct(sc->kids, sizeof(AhcTask *) * (size_t)sc->n);
     }
   for (i = 0; i < chan_n; i++)
     if (chan_reg[i])
-      gc_scan_range((const char *)chan_reg[i],
-                    (const char *)(chan_reg[i] + 1));
+      gc_walk_struct(chan_reg[i], sizeof(AhcChan));
   for (i = 0; i < prot_n; i++)
     if (prot_reg[i]) {
       AhcProt *pr = prot_reg[i];
       AhcProtWaiter *w;
-      gc_scan_range((const char *)pr, (const char *)(pr + 1));
+      gc_walk_struct(pr, sizeof *pr);
       for (w = pr->waiters; w; w = w->next)
-        gc_scan_range((const char *)w, (const char *)(w + 1));
+        gc_walk_struct(w, sizeof *w);
     }
 }
 

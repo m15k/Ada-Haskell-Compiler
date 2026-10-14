@@ -1001,3 +1001,94 @@ What is claimed here is narrow: the hang is not fixed, and not
 understood. It is bounded in time, loud when it happens, and
 instrumented well enough that the NEXT occurrence should be the
 last one that needs guessing.
+
+## 21. The stale mark: a slot recycled while already marked (M142, M146)
+
+A second allocation-order invariant, in the same family as section 8
+and found the same way - by the verifier, not by a crash.
+`AHC_OWN_VERIFY=1` on a deeply recursive program died with
+
+    own gc MISSED EDGE: fun.env src=<AHC_FUN> -> dst=<env array>
+
+**The rule**: *a slot handed to the mutator must be UNMARKED.* It
+reads like a tautology and is not, because of the conservative scan:
+
+1. A free slot is not distinguishable from an object: free lists live
+   in the slots themselves, so a stale word in a live C frame that
+   points at a freed slot MARKS it.
+2. The mark is sticky; nothing clears it before the next major.
+3. A minor sweeps only DIRTY blocks, so on any other block the bit
+   survives on a standing free list.
+4. `own_adopt_partial` takes that list, `own_alloc` hands the slot
+   out, and the mutator builds a FUN in it - an object the collector
+   believes is old and already traced. Its young env array is never
+   reached, and the next minor sweeps it under a live closure.
+
+**The fix** is `own_clear_mark` on both recycle paths of `own_alloc`
+(atomic: neighbouring slots share the bitmap byte with other
+allocating workers). The bump path is exempt and must stay exempt:
+`own_find_object` rejects anything at or above `b->bump`, and a
+pooled block's bitmap slice is all zero. Cost: under 1%, at the edge
+of what this machine resolves.
+
+**History, because it nearly repeated.** M142 found and fixed this
+(as `own_unmark`) on a branch that was never merged; M146's review
+found the bug again on main and fixed it as above. The M142 commit
+also hardened the soak, and that half was lost until M150: the bug
+reproduces at floors of 64KB, 256KB and 512KB and at NO floor of 1MB
+or above, while `run_own_soak.sh` - which declares that a collector
+is correct at every trigger setting or broken - tested only floors of
+2MB and up. The soak now starts at 65536, the smallest floor the
+runtime does not clamp, and carries `deep_recycle.hs`: a 20000-deep
+chain forced 200 times, so collections land mid-recursion with
+thousands of dead frames inside the scanned extent (10/10 before the
+fix; 120 iterations is the cliff, so 200 is margin).
+
+The paranoid check (`AHC_OWN_PARANOID`) could not see this: it
+compares shadow and real marks only on dirty blocks, and the bug is a
+bit surviving on a skipped one. The paranoid check asks "will this
+sweep free something live?", the verifier asks "is the mark set
+closed?" - they are not redundant.
+
+## 22. The runtime structs: re-walked is not marked (M150)
+
+Tasks, scopes, channels and protected values are not barriered;
+`gc_walk_runtime` re-walks every registered one at each collection
+(section 4's remembered set for everything outside the pure graph).
+The M149 review caught `AHC_OWN_VERIFY` failing about once in 50 runs
+of a program that mixed sparks with a scope, on v1.19.1 as well as
+HEAD. A scope-heavy program (`tests/exec/gc_scope_retire.hs`: 400
+rounds of a scope whose two children meet at a protected entry)
+failed verification on EVERY run, and showed two bugs:
+
+**1. Re-walked is not marked.** The walk SCANNED each struct - pushing
+what it points at - but never marked the struct itself, which is
+reachable only through its registry table. Once the table is
+sticky-old a minor does not re-trace it, so a protected value,
+channel or scope registered after that was never marked: a registered
+struct the sweep may free. (Tasks escaped by accident: a scope's kids
+array pushes them.) The verifier showed the `prot_reg` table pointing
+at an unmarked, registered `AhcProt`. No direct test turned this into a
+wrong answer in a direct test - stale stack words kept the struct
+alive each time - but a registered struct left unmarked is the M114
+shape. Fix: `gc_walk_struct` pushes the struct and scans it.
+
+**2. Retired structs kept dangling pointers.** The structs are mutated
+without a barrier (`sc->kids`, a task's result, its saved registers, a
+waiter's `next`), which is safe only while the walk covers them. When
+a scope retires, or a waiter is unlinked, the walk stops; a struct
+that was already sticky-old keeps pointers to young objects the next
+minor frees. Nothing reads a retired struct, so the program never saw
+it - but it is a dangling heap pointer, and the verifier is right to
+call the mark set unclosed. Fix: retirement scrubs - each kid task is
+zeroed after its stack is unmapped, then the kids array and the scope;
+`prot_unlink` zeroes an unlinked waiter. Channels needed nothing:
+appending a cell goes through `own_write_barrier`.
+
+Found next to it: `io_prot_new` allocated the struct, then evaluated
+the initial state (which can collect) - section 8's invariant broken
+in a new site. The state is now evaluated first.
+
+The lesson is section 8's, generalised: **anything the collector
+re-walks instead of barriering must be marked by the walk, and must
+stop pointing at the heap when the walk stops covering it.**
