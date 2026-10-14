@@ -208,10 +208,17 @@ package body AHC.CodeGen is
          return To_String (R);
       end C_Escape;
 
-      function Trail_Line return String is
-        (if Length (Trail_Name) = 0 then ""
-         else "  AHC_TRAIL(""" & C_Escape (To_String (Trail_Name)) & """);"
-              & ASCII.LF);
+      --  The trail push for a function body named Name (M149 review):
+      --  only the innermost lambda of a curried chain pushes, so a call
+      --  counts once; compiler-made names ($d dictionaries, $k join
+      --  points) push nothing; nothing outside traced units.
+      function Trail_Line (Name : String; Body_E : Real_Expr_Id)
+        return String
+      is (if Length (Trail_Name) = 0 or else Name = ""
+            or else Name (Name'First) = '$'
+            or else M.Node (Body_E).Kind = Lam_C
+          then ""
+          else "  AHC_TRAIL(""" & C_Escape (Name) & """);" & ASCII.LF);
 
       --  Parse an integer lexeme (dec/hex/oct, optional leading '-'
       --  on generated literals such as refinement bounds) to decimal
@@ -496,7 +503,7 @@ package body AHC.CodeGen is
             Append (Fns, "static AhcNode *" & Fn
                     & "(AhcNode **env, AhcNode *arg) {" & ASCII.LF
                     & "  (void)env; (void)arg;" & ASCII.LF
-                    & Trail_Line
+                    & Trail_Line (To_String (Trail_Name), E)
                     & "  return " & Gen_Force (E, Inner) & ";"
                     & ASCII.LF & "}" & ASCII.LF & ASCII.LF);
          end if;
@@ -768,15 +775,40 @@ package body AHC.CodeGen is
                                    & To_String (G.Fn)
                                    & "(AhcNode **env, AhcNode *arg);"
                                    & ASCII.LF);
-                                 Append (Fns, "static AhcNode *"
-                                   & To_String (G.Fn)
-                                   & "(AhcNode **env, AhcNode *arg) {"
-                                   & ASCII.LF
-                                   & "  (void)env; (void)arg;"
-                                   & ASCII.LF & Trail_Line & "  return "
-                                   & Gen_Force (Body_E, FScope) & ";"
-                                   & ASCII.LF & "}" & ASCII.LF
-                                   & ASCII.LF);
+                                 --  A local function pushes its own
+                                 --  name, and so do the lambdas of its
+                                 --  later arguments (M149 review).
+                                 --  Hoisted: Gen_Force reads
+                                 --  Trail_Name.
+                                 declare
+                                    Local : constant String :=
+                                      Table.Text (Names.Real_Name_Id
+                                        (M.Info (B.Binder).Name));
+                                    Outer : constant Unbounded_String :=
+                                      Trail_Name;
+                                    Push : constant String :=
+                                      Trail_Line (Local, Body_E);
+                                    Body_C : Unbounded_String;
+                                 begin
+                                    if Length (Trail_Name) > 0 then
+                                       Trail_Name :=
+                                         To_Unbounded_String (Local);
+                                    end if;
+                                    Body_C := To_Unbounded_String
+                                      (Gen_Force (Body_E, FScope));
+                                    Trail_Name := Outer;
+                                    Append (Fns, "static AhcNode *"
+                                      & To_String (G.Fn)
+                                      & "(AhcNode **env, AhcNode *arg) {"
+                                      & ASCII.LF
+                                      & "  (void)env; (void)arg;"
+                                      & ASCII.LF
+                                      & Push
+                                      & "  return "
+                                      & To_String (Body_C) & ";"
+                                      & ASCII.LF & "}" & ASCII.LF
+                                      & ASCII.LF);
+                                 end;
                               else
                                  Append (Decl, "static AhcNode *"
                                    & To_String (G.Fn)

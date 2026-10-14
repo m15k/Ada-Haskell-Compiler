@@ -38,9 +38,16 @@ package AHC.Sites is
       File   : Unbounded_String;
       Module : Unbounded_String;
       Src    : Source_Text.Source;
+      --  The name pattern-failure spans use, when it differs from File
+      --  (M149 review): GHC's call stacks name an import "./Lib.hs",
+      --  its spans "Lib.hs".
+      Span_File : Unbounded_String;
    end record;
 
    No_Context : constant Site_Context := (others => <>);
+
+   --  Path without leading "./" segments: GHC's normalisation.
+   function Normalise (Path : String) return String;
 
    function Enabled (Ctx : Site_Context) return Boolean
    is (Length (Ctx.File) > 0);
@@ -94,9 +101,11 @@ package AHC.Sites is
    --  GHC's CallStack block for a located use of Fn at Span: the
    --  header, Base_Frames, then (unless base-only) the user frame
    --  "  Fn, called at F:L:C in main:Module". No trailing newline.
+   --  Shown, when not "", replaces the user frame's name: GHC calls a
+   --  left section's frame "an operator section" (M149 review).
    function Call_Stack
-     (Ctx : Site_Context; Fn : String; Span : Diagnostics.Source_Span)
-      return String
+     (Ctx : Site_Context; Fn : String; Span : Diagnostics.Source_Span;
+      Shown : String := "") return String
      with Pre => Enabled (Ctx);
    --  The located Prelude entities (M149). Desugar rewrites a use of
    --  the Prelude's entity Plain (found by identity through the

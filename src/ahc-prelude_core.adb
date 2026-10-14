@@ -102,8 +102,14 @@ package body AHC.Prelude_Core is
          Bind (Lookup (Name), Rhs);
       end Bind_Name;
 
-      function Err (Msg : String) return Real_Expr_Id
-      is (Ap (V (Env.Error_V), Str (Msg)));
+      --  One node-minting call per statement (M149 review): actuals'
+      --  order is unspecified, and ids then differ between builds.
+      function Err (Msg : String) return Real_Expr_Id is
+         Fn : constant Real_Expr_Id := V (Env.Error_V);
+         S  : constant Real_Expr_Id := Str (Msg);
+      begin
+         return Ap (Fn, S);
+      end Err;
 
       --  case Scrut of [] -> Nil_Body; (h:t) -> Cons_Body h t
       function List_Case
@@ -476,6 +482,12 @@ package body AHC.Prelude_Core is
       end From_E;
 
       --  toEnum as a fresh lambda: eq-chain over tags.
+      --  The Prelude's own enumerations, whose Enum errors GHC words
+      --  "Prelude.Enum.T.op: bad argument".
+      function Is_Wired_Enum (TC : Real_TyCon_Id) return Boolean is
+        (TyCon_Id (TC) = Env.Bool_TC or else TyCon_Id (TC) = Env.Ordering_TC
+         or else TyCon_Id (TC) = Env.Unit_TC);
+
       --  GHC 9.4.8's texts (M149): the Prelude's own enumerations say
       --  "Prelude.Enum.T.toEnum: bad argument"; a derived one names the
       --  tag and the range. (GHC also prints a call stack at the
@@ -489,23 +501,27 @@ package body AHC.Prelude_Core is
            (Ada.Strings.Fixed.Trim (Natural'Image (K), Ada.Strings.Left));
          Body_E : Real_Expr_Id;
       begin
-         if TyCon_Id (TC) = Env.Bool_TC or else TyCon_Id (TC) = Env.Ordering_TC
-         then
+         if Is_Wired_Enum (TC) then
             Body_E := Err ("Prelude.Enum." & Name & ".toEnum: bad argument");
          else
             declare
-               Shown : constant Real_Expr_Id :=
-                 Ap (V (P_ShowI), V (Var_Id (I)));
+               --  One node-minting call per statement: the order of
+               --  actuals is unspecified (release vs validation).
+               Show_Fn : constant Real_Expr_Id := V (P_ShowI);
+               Arg_I : constant Real_Expr_Id := V (Var_Id (I));
+               Shown : constant Real_Expr_Id := Ap (Show_Fn, Arg_I);
                Tail_S : constant Real_Expr_Id :=
                  Str (") is outside of enumeration's range (0,"
                       & Img (N - 1) & ")");
-               Rest : constant Real_Expr_Id :=
-                 Ap2 (V (Lookup ("++")), Shown, Tail_S);
-               Msg : constant Real_Expr_Id :=
-                 Ap2 (V (Lookup ("++")),
-                      Str ("toEnum{" & Name & "}: tag ("), Rest);
+               Cat1 : constant Real_Expr_Id := V (Lookup ("++"));
+               Rest : constant Real_Expr_Id := Ap2 (Cat1, Shown, Tail_S);
+               Head_S : constant Real_Expr_Id :=
+                 Str ("toEnum{" & Name & "}: tag (");
+               Cat2 : constant Real_Expr_Id := V (Lookup ("++"));
+               Msg : constant Real_Expr_Id := Ap2 (Cat2, Head_S, Rest);
+               Err_Fn : constant Real_Expr_Id := V (Env.Error_V);
             begin
-               Body_E := Ap (V (Env.Error_V), Msg);
+               Body_E := Ap (Err_Fn, Msg);
             end;
          end if;
          for K in reverse 1 .. N loop
@@ -527,12 +543,22 @@ package body AHC.Prelude_Core is
          N : constant Positive := M.Info (TC).Cons.Last_Index;
          Ms : Expr_Id_Vectors.Vector;
 
+         --  GHC 9.4.8's texts (M149 review): the Prelude's own types
+         --  say "Prelude.Enum.T.succ: bad argument", a derived one
+         --  names the type and the end it hit.
+         Name : constant String :=
+           Table.Text (Names.Real_Name_Id (M.Info (TC).Name));
+         Wired : constant Boolean := Is_Wired_Enum (TC);
          function Succ_F (Tag : Positive) return Real_Expr_Id
          is (if Tag < N then ConE (M.Info (TC).Cons (Tag + 1))
-             else Err ("succ: bad argument"));
+             elsif Wired then Err ("Prelude.Enum." & Name & ".succ: bad argument")
+             else Err ("succ{" & Name & "}: tried to take `succ' of last tag"
+                       & " in enumeration"));
          function Pred_F (Tag : Positive) return Real_Expr_Id
          is (if Tag > 1 then ConE (M.Info (TC).Cons (Tag - 1))
-             else Err ("pred: bad argument"));
+             elsif Wired then Err ("Prelude.Enum." & Name & ".pred: bad argument")
+             else Err ("pred{" & Name & "}: tried to take `pred' of first tag"
+                       & " in enumeration"));
       begin
          declare
             X : constant Real_Var_Id := Fresh ("x");
@@ -1685,6 +1711,7 @@ package body AHC.Prelude_Core is
          BP ("primErrorAt", "ahc_prim_error_at");
          BP ("primErrorAtNote", "ahc_prim_error_at_note");
          BP ("primErrorLoc", "ahc_prim_error_loc");
+         BP ("primErrorAtWith", "ahc_prim_error_at_with");
          BP ("primExcLocation", "ahc_prim_exc_location");
          BP ("primExcPatternFail", "ahc_prim_exc_pattern_fail");
          BP ("primExcCode", "ahc_prim_exc_code");

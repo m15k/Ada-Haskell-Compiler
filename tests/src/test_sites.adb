@@ -20,9 +20,32 @@ package body Test_Sites is
                      & Character'Val (16#BB#) & " q");
       Ctx : constant Site_Context :=
         (File => To_Unbounded_String ("E.hs"),
-         Module => To_Unbounded_String ("Main"), Src => Src);
+         Module => To_Unbounded_String ("Main"), Src => Src,
+         Span_File => To_Unbounded_String ("E.hs"));
+      --  An import: GHC's call stacks name it "./E.hs", its spans
+      --  "E.hs" (M149 review).
+      Imp : constant Site_Context :=
+        (File => To_Unbounded_String ("./E.hs"),
+         Module => To_Unbounded_String ("E"), Src => Src,
+         Span_File => To_Unbounded_String ("E.hs"));
    begin
       Start_Suite ("Sites");
+
+      Check_Equal (Normalise ("././a/b.hs"), "a/b.hs",
+                   "Normalise drops leading ./ segments");
+      Check_Equal (Normalise ("x.hs"), "x.hs",
+                   "Normalise keeps a plain path");
+      Check_Equal (Ghc_Span (Imp, (Start => 6, Stop => 16)),
+                   "E.hs:1:6-15", "an import's span names Span_File");
+      Check (Ada.Strings.Fixed.Index
+               (Call_Stack (Imp, "head", (Start => 1, Stop => 5)),
+                "head, called at ./E.hs:1:1 in main:E") > 0,
+             "an import's call stack names the path as given");
+      Check (Ada.Strings.Fixed.Index
+               (Call_Stack (Ctx, "!!/large", (Start => 6, Stop => 7),
+                            Shown => "an operator section"),
+                "an operator section, called at E.hs:1:6") > 0,
+             "Shown replaces the user frame's name");
 
       --  Offsets: line 1 is bytes 1..19, LF at 20; line 2 starts at 21.
       Check_Equal (Ghc_Span (Ctx, (Start => 1, Stop => 40)),

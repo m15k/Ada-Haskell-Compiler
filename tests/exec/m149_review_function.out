@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_function.hs:3:1
+  |
+3 | f Q = 0
+  | ^^^^^^^ no pattern matches `P <function>`
+  = note: the patterns handle Q
+  = in: f

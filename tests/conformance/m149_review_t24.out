@@ -1,0 +1,4 @@
+"tests/conformance/m149_review_t24.hs:6:8-19: Non-exhaustive patterns in case\n"
+"tests/conformance/m149_review_t24.hs:10:6-22: Non-exhaustive guards in multi-way if\n"
+"tests/conformance/m149_review_t24.hs:11:31-47: Non-exhaustive guards in multi-way if\n"
+"tests/conformance/m149_review_t24.hs:12:13-25: Non-exhaustive guards in multi-way if\n"

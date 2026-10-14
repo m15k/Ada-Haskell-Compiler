@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_rethrow_typed.hs:4:1
+  |
+4 | f A = 0
+  | ^^^^^^^ no pattern matches `B`
+  = note: the patterns handle A
+  = in: f

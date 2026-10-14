@@ -1,0 +1,4 @@
+"tests/conformance/m149_review_t13.hs:7:1-13: Non-exhaustive patterns in function v\n"
+"tests/conformance/m149_review_t13.hs:9:1-37: Non-exhaustive guards in pattern binding\n"
+"tests/conformance/m149_review_t13.hs:(13,9)-(14,21): Non-exhaustive patterns in function k\n"
+"tests/conformance/m149_review_t13.hs:21:10-39: Non-exhaustive guards in pattern binding\n"

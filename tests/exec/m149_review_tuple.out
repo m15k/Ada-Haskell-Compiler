@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_tuple.hs:2:1
+  |
+2 | f (0,_,_,_,_,_,_) = 0
+  | ^^^^^^^^^^^^^^^^^^^^^ no pattern matches `(1,_,_,_,_,_,_)`
+  = note: `_` is a part not yet evaluated - the report never forces it
+  = in: f

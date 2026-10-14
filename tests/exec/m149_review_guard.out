@@ -1,0 +1,6 @@
+ahc: runtime error: no guard is true
+  --> tests/exec/m149_review_guard.hs:2:1
+  |
+2 | f x | x > 0 = 1
+  | ^^^^^^^^^^^^^^^ every guard is False
+  = in: f

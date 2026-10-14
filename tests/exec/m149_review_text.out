@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_text.hs:4:1
+  |
+4 | f Q = 0
+  | ^^^^^^^ no pattern matches `P <text>`
+  = note: the patterns handle Q
+  = in: f

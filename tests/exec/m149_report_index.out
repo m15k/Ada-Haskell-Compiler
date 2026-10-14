@@ -4,4 +4,5 @@ ahc: runtime error: index out of range
   |
 6 |   print (xs !! 7)
   |             ^^ Prelude.!!: index too large
+  = note: index 7, but the list has 3 elements
   = in: main

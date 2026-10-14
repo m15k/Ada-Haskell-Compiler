@@ -817,7 +817,8 @@ read :: Read a => String -> a
 read s =
   case [x | (x, t) <- reads s, allSpace_ t] of
     [x] -> x
-    _   -> error "Prelude.read: no parse"
+    []  -> error "Prelude.read: no parse"
+    _   -> error "Prelude.read: ambiguous parse"
 
 isSpace_ :: Char -> Bool
 isSpace_ c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
@@ -1278,8 +1279,14 @@ class Foldable t where
   elem e t = elemList_ e (toListF_ t)
   sum t = sumList_ (toListF_ t)
   product t = productList_ (toListF_ t)
-  maximum t = maximumList_ (toListF_ t)
-  minimum t = minimumList_ (toListF_ t)
+  -- Not a list: GHC's text names a structure, with no call stack
+  -- (the list instance keeps maximumList_'s; M149 review).
+  maximum t = case toListF_ t of
+    [] -> errorWithoutStackTrace "maximum: empty structure"
+    xs -> maximumList_ xs
+  minimum t = case toListF_ t of
+    [] -> errorWithoutStackTrace "minimum: empty structure"
+    xs -> minimumList_ xs
   foldr1 f t = foldr1Default_ f t
   foldl1 f t = foldl1Default_ f t
 
@@ -2056,7 +2063,10 @@ index_at_ :: String -> [a] -> Int -> a
 index_at_ s xs n =
   if n < 0 then primErrorAtNote s "Prelude.!!: negative index" else go xs n
   where
-    go [] _ = primErrorAt s "Prelude.!!: index too large"
+    -- the report notes the index and the list's length (M149 review)
+    go [] k = primErrorAtWith s "Prelude.!!: index too large"
+                ("index " ++ show n ++ ", but the list has "
+                 ++ show (n - k) ++ " elements")
     go (y : ys) k = if k == 0 then y else go ys (k - 1)
 
 -- Data.Maybe re-exports these (M149: one entity, so desugar can
@@ -2073,10 +2083,16 @@ read_at_ :: Read a => String -> String -> a
 read_at_ s str =
   case [x | (x, t) <- reads str, allSpace_ t] of
     [x] -> x
-    _   -> primErrorAt s "Prelude.read: no parse"
+    []  -> primErrorAtWith s "Prelude.read: no parse" (readNote_ str)
+    _   -> primErrorAtWith s "Prelude.read: ambiguous parse" (readNote_ str)
+
+-- read's report shows the input it could not parse (M149 review).
+readNote_ :: String -> String
+readNote_ str =
+  "the input was " ++ show (take 60 str) ++ (if null (drop 60 str) then "" else "...")
 
 chr_at_ :: String -> Int -> Char
 chr_at_ s n =
   if n < 0 || n > 1114111
-    then primErrorAt s ("Prelude.chr: bad argument: " ++ show n)
+    then primErrorAt s ("Prelude.chr: bad argument: " ++ showsPrec 11 n "")
     else chr n

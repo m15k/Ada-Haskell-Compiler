@@ -1,0 +1,8 @@
+"tests/conformance/m149_review_t06.hs:(7,1)-(9,7): Non-exhaustive patterns in Just z\n"
+"tests/conformance/m149_review_t06.hs:(12,8)-(13,16): Non-exhaustive patterns in Just z\n"
+"tests/conformance/m149_review_t06.hs:16:6-21: Non-exhaustive patterns in Just z\n"
+"tests/conformance/m149_review_t06.hs:20:9-53: Non-exhaustive patterns in Just r\n"
+"tests/conformance/m149_review_t06.hs:23:1-27: Non-exhaustive patterns in Just b\n"
+"tests/conformance/m149_review_t06.hs:32:10-26: Non-exhaustive patterns in [x]\n"
+"tests/conformance/m149_review_t06.hs:34:7-32: Non-exhaustive patterns in Just w\n"
+"tests/conformance/m149_review_t06.hs:36:3-44: Non-exhaustive patterns in Just v\n"

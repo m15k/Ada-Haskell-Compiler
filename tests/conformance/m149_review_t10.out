@@ -1,0 +1,17 @@
+"Prelude.chr: bad argument: (-1)"
+"a\nCallStack (from HasCallStack):\n  error, called at tests/conformance/m149_review_t10.hs:10:15 in main:Main"
+"5\nCallStack (from HasCallStack):\n  error, called at tests/conformance/m149_review_t10.hs:11:6 in main:Main"
+"Prelude.!!: index too large\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List\n  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List\n  !!, called at tests/conformance/m149_review_t10.hs:12:11 in main:Main"
+ok
+ok
+"Prelude.!!: index too large\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List\n  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List\n  !!, called at tests/conformance/m149_review_t10.hs:15:14 in main:Main"
+"Prelude.head: empty list\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List\n  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List\n  head, called at tests/conformance/m149_review_t10.hs:16:11 in main:Main"
+"Prelude.head: empty list\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List\n  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List\n  head, called at tests/conformance/m149_review_t10.hs:17:7 in main:Main"
+"Prelude.head: empty list\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List\n  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List\n  head, called at tests/conformance/m149_review_t10.hs:18:6 in main:Main"
+"Prelude.undefined\nCallStack (from HasCallStack):\n  undefined, called at tests/conformance/m149_review_t10.hs:20:9 in main:Main"
+"Prelude.undefined\nCallStack (from HasCallStack):\n  undefined, called at tests/conformance/m149_review_t10.hs:21:7 in main:Main"
+"Prelude.!!: index too large\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List\n  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List\n  !!, called at tests/conformance/m149_review_t10.hs:22:20 in main:Main"
+"Prelude.head: empty list\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1646:3 in base:GHC.List\n  errorEmptyList, called at libraries/base/GHC/List.hs:85:11 in base:GHC.List\n  badHead, called at libraries/base/GHC/List.hs:81:28 in base:GHC.List\n  head, called at tests/conformance/m149_review_t10.hs:24:12 in main:Main"
+"Prelude.!!: index too large\nCallStack (from HasCallStack):\n  error, called at libraries/base/GHC/List.hs:1368:14 in base:GHC.List\n  tooLarge, called at libraries/base/GHC/List.hs:1378:50 in base:GHC.List\n  !!, called at tests/conformance/m149_review_t10.hs:25:33 in main:Main"
+"Prelude.read: no parse"
+"Prelude.read: no parse"

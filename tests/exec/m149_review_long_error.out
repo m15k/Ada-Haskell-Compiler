@@ -1,0 +1,6 @@
+ahc: runtime error: error called
+  --> tests/exec/m149_review_long_error.hs:1:8
+  |
+1 | main = error (concat (replicate 30 "abcdefgh"))
+  |        ^^^^^ abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh
+  = in: main

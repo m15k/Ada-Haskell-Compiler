@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_list.hs:2:1
+  |
+2 | f [] = 0
+  | ^^^^^^^^ no pattern matches `_ : _`
+  = note: `_` is a part not yet evaluated - the report never forces it
+  = in: f

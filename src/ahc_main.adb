@@ -1029,13 +1029,33 @@ procedure AHC_Main is
                      --  own modules; a library module's failures are
                      --  base's in GHC, so they keep the plain text.
                      Ctx =>
-                       (if L.Ref.Is_Library then AHC.Sites.No_Context
-                        else (File => L.Path,
+                       --  REPL modules too (only they carry
+                       --  OPTIONS_AHC_SHADOW): their file is a generated
+                       --  temp file, which a report must not leak.
+                       (if L.Ref.Is_Library or else L.Ref.Own_Shadows
+                        then AHC.Sites.No_Context
+                        else (File =>
+                                --  GHC: the root as given but without a
+                                --  leading "./"; an import as found
+                                --  (./Lib.hs) in call stacks, without
+                                --  "./" in spans (M149 review).
+                                Ada.Strings.Unbounded.To_Unbounded_String
+                                  (if Is_Root
+                                   then AHC.Sites.Normalise
+                                          (Ada.Strings.Unbounded.To_String
+                                             (L.Path))
+                                   else Ada.Strings.Unbounded.To_String
+                                          (L.Path)),
                               Module =>
                                 Ada.Strings.Unbounded.To_Unbounded_String
                                   (Table.Text
                                      (AHC.Names.Real_Name_Id (L.Name))),
-                              Src => L.Text)));
+                              Src => L.Text,
+                              Span_File =>
+                                Ada.Strings.Unbounded.To_Unbounded_String
+                                  (AHC.Sites.Normalise
+                                     (Ada.Strings.Unbounded.To_String
+                                        (L.Path))))));
                end if;
                if not L.Ref.Is_Library then
                   User_Units.Append
@@ -1726,7 +1746,7 @@ begin
             then
                Usage_Error
                  ("expected: ahc build [--lib] FILE.hs [OUT]"
-                  & " [--unchecked] [--no-opt] [-o OUT] [-j N] [-v]"
+                  & " [--unchecked] [--no-opt] [--trail] [-o OUT] [-j N] [-v]"
                   & " (or an ahc.toml in the current directory)");
             else
                if Dest = "" then
@@ -1788,7 +1808,7 @@ begin
                if Bad then
                   Usage_Error
                     ("expected: ahc emit FILE.hs OUT"
-                     & " [--unchecked|--no-opt|--lib]");
+                     & " [--unchecked|--no-opt|--lib|--trail]");
                else
                   Run_Middle (Argument (2), 'b', Argument (3),
                               Refined => Refined,
@@ -1800,7 +1820,7 @@ begin
          else
             Usage_Error
               ("expected: ahc emit FILE.hs OUT"
-               & " [--unchecked|--no-opt|--lib]");
+               & " [--unchecked|--no-opt|--lib|--trail]");
          end if;
       else
          Usage_Error ("unknown command '" & Command & "'");

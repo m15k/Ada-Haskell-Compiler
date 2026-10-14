@@ -1,0 +1,7 @@
+caught
+ahc: runtime error: error called
+  --> tests/exec/m149_review_rethrow_error.hs:4:23
+  |
+4 |   r <- try (evaluate (error "boom" + 1 :: Int))
+  |                       ^^^^^ boom
+  = in: main

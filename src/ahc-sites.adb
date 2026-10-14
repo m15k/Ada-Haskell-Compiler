@@ -57,11 +57,22 @@ package body AHC.Sites is
    -- Ghc_Span --
    --------------
 
+   function Normalise (Path : String) return String is
+      F : Natural := Path'First;
+   begin
+      while F + 1 <= Path'Last and then Path (F .. F + 1) = "./" loop
+         F := F + 2;
+      end loop;
+      return Path (F .. Path'Last);
+   end Normalise;
+
    function Ghc_Span
      (Ctx : Site_Context; Span : Diagnostics.Source_Span) return String
    is
       L1, C1, L2, C2 : Positive;
-      F : constant String := To_String (Ctx.File);
+      F : constant String :=
+        (if Length (Ctx.Span_File) > 0 then To_String (Ctx.Span_File)
+         else To_String (Ctx.File));
    begin
       Ends (Ctx, Span, L1, C1, L2, C2);
       if L1 /= L2 then
@@ -90,6 +101,20 @@ package body AHC.Sites is
    -- Encode --
    ------------
 
+   --  A literal's separators must not occur inside a field: a raw
+   --  U+001F or U+001E in a source line (a comment, say) shifted every
+   --  later field (M149 review). They become spaces.
+   function Clean (S : String) return String is
+      R : String := S;
+   begin
+      for C of R loop
+         if C = US or else C = RS then
+            C := ' ';
+         end if;
+      end loop;
+      return R;
+   end Clean;
+
    function Encode (Ctx : Site_Context; S : Site) return String is
       L1, C1, L2, C2 : Positive;
       Snip : Unbounded_String;
@@ -109,19 +134,19 @@ package body AHC.Sites is
             if L > L1 then
                Append (Snip, RS);
             end if;
-            Append (Snip, Img (L) & "|" & Ctx.Src.Slice (From, Stop));
+            Append (Snip, Img (L) & "|" & Clean (Ctx.Src.Slice (From, Stop)));
          end;
       end loop;
-      return To_String (S.Ghc_Text) & US
-        & To_String (S.Ghc_Stack) & US
-        & To_String (S.Headline) & US
-        & To_String (Ctx.File) & US
+      return Clean (To_String (S.Ghc_Text)) & US
+        & Clean (To_String (S.Ghc_Stack)) & US
+        & Clean (To_String (S.Headline)) & US
+        & Clean (To_String (Ctx.File)) & US
         & Img (L1) & ":" & Img (C1) & "-" & Img (L2) & ":" & Img (C2) & US
-        & To_String (S.Enclosing) & US
+        & Clean (To_String (S.Enclosing)) & US
         & To_String (Snip) & US
         & To_String (S.Handled) & US
-        & To_String (S.Schema) & US
-        & To_String (S.Note);
+        & Clean (To_String (S.Schema)) & US
+        & Clean (To_String (S.Note));
    end Encode;
 
    -----------------
@@ -192,13 +217,14 @@ package body AHC.Sites is
    ----------------
 
    function Call_Stack
-     (Ctx : Site_Context; Fn : String; Span : Diagnostics.Source_Span)
-      return String
+     (Ctx : Site_Context; Fn : String; Span : Diagnostics.Source_Span;
+      Shown : String := "") return String
    is
       Frames : constant String := Base_Frames (Fn);
       --  "!!/large" and "!!/negative" share the user frame "!!".
-      Shown : constant String :=
-        (if Fn'Length > 2 and then Fn (Fn'First .. Fn'First + 1) = "!!"
+      Name : constant String :=
+        (if Shown /= "" then Shown
+         elsif Fn'Length > 2 and then Fn (Fn'First .. Fn'First + 1) = "!!"
          then "!!" else Fn);
    begin
       if Fn = "" then
@@ -209,7 +235,7 @@ package body AHC.Sites is
            & Frames (Frames'First .. Frames'Last - 1);
       end if;
       return "CallStack (from HasCallStack):" & LF & Frames
-        & "  " & Shown & ", called at " & Ghc_Point (Ctx, Span)
+        & "  " & Name & ", called at " & Ghc_Point (Ctx, Span)
         & " in main:" & To_String (Ctx.Module);
    end Call_Stack;
 

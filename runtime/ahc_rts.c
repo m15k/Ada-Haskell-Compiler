@@ -494,10 +494,13 @@ static long utf8_decode(const unsigned char *s, size_t len, size_t *i) {
 /* Print and exit with NO unwinding: for a failure that must not
    longjmp across foreign C frames (an exception escaping a Haskell
    callback that C called). */
+static void trail_print(int width);   /* M149 --trail, below */
+
 void ahc_fatal(const char *msg) {
   fputs("ahc: ", stderr);   /* exactly ahc_die's line; exit flushes stdout */
   fputs(msg, stderr);
   fputc('\n', stderr);
+  trail_print(1);           /* --trail builds (M149) */
   exit(1);
 }
 
@@ -526,6 +529,7 @@ void ahc_die(const char *msg) {
   fputs("ahc: ", stderr);
   fputs(msg, stderr);
   fputc('\n', stderr);
+  trail_print(1);   /* <<loop>> and other fatal deaths, --trail builds */
   exit(1);
 }
 
@@ -536,6 +540,7 @@ static void ahc_die_raw(const char *msg) {
   die_unwind_if_armed(msg);
   fputs(msg, stderr);
   fputc('\n', stderr);
+  trail_print(1);   /* contract/refinement violations, --trail builds */
   exit(1);
 }
 
@@ -3143,6 +3148,7 @@ static void stack_overflow_handler(int sig, siginfo_t *si, void *uc) {
         "ahc: green thread stack overflow\n";
       ssize_t r = write(2, msg, sizeof msg - 1);
       (void)r;
+      trail_print_raw();         /* --trail builds only (M149) */
       _exit(1);
     }
   }
@@ -3501,7 +3507,10 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
     exc_put_list(buf, n, cap, exc->u.con.fields[0]);
     break;
   case EXC_PATTERN:
-    exc_put_list(buf, n, cap, exc->u.con.fields[0]);
+    n = exc_put_list(buf, n, cap, exc->u.con.fields[0]);
+    /* GHC's message ends in a newline; the printer and library
+       mode's ahc_last_error add their own ending (M149 review). */
+    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
     break;
   case EXC_ARITH: {
     long c = ahc_eval(exc->u.con.fields[0])->u.i;
@@ -3551,7 +3560,6 @@ static void exc_render(AhcNode *exc, char *buf, size_t cap) {
    else prints and exits 1, the shape ahc_die always had. */
 /* M149: the uncaught-error report (defined with the site code). */
 static int report_print(AhcNode *exc, const char *msg);
-static void trail_print(int width);
 
 static void exc_uncaught(AhcNode *exc) __attribute__((noreturn));
 static void exc_uncaught(AhcNode *exc) {
@@ -3578,7 +3586,9 @@ static void exc_uncaught(AhcNode *exc) {
     const char *m = buf;
     if (e->u.con.contag == EXC_ERROR_CALL && strncmp(m, "error: ", 7) == 0)
       m += 7;
-    if (report_print(e, m)) {
+    /* a message too long for the buffer streams whole below instead:
+       a report must never cut the error (M149 review) */
+    if (strlen(buf) + 8 < cap && report_print(e, m)) {
       free(buf);
       exit(1);
     }
@@ -4132,6 +4142,7 @@ static AhcNode *p_exc_location(AhcNode *e) {
     return v->u.con.fields[1];
   return ahc_mk_string("");
 }
+
 static AhcNode *p_exc_pattern_fail(AhcNode *msg) {
   AhcNode *e = ahc_mk_con(EXC_PATTERN, 1);
   e->u.con.fields[0] = msg;
@@ -6670,6 +6681,17 @@ static void report_note(AhcNode *exc, AhcNode *site, AhcNode *value);
 static AhcNode *p_fail_match(AhcNode *site, AhcNode *value) {
   AhcNode *msg = site_field(site, 0);
   AhcNode *e;
+  {
+    /* A function of several arguments reports the tuple of them, built
+       lazily by desugar: building it forces none of the arguments, so
+       it is evaluated here, or the report could only show `_` (M149
+       review). Its schema starts "(,". */
+    StrBuf sb = {0, 0, 0};
+    site_field_buf(site, 8, &sb);
+    if (sb.len >= 2 && sb.p[0] == '(' && sb.p[1] == ',')
+      value = ahc_eval(value);
+    free(sb.p);
+  }
   fflush(stdout);            /* output already produced precedes it */
   e = ahc_mk_con(EXC_PATTERN, 1);
   e->u.con.fields[0] = msg;
@@ -6695,6 +6717,26 @@ static AhcNode *p_error_at(AhcNode *site, AhcNode *msg) {
 static AhcNode *p_error_at_note(AhcNode *site, AhcNode *msg) {
   return error_at_field(site, msg, 9);
 }
+/* primErrorAtWith site msg note: as primErrorAt, plus a note line for
+   the report (read's input, (!!)'s index and length). The note is our
+   own Prelude text, forced here (a bounded prefix) because the report
+   never forces anything. */
+static AhcNode *p_error_at_with(AhcNode *site, AhcNode *msg, AhcNode *note) {
+  AhcNode *loc = site_field(site, 1);
+  AhcNode *e, *c = note;
+  int k;
+  for (k = 0; k < 200; k++) {
+    c = ahc_eval(c);
+    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) break;
+    ahc_eval(c->u.con.fields[0]);
+    c = c->u.con.fields[1];
+  }
+  e = exc_error_call_at(msg, loc);
+  fflush(stdout);
+  report_note(e, site, note);
+  ahc_throw(e);
+}
+
 static AhcNode *p_error_loc(AhcNode *msg, AhcNode *loc) {
   fflush(stdout);
   ahc_throw(exc_error_call_at(msg, loc));
@@ -7993,10 +8035,10 @@ static void fmt_double(char *buf, size_t n, double v) {
 #define TRAIL_SLOTS 16
 static __thread const char *trail_name[TRAIL_SLOTS];
 static __thread unsigned long trail_count[TRAIL_SLOTS];
-static __thread unsigned trail_next;
+static __thread unsigned long trail_next;   /* never wraps in practice */
 
 void ahc_trail_push(const char *name) {
-  unsigned last = (trail_next - 1) % TRAIL_SLOTS;
+  unsigned long last = (trail_next - 1) % TRAIL_SLOTS;
   if (trail_next > 0 && trail_name[last] == name) {
     trail_count[last]++;
     return;
@@ -8009,12 +8051,12 @@ void ahc_trail_push(const char *name) {
 /* "= most recent evaluations (newest first): a, b x3, c" - nothing
    when this thread pushed nothing (a build without --trail). */
 static void trail_print(int width) {
-  unsigned k, n = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
+  unsigned long k, n = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
   if (n == 0) return;
   fprintf(stderr, "%*s = most recent evaluations (newest first): ",
           width, "");
   for (k = 0; k < n; k++) {
-    unsigned i = (trail_next - 1 - k) % TRAIL_SLOTS;
+    unsigned long i = (trail_next - 1 - k) % TRAIL_SLOTS;
     if (k) fputs(", ", stderr);
     fputs(trail_name[i], stderr);
     if (trail_count[i] > 1) fprintf(stderr, " x%lu", trail_count[i]);
@@ -8027,14 +8069,14 @@ static void trail_print(int width) {
 static void trail_print_raw(void) {
   static char buf[1024];
   size_t n = 0;
-  unsigned k, cnt = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
+  unsigned long k, cnt = trail_next < TRAIL_SLOTS ? trail_next : TRAIL_SLOTS;
   const char *head = "  = most recent evaluations (newest first): ";
   if (cnt == 0) return;
 #define RAW_PUT(str) do { const char *q_ = (str); \
     while (*q_ && n < sizeof buf - 2) buf[n++] = *q_++; } while (0)
   RAW_PUT(head);
   for (k = 0; k < cnt; k++) {
-    unsigned i = (trail_next - 1 - k) % TRAIL_SLOTS;
+    unsigned long i = (trail_next - 1 - k) % TRAIL_SLOTS;
     if (k) RAW_PUT(", ");
     RAW_PUT(trail_name[i]);
     if (trail_count[i] > 1) {
@@ -8076,9 +8118,24 @@ static void report_note(AhcNode *exc, AhcNode *site, AhcNode *value) {
   pthread_mutex_unlock(&report_mu);
 }
 
+/* N with its indirections followed - never evaluated. */
+static AhcNode *report_deref(AhcNode *n) {
+  while (n && n->tag == AHC_IND)
+    n = (AhcNode *)__atomic_load_n(&n->u.ind, __ATOMIC_ACQUIRE);
+  return n;
+}
+
+/* The record for EXC. A typed rethrow (`throwIO (e ::
+   PatternMatchFail)`) builds a new exception node around a thunk of
+   the old one's message, so failing the key, a record whose exception
+   carries the same message node matches: by the time the report
+   prints, the message has been forced and both thunks point at it
+   (M149 review). */
 static int report_find(AhcNode *exc, AhcNode **site, AhcNode **value) {
   int found = 0;
   unsigned k;
+  AhcNode *msg = exc->tag == AHC_CON && exc->u.con.arity >= 1
+                   ? report_deref(exc->u.con.fields[0]) : NULL;
   pthread_mutex_lock(&report_mu);
   for (k = 0; k < REPORT_SLOTS && k < report_next; k++) {
     unsigned i = (report_next - 1 - k) % REPORT_SLOTS;
@@ -8087,6 +8144,17 @@ static int report_find(AhcNode *exc, AhcNode **site, AhcNode **value) {
       *value = reports[i].value;
       found = 1;
       break;
+    }
+  }
+  for (k = 0; !found && msg && k < REPORT_SLOTS && k < report_next; k++) {
+    unsigned i = (report_next - 1 - k) % REPORT_SLOTS;
+    AhcNode *x = reports[i].exc;
+    if (x && x->tag == AHC_CON && x->u.con.arity >= 1
+        && x->u.con.contag == exc->u.con.contag
+        && report_deref(x->u.con.fields[0]) == msg) {
+      *site = reports[i].site;
+      *value = reports[i].value;
+      found = 1;
     }
   }
   pthread_mutex_unlock(&report_mu);
@@ -8105,7 +8173,9 @@ static int report_find(AhcNode *exc, AhcNode **site, AhcNode **value) {
 #define R_ACK 6
 #define RENDER_CAP 60
 
-typedef struct { StrBuf b; int full; } RBuf;
+/* thunk: an unevaluated part was shown as `_` (the report then says
+   what `_` means; a `_` inside a string must not trigger that). */
+typedef struct { StrBuf b; int full; int thunk; } RBuf;
 
 static void rb_put(RBuf *r, const char *s) {
   if (r->full) return;
@@ -8180,7 +8250,7 @@ static int schema_con(const char *s, int tag, char *name, size_t cap,
 }
 
 static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
-                        int is_string) {
+                        int is_string, int nested) {
   int first = 1;
   StrBuf sb = {0, 0, 0};
   /* fully evaluated spine: [a,b] / "ab"; otherwise a : b : _ */
@@ -8189,7 +8259,8 @@ static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
   while (1) {
     c = no_ind(c);
     if (unevaluated(c)) { complete = 0; break; }
-    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) break;
+    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG
+        || c->u.con.arity != 2) break;
     if (is_string && unevaluated(no_ind(c->u.con.fields[0]))) complete = 0;
     c = c->u.con.fields[1];
     if (++count > RENDER_CAP) { complete = 0; break; }
@@ -8200,7 +8271,8 @@ static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
     sb_ch(&sb, '"');
     while (1) {
       c = no_ind(c);
-      if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) break;
+      if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG
+          || c->u.con.arity != 2) break;
       sb_show_cp(&sb, no_ind(c->u.con.fields[0])->u.c, &esc);
       c = c->u.con.fields[1];
     }
@@ -8213,7 +8285,8 @@ static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
   free(sb.p);
   if (complete) {
     rb_put(r, "[");
-    for (c = no_ind(n); c->tag == AHC_CON && c->u.con.contag == CONS_TAG;
+    for (c = no_ind(n); c->tag == AHC_CON && c->u.con.contag == CONS_TAG
+                        && c->u.con.arity == 2;
          c = no_ind(c->u.con.fields[1])) {
       if (!first) rb_put(r, ",");
       first = 0;
@@ -8223,15 +8296,19 @@ static void render_list(RBuf *r, AhcNode *n, const char *elem, int depth,
     rb_put(r, "]");
     return;
   }
+  /* a partial spine: a : b : _, parenthesised as a field */
+  if (nested) rb_put(r, "(");
   for (c = n;;) {
     c = no_ind(c);
-    if (unevaluated(c)) { rb_put(r, "_"); return; }
-    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG) { rb_put(r, "[]"); return; }
+    if (unevaluated(c)) { rb_put(r, "_"); r->thunk = 1; break; }
+    if (c->tag != AHC_CON || c->u.con.contag != CONS_TAG
+        || c->u.con.arity != 2) { rb_put(r, "[]"); break; }
     render(r, c->u.con.fields[0], elem, depth + 1, 1);
     rb_put(r, " : ");
     if (r->full) return;
     c = c->u.con.fields[1];
   }
+  if (nested) rb_put(r, ")");
 }
 
 static void render(RBuf *r, AhcNode *n, const char *code, int depth,
@@ -8239,7 +8316,8 @@ static void render(RBuf *r, AhcNode *n, const char *code, int depth,
   char tmp[64];
   n = no_ind(n);
   if (r->full) return;
-  if (unevaluated(n) || n->tag == AHC_FUN) { rb_put(r, "_"); return; }
+  if (unevaluated(n)) { rb_put(r, "_"); r->thunk = 1; return; }
+  if (n->tag == AHC_FUN) { rb_put(r, "<function>"); return; }
   switch (n->tag) {
   case AHC_INT:
     snprintf(tmp, sizeof tmp, (nested && n->u.i < 0) ? "(%ld)" : "%ld",
@@ -8248,8 +8326,10 @@ static void render(RBuf *r, AhcNode *n, const char *code, int depth,
     return;
   case AHC_DOUBLE:
     fmt_double(tmp, sizeof tmp, n->u.d);
-    if (nested && n->u.d < 0) { rb_put(r, "("); rb_put(r, tmp); rb_put(r, ")"); }
-    else rb_put(r, tmp);
+    /* GHC parenthesises a negative field, -0.0 included */
+    if (nested && signbit(n->u.d)) {
+      rb_put(r, "("); rb_put(r, tmp); rb_put(r, ")");
+    } else rb_put(r, tmp);
     return;
   case AHC_CHAR: {
     char cb[16];
@@ -8272,13 +8352,13 @@ static void render(RBuf *r, AhcNode *n, const char *code, int depth,
   case AHC_CON:
     break;
   default:
-    rb_put(r, "_");
+    rb_put(r, "<text>");   /* a packed Text, a pointer, ... (evaluated) */
     return;
   }
   /* a constructor: lists and strings, else through the schema */
   if (code && (code[0] == 's' || code[0] == 'l')) {
     render_list(r, n, code[0] == 'l' ? code + 1 : "c", depth,
-                code[0] == 's');
+                code[0] == 's', nested);
     return;
   }
   {
@@ -8288,7 +8368,7 @@ static void render(RBuf *r, AhcNode *n, const char *code, int depth,
     if (!code || depth >= 3
         || !schema_con(code, n->u.con.contag, name, sizeof name, &fields,
                        &arity)) {
-      rb_put(r, "_");
+      rb_put(r, "..");    /* evaluated, but past what the schema knows */
       return;
     }
     if (name[0] == '(' && name[1] == ',') {   /* a tuple */
@@ -8302,6 +8382,22 @@ static void render(RBuf *r, AhcNode *n, const char *code, int depth,
         }
       }
       rb_put(r, ")");
+      return;
+    }
+    if (name[0] == ':' && n->u.con.arity == 2) {
+      /* an infix constructor shows infix, as GHC's derived Show */
+      const char *f2 = NULL;
+      if (fields) {
+        f2 = skip_code(fields);
+        f2 = (*f2 == R_ACK) ? f2 + 1 : NULL;
+      }
+      if (nested) rb_put(r, "(");
+      render(r, n->u.con.fields[0], fields, depth + 1, 1);
+      rb_put(r, " ");
+      rb_put(r, name);
+      rb_put(r, " ");
+      render(r, n->u.con.fields[1], f2, depth + 1, 1);
+      if (nested) rb_put(r, ")");
       return;
     }
     if (nested && n->u.con.arity > 0) rb_put(r, "(");
@@ -8357,20 +8453,22 @@ static int report_print(AhcNode *exc, const char *msg) {
        a longer one is explained in a note after the lines. */
     char *line = snippet, *next;
     int first = 1, multi = l2 > l1, unevaluated_shown = 0;
-    char detail[RENDER_CAP + 64];
+    char pdetail[RENDER_CAP + 64];
+    /* A located error's detail is its whole message, never cut (M149
+       review: a fixed buffer truncated it at ~120 bytes). */
+    const char *detail = msg;
     if (is_pattern && strcmp(headline, "no guard is true") == 0) {
       /* a multi-way if has guards, not a value to show */
-      snprintf(detail, sizeof detail, "every guard is False");
+      detail = "every guard is False";
     } else if (is_pattern) {
-      RBuf rb = {{0, 0, 0}, 0};
+      RBuf rb = {{0, 0, 0}, 0, 0};
       render(&rb, value, schema[0] ? schema : NULL, 0, 0);
       sb_ch(&rb.b, 0);
-      snprintf(detail, sizeof detail, "no pattern matches `%s%s`",
+      snprintf(pdetail, sizeof pdetail, "no pattern matches `%s%s`",
                rb.b.p ? rb.b.p : "_", rb.full ? "..." : "");
-      unevaluated_shown = rb.b.p && strchr(rb.b.p, '_') != NULL;
+      unevaluated_shown = rb.thunk;
       free(rb.b.p);
-    } else {
-      snprintf(detail, sizeof detail, "%s", msg);
+      detail = pdetail;
     }
     while (line && *line) {
       char *bar;
@@ -8406,6 +8504,20 @@ static int report_print(AhcNode *exc, const char *msg) {
       else fputc(*h, stderr);
     }
     fputc('\n', stderr);
+  }
+  if (!is_pattern && value) {
+    /* a located function's own note: read's input, (!!)'s index */
+    RBuf rb = {{0, 0, 0}, 0, 0};
+    render(&rb, value, "s", 0, 0);
+    sb_ch(&rb.b, 0);
+    if (rb.b.p && rb.b.p[0] == '"') {
+      /* the note is a String; print it without its quotes */
+      size_t k = strlen(rb.b.p);
+      if (k >= 2 && rb.b.p[k - 1] == '"') rb.b.p[k - 1] = 0;
+      fprintf(stderr, "%*s = note: %s%s\n", width, "", rb.b.p + 1,
+              rb.full ? "..." : "");
+    }
+    free(rb.b.p);
   }
   if (in[0]) fprintf(stderr, "%*s = in: %s\n", width, "", in);
   trail_print(width);
@@ -8606,7 +8718,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_exc_io, *ahc_prim_exc_error_call, *ahc_prim_exc_arith,
   *ahc_prim_exc_location, *ahc_prim_exc_pattern_fail,
   *ahc_prim_fail_match, *ahc_prim_error_at, *ahc_prim_error_at_note,
-  *ahc_prim_error_loc,
+  *ahc_prim_error_loc, *ahc_prim_error_at_with,
   *ahc_prim_exc_from_io, *ahc_prim_exc_exit, *ahc_prim_mk_ioerror,
   *ahc_prim_ioe_type, *ahc_prim_ioe_location,
   *ahc_prim_ioe_description, *ahc_prim_ioe_filename,
@@ -8887,6 +8999,7 @@ void ahc_rts_init(void) {
   ahc_prim_error_at = mk_prim2(p_error_at);
   ahc_prim_error_at_note = mk_prim2(p_error_at_note);
   ahc_prim_error_loc = mk_prim2(p_error_loc);
+  ahc_prim_error_at_with = mk_prim3(p_error_at_with);
   ahc_prim_exc_arith = mk_prim1(p_exc_arith);
   ahc_prim_exc_from_io = mk_prim1(p_exc_from_io);
   ahc_prim_exc_exit = mk_prim1(p_exc_exit);

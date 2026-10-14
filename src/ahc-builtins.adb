@@ -1104,6 +1104,9 @@ package body AHC.Builtins is
             Ignore := Def_Global
               ("primErrorLoc", Poly1 (A, FN (String_T, String_T, TV (A))));
             Ignore := Def_Global
+              ("primErrorAtWith",
+               Poly1 (A, FN (String_T, FN (String_T, String_T, TV (A)))));
+            Ignore := Def_Global
               ("id", Poly1 (A, FN (TV (A), TV (A))));
             Ignore := Def_Global
               ("print",

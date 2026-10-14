@@ -1,0 +1,7 @@
+ahc: runtime error: pattern match failure
+  --> tests/exec/m149_review_strict_record.hs:5:1
+  |
+5 | f Q = 0
+  | ^^^^^^^ no pattern matches `P "snake_case" 5 True`
+  = note: the patterns handle Q
+  = in: f

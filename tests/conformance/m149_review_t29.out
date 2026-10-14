@@ -1,0 +1,4 @@
+"tests/conformance/m149_review_t29.hs:5:1-24: Non-exhaustive patterns in (Just b) :* (Just c)\n"
+"tests/conformance/m149_review_t29.hs:9:10-57: Non-exhaustive patterns in (Just x) : (Just y) : _\n"
+"tests/conformance/m149_review_t29.hs:10:10-53: Non-exhaustive patterns in (Just x) : [Just y]\n"
+"tests/conformance/m149_review_t29.hs:11:10-34: Non-exhaustive patterns in ~(Just p) :* (Just r)\n"

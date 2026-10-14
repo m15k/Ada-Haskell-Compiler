@@ -175,29 +175,119 @@ package body AHC.Desugar is
       --  one layer of parentheses removed: GHC names a failed let or
       --  lazy pattern by its text ("Just y").
       function Pat_Text (Span : Diagnostics.Source_Span) return String is
-         T : constant String :=
+         --  GHC names a failed let or lazy pattern by its pretty-printed
+         --  form (M149 review), not the source as written: comments
+         --  dropped, whitespace runs to one space, none inside brackets
+         --  or before a comma, one after it; tuple parentheses and `~`
+         --  kept; only an outermost pair of parentheses that match each
+         --  other (a parenthesised pattern) dropped. Literals verbatim.
+         Raw : constant String :=
            (if Sites.Enabled (Ctx) then Ctx.Src.Slice (Span.Start, Span.Stop)
             else "");
-         F : Natural := T'First;
-         L : Natural := T'Last;
+         R : Unbounded_String;
+         I : Natural := Raw'First;
+         Pending_Space : Boolean := False;
+         Quote : constant Character := Character'Val (39);
+
+         function Sym (C : Character) return Boolean is
+           (C in '!' | '#' | '$' | '%' | '&' | '*' | '+' | '.' | '/' | '<'
+               | '=' | '>' | '?' | '@' | '\' | '^' | '|' | '-' | '~' | ':');
+
+         procedure Put (C : Character) is
+            Last : constant Character :=
+              (if Length (R) > 0 then Element (R, Length (R)) else ' ');
+         begin
+            if Pending_Space and then Length (R) > 0
+              and then Last not in '(' | '[' | '{'
+              and then C not in ')' | ']' | '}' | ','
+            then
+               Append (R, ' ');
+            end if;
+            Pending_Space := False;
+            Append (R, C);
+            if C = ',' then
+               Pending_Space := True;
+            end if;
+         end Put;
       begin
-         if F <= L and then T (F) = '~' then
-            F := F + 1;
-         end if;
-         if F < L and then T (F) = '(' and then T (L) = ')' then
-            F := F + 1;
-            L := L - 1;
-         end if;
-         --  An extent can end past a closing parenthesis the pattern
-         --  does not open (`~(Just z)`'s inner pattern): drop
-         --  unbalanced ones.
+         while I <= Raw'Last loop
+            declare
+               C : constant Character := Raw (I);
+            begin
+               if C = '{' and then I < Raw'Last and then Raw (I + 1) = '-' then
+                  --  a (nested) block comment
+                  declare
+                     Depth : Natural := 0;
+                  begin
+                     loop
+                        exit when I > Raw'Last;
+                        if I < Raw'Last and then Raw (I) = '{'
+                          and then Raw (I + 1) = '-'
+                        then
+                           Depth := Depth + 1;
+                           I := I + 2;
+                        elsif I < Raw'Last and then Raw (I) = '-'
+                          and then Raw (I + 1) = '}'
+                        then
+                           Depth := Depth - 1;
+                           I := I + 2;
+                           exit when Depth = 0;
+                        else
+                           I := I + 1;
+                        end if;
+                     end loop;
+                     Pending_Space := True;
+                  end;
+               elsif C = '-' and then I < Raw'Last and then Raw (I + 1) = '-'
+                 and then (I + 2 > Raw'Last or else not Sym (Raw (I + 2))
+                           or else Raw (I + 2) = '-')
+               then
+                  --  a line comment
+                  while I <= Raw'Last and then Raw (I) /= ASCII.LF loop
+                     I := I + 1;
+                  end loop;
+                  Pending_Space := True;
+               elsif C = '"'
+                 or else (C = Quote and then I + 2 <= Raw'Last
+                          and then (Raw (I + 2) = Quote
+                                    or else Raw (I + 1) = '\'))
+               then
+                  --  a string or character literal, verbatim
+                  Put (C);
+                  I := I + 1;
+                  while I <= Raw'Last and then Raw (I) /= C loop
+                     if Raw (I) = '\' and then I < Raw'Last then
+                        Append (R, Raw (I));
+                        I := I + 1;
+                     end if;
+                     Append (R, Raw (I));
+                     I := I + 1;
+                  end loop;
+                  if I <= Raw'Last then
+                     Append (R, Raw (I));
+                     I := I + 1;
+                  end if;
+               elsif C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+                  Pending_Space := True;
+                  I := I + 1;
+               else
+                  Put (C);
+                  I := I + 1;
+               end if;
+            end;
+         end loop;
          declare
+            T : constant String := To_String (R);
+            F : Natural := T'First;
+            L : Natural := T'Last;
             Depth : Integer := 0;
          begin
-            for I in F .. L loop
-               if T (I) = '(' then
+            --  An extent can end past a `)` the pattern does not open
+            --  (`~(Just z)`'s inner pattern): drop unbalanced ones.
+            for K in F .. L loop
+               if T (K) = '(' then
                   Depth := Depth + 1;
-               elsif T (I) = ')' then
+               elsif T (K) = ')' then
                   Depth := Depth - 1;
                end if;
             end loop;
@@ -205,8 +295,34 @@ package body AHC.Desugar is
                L := L - 1;
                Depth := Depth + 1;
             end loop;
+            --  An outermost pair that matches each other and is not a
+            --  tuple's.
+            if F < L and then T (F) = '(' and then T (L) = ')' then
+               declare
+                  D : Natural := 0;
+                  Pairs : Boolean := True;
+                  Comma : Boolean := False;
+               begin
+                  for K in F .. L loop
+                     if T (K) in '(' | '[' then
+                        D := D + 1;
+                     elsif T (K) in ')' | ']' then
+                        D := D - 1;
+                        if D = 0 and then K < L then
+                           Pairs := False;
+                        end if;
+                     elsif T (K) = ',' and then D = 1 then
+                        Comma := True;
+                     end if;
+                  end loop;
+                  if Pairs and then not Comma then
+                     F := F + 1;
+                     L := L - 1;
+                  end if;
+               end;
+            end if;
+            return T (F .. L);
          end;
-         return T (F .. L);
       end Pat_Text;
 
       --  A construct's full extent, recorded by the parser (M149);
@@ -252,7 +368,8 @@ package body AHC.Desugar is
       --  Prelude's located entities and this module builds sites - its
       --  located variant applied to the site literal (M149).
       function Located_Ref
-        (V : Core.Real_Var_Id; Span : Diagnostics.Source_Span)
+        (V : Core.Real_Var_Id; Span : Diagnostics.Source_Span;
+         Shown : String := "")
          return Core.Real_Expr_Id
       is
       begin
@@ -276,12 +393,12 @@ package body AHC.Desugar is
                   S : Sites.Site;
                begin
                   S.Ghc_Stack := To_Unbounded_String
-                    (Sites.Call_Stack (Ctx, Key, Span));
+                    (Sites.Call_Stack (Ctx, Key, Span, Shown));
                   --  (!!) has two stacks: "too large" above, "negative"
                   --  in the note field.
                   if Key = "!!/large" then
                      S.Note := To_Unbounded_String
-                       (Sites.Call_Stack (Ctx, "!!/negative", Span));
+                       (Sites.Call_Stack (Ctx, "!!/negative", Span, Shown));
                   end if;
                   S.Headline := To_Unbounded_String
                     (Sites.Located_Headline (I));
@@ -311,17 +428,62 @@ package body AHC.Desugar is
       is
          use type AHC.Source_Text.Byte_Offset;
          P : AHC.Source_Text.Byte_Offset;
+
+         --  Past blanks and comments (M149 review: `( {- c -} !! 3)`).
+         procedure Skip is
+         begin
+            loop
+               exit when not Ctx.Src.In_Range (P);
+               declare
+                  C : constant Character := Ctx.Src.Char_At (P);
+                  Next : constant Character :=
+                    (if Ctx.Src.In_Range (P + 1) then Ctx.Src.Char_At (P + 1)
+                     else ' ');
+               begin
+                  if C in ' ' | ASCII.HT | ASCII.LF | ASCII.CR then
+                     P := P + 1;
+                  elsif C = '{' and then Next = '-' then
+                     declare
+                        Depth : Natural := 0;
+                     begin
+                        loop
+                           exit when not Ctx.Src.In_Range (P + 1);
+                           if Ctx.Src.Char_At (P) = '{'
+                             and then Ctx.Src.Char_At (P + 1) = '-'
+                           then
+                              Depth := Depth + 1;
+                              P := P + 2;
+                           elsif Ctx.Src.Char_At (P) = '-'
+                             and then Ctx.Src.Char_At (P + 1) = '}'
+                           then
+                              Depth := Depth - 1;
+                              P := P + 2;
+                              exit when Depth = 0;
+                           else
+                              P := P + 1;
+                           end if;
+                        end loop;
+                     end;
+                  elsif C = '-' and then Next = '-' then
+                     while Ctx.Src.In_Range (P)
+                       and then Ctx.Src.Char_At (P) /= ASCII.LF
+                     loop
+                        P := P + 1;
+                     end loop;
+                  else
+                     exit;
+                  end if;
+               end;
+            end loop;
+         end Skip;
       begin
          if not Sites.Enabled (Ctx) or else N.Kind = Var_E then
             return Span;
          end if;
-         P := (if N.Kind = Right_Section_E then Span.Start + 1
-               else Ext_E (N.Sec_Expr, Arena.Node (N.Sec_Expr).Span).Stop);
-         while Ctx.Src.In_Range (P)
-           and then Ctx.Src.Char_At (P) in ' ' | ASCII.HT | ASCII.LF
-         loop
-            P := P + 1;
-         end loop;
+         --  Both kinds start after the `(`: a right section's operator
+         --  comes next, a left section is located at its body's start.
+         P := Span.Start + 1;
+         Skip;
          if not Ctx.Src.In_Range (P) then
             return Span;
          end if;
@@ -344,6 +506,13 @@ package body AHC.Desugar is
 
       function TyCon_Schema
         (TC : Core.TyCon_Id; Depth : Natural) return String;
+
+      --  Schema size budget, in constructors + fields (M149 review: a
+      --  30-constructor recursive type expanded to 33 MB of C, and a
+      --  bigger one overflowed the compiler's stack). Set before each
+      --  schema; exhausted, the rest is "?" - the renderer shows "..".
+      Schema_Budget : Integer := 0;
+      Schema_Budget_Max : constant := 48;
 
       function Type_Code (T : Core.Type_Id; Depth : Natural) return String is
          use type Core.Type_Kind;
@@ -414,12 +583,37 @@ package body AHC.Desugar is
          use type Core.Scheme_Id;
          R : Unbounded_String;
       begin
-         if TC = Core.No_TyCon then
+         if TC = Core.No_TyCon or else Schema_Budget <= 0 then
             return "?";
          end if;
+         Schema_Budget := Schema_Budget - 1;
          declare
             TI : constant Core.TyCon_Info := M.Info (Core.Real_TyCon_Id (TC));
          begin
+            --  A newtype is erased at run time: its value IS its field's
+            --  (M149 review), so its schema is the field's.
+            if TI.Is_Newtype and then not TI.Cons.Is_Empty then
+               declare
+                  DI : constant Core.DataCon_Info := M.Info (TI.Cons (1));
+               begin
+                  if DI.Con_Scheme /= Core.No_Scheme then
+                     declare
+                        T : constant Core.Type_Id :=
+                          M.Node (Core.Real_Scheme_Id (DI.Con_Scheme)).S_Body;
+                     begin
+                        if T /= Core.No_Type
+                          and then M.Node (Core.Real_Type_Id (T)).Kind
+                                     = Core.TFun_T
+                        then
+                           return Type_Code
+                             (Core.Type_Id
+                                (M.Node (Core.Real_Type_Id (T)).From), Depth);
+                        end if;
+                     end;
+                  end if;
+                  return "?";
+               end;
+            end if;
             Append (R, Table.Text (Names.Real_Name_Id (TI.Name)) & Sch_Open);
             for CI in 1 .. TI.Cons.Last_Index loop
                declare
@@ -437,6 +631,7 @@ package body AHC.Desugar is
                      T := M.Node (Core.Real_Scheme_Id (DI.Con_Scheme)).S_Body;
                   end if;
                   for K in 1 .. DI.Arity loop
+                     Schema_Budget := Schema_Budget - 1;
                      if T /= Core.No_Type
                        and then M.Node (Core.Real_Type_Id (T)).Kind
                                   = Core.TFun_T
@@ -534,7 +729,19 @@ package body AHC.Desugar is
       function Pat_Schema (P : Syntax.Pat_Id) return String is
          use type Core.TyCon_Id;
          TC : constant Core.TyCon_Id := Pat_TyCon (P);
+         N : constant Pat_Node := Arena.Node (P);
       begin
+         Schema_Budget := Schema_Budget_Max;
+         --  Built-in lists and tuples (M149 review): a list renders
+         --  through its own code, a tuple through its tuple type.
+         if N.Kind = List_P or else TC = Env.List_TC then
+            return "l?";
+         elsif N.Kind = Tuple_P
+           and then Natural (N.Items.Length) in 2 .. Builtins.Max_Tuple
+         then
+            return TyCon_Schema
+              (Env.Tuple_TCs (Natural (N.Items.Length)), Schema_Depth - 1);
+         end if;
          return (if TC = Core.No_TyCon then "?"
                  else TyCon_Schema (TC, Schema_Depth - 1));
       end Pat_Schema;
@@ -603,6 +810,68 @@ package body AHC.Desugar is
          end if;
          return To_String (R);
       end Unit_Handled;
+
+      --  \case / \cases (M149 review): the parser makes them a lambda
+      --  over a case on its own binders (lc$, c1$ ..). The lambda notes
+      --  its body's id, kind and extent; that case's failure then reads
+      --  "\case" or "\cases" and spans the whole lambda, as GHC's.
+      LC_Body : Natural := 0;
+      LC_Kind : Unbounded_String;
+      LC_Span : Diagnostics.Source_Span;
+
+      function LC_Kind_Of (N : Expr_Node) return String is
+         B : constant Expr_Node := Arena.Node (N.L_Body);
+      begin
+         if B.Kind /= Case_E then
+            return "";
+         end if;
+         declare
+            Sc : constant Expr_Node := Arena.Node (B.Scrutinee);
+            First : constant Expr_Node :=
+              (if Sc.Kind = Tuple_E and then not Sc.Items.Is_Empty
+               then Arena.Node (Sc.Items.First_Element) else Sc);
+         begin
+            if First.Kind = Var_E then
+               declare
+                  T : constant String := Table.Text (First.Name.Name);
+               begin
+                  if T = "lc$" then
+                     return "\case";
+                  elsif T'Length > 2 and then T (T'First) = 'c'
+                    and then T (T'Last) = '$'
+                  then
+                     return "\cases";
+                  end if;
+               end;
+            end if;
+         end;
+         return "";
+      end LC_Kind_Of;
+
+      function Note_LC (N : Expr_Node; S : Diagnostics.Source_Span)
+        return Boolean is
+      begin
+         LC_Body := Natural (N.L_Body);
+         LC_Kind := To_Unbounded_String (LC_Kind_Of (N));
+         LC_Span := S;
+         return True;
+      end Note_LC;
+
+      function Case_Kind (E : Syntax.Expr_Id) return String is
+        (if Natural (E) = LC_Body then To_String (LC_Kind) else "case");
+
+      function Case_Span
+        (E : Syntax.Expr_Id; Span : Diagnostics.Source_Span)
+         return Diagnostics.Source_Span
+      is (if Natural (E) = LC_Body then LC_Span else Ext_E (E, Span));
+
+      --  GHC's text for a failed pattern in a do block's bind, which
+      --  goes to `fail` (M149 review): located at the pattern.
+      function Do_Fail_Text (P : Syntax.Pat_Id) return String is
+        (if Sites.Enabled (Ctx)
+         then "Pattern match failure in 'do' block at "
+              & Sites.Ghc_Span (Ctx, Ext_P (P))
+         else "pattern match failure in do block");
 
       --  The failing value a function's site reports: its one
       --  argument, the tuple of several (up to the widest tuple), or
@@ -1500,9 +1769,12 @@ package body AHC.Desugar is
                            then Error_Call
                              ("unreachable: irrefutable do bind", Span)
                            else App1 (Global (Env.Fail_V, Span),
-                                      Str_Lit ("pattern match failure in"
-                                               & " do block", Span),
+                                      Str_Lit (Do_Fail_Text (N.Bind_Pat),
+                                               Span),
                                       Span));
+                        Saved : constant Diagnostics.Source_Span :=
+                          Match_Context;
+                        Saved_Have : constant Boolean := Have_Context;
                      begin
                         --  Match_One's contract: Fail must be a
                         --  VARIABLE reference to a join point, so
@@ -1512,13 +1784,25 @@ package body AHC.Desugar is
                         --  between nested failure positions and the
                         --  evidence rewriter applied the dictionary
                         --  twice.
-                        K := Lam (X,
-                                  Let1 (FV, Fail_E,
-                                        Match_One
-                                          (X, N.Bind_Pat, Rest,
-                                           VarE (FV, Span)),
-                                        Span),
-                                  Span);
+                        --  A lazy pattern inside reports the statement
+                        --  (M149 review).
+                        Match_Context :=
+                          (Start => Ext_P (N.Bind_Pat).Start,
+                           Stop => Ext_E (N.Bind_Expr,
+                                          Arena.Node (N.Bind_Expr).Span).Stop);
+                        Have_Context := True;
+                        declare
+                           Fv_Ref : constant Core.Real_Expr_Id :=
+                             VarE (FV, Span);
+                           Matched : constant Core.Real_Expr_Id :=
+                             Match_One (X, N.Bind_Pat, Rest, Fv_Ref);
+                           Bound : constant Core.Real_Expr_Id :=
+                             Let1 (FV, Fail_E, Matched, Span);
+                        begin
+                           K := Lam (X, Bound, Span);
+                        end;
+                        Match_Context := Saved;
+                        Have_Context := Saved_Have;
                      end;
                   end if;
                   return App2 (Global (Env.Bind_V, Span),
@@ -1628,7 +1912,13 @@ package body AHC.Desugar is
                begin
                   case R.Kind is
                      when Var_Res =>
-                        Op_E := Located_Ref (R.Var, Op_Span (N, Span));
+                        --  GHC locates a left section `(e op)` at the
+                        --  section's start, named "an operator section"
+                        --  (M149 review); a right section at its operator.
+                        Op_E := Located_Ref
+                          (R.Var, Op_Span (N, Span),
+                           (if N.Kind = Left_Section_E
+                            then "an operator section" else ""));
                      when Data_Res =>
                         Op_E := ConE (R.Con, Span);
                      when Unresolved =>
@@ -1728,9 +2018,14 @@ package body AHC.Desugar is
                --  \p1 p2 -> e: fresh binders + matching; a plain var
                --  pattern becomes the binder directly.
                declare
-                  Body_E : Core.Real_Expr_Id := Ds_Expr (N.L_Body);
                   L_Span : constant Diagnostics.Source_Span :=
                     Ext_E (E, Span);
+                  --  \case and \cases are a lambda over a case on the
+                  --  parser's binders: GHC names and spans them whole.
+                  Is_LC : constant Boolean :=
+                    LC_Kind_Of (N) /= "" and then Note_LC (N, L_Span);
+                  pragma Unreferenced (Is_LC);
+                  Body_E : Core.Real_Expr_Id := Ds_Expr (N.L_Body);
                   Saved : constant Diagnostics.Source_Span := Match_Context;
                   Saved_Have : constant Boolean := Have_Context;
                begin
@@ -1807,7 +2102,8 @@ package body AHC.Desugar is
                      Unit_V : constant Core.Real_Expr_Id :=
                        ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
                      Err : constant Core.Real_Expr_Id :=
-                       Fail_Match ("case", Span, Unit_V, "empty case");
+                       Fail_Match (Case_Kind (E), Case_Span (E, Span), Unit_V,
+                                   "empty case");
                   begin
                      return App2
                        (Global (Core.Var_Id
@@ -1846,6 +2142,15 @@ package body AHC.Desugar is
                            "case expression", Span);
                      end;
                   end if;
+                  --  A lazy pattern in an alternative reports the whole
+                  --  case (M149 review).
+                  declare
+                     Case_Ctx_Saved : constant Diagnostics.Source_Span :=
+                       Match_Context;
+                     Case_Ctx_Have : constant Boolean := Have_Context;
+                  begin
+                  Match_Context := Case_Span (E, Span);
+                  Have_Context := True;
                   for I in reverse 1 .. N.Alts.Last_Index loop
                      declare
                         A : constant Alt_Node :=
@@ -1863,27 +2168,38 @@ package body AHC.Desugar is
                            A.Span);
                      end;
                   end loop;
-                  return Let1
-                    (S, Ds_Expr (N.Scrutinee),
-                     Let1 (Fail_V,
-                           (if Is_Multi_Way_If (N)
-                            then Fail_Match
-                              ("multi-way if", Ext_E (E, Span), VarE (S, Span),
-                               "non-exhaustive guards in multi-way if",
-                               Headline => "no guard is true",
-                               Ghc_Text =>
-                                 (if Sites.Enabled (Ctx)
-                                  then Sites.Ghc_Span (Ctx, Ext_E (E, Span))
-                                       & ": Non-exhaustive guards in "
-                                       & "multi-way if" & ASCII.LF
-                                  else ""))
-                            else Fail_Match
-                              ("case", Ext_E (E, Span), VarE (S, Span),
-                               "non-exhaustive case",
-                               Handled => Alts_Handled (N.Alts),
-                               Schema => Alts_Schema (N.Alts))),
-                           Result, Span),
-                     Span);
+                  Match_Context := Case_Ctx_Saved;
+                  Have_Context := Case_Ctx_Have;
+                  end;
+                  --  One node-minting call per statement (M149 review:
+                  --  the actuals' order is unspecified, and Core ids
+                  --  then differ between release and validation).
+                  declare
+                     Fail_E : constant Core.Real_Expr_Id :=
+                       (if Is_Multi_Way_If (N)
+                        then Fail_Match
+                          ("multi-way if", Ext_E (E, Span), VarE (S, Span),
+                           "non-exhaustive guards in multi-way if",
+                           Headline => "no guard is true",
+                           Ghc_Text =>
+                             (if Sites.Enabled (Ctx)
+                              then Sites.Ghc_Span (Ctx, Ext_E (E, Span))
+                                   & ": Non-exhaustive guards in "
+                                   & "multi-way if" & ASCII.LF
+                              else ""))
+                        else Fail_Match
+                          (Case_Kind (E), Case_Span (E, Span),
+                           VarE (S, Span),
+                           "non-exhaustive case",
+                           Handled => Alts_Handled (N.Alts),
+                           Schema => Alts_Schema (N.Alts)));
+                     Inner : constant Core.Real_Expr_Id :=
+                       Let1 (Fail_V, Fail_E, Result, Span);
+                     Scrut_E : constant Core.Real_Expr_Id :=
+                       Ds_Expr (N.Scrutinee);
+                  begin
+                     return Let1 (S, Scrut_E, Inner, Span);
+                  end;
                end;
 
             when Do_E =>
@@ -2130,6 +2446,8 @@ package body AHC.Desugar is
            (Start => Ext_D (U.Equations.First_Element).Start,
             Stop => Ext_D (U.Equations.Last_Element).Stop);
          Args : Core.Var_Id_Vectors.Vector;
+         Fun_Ctx_Saved : constant Diagnostics.Source_Span := Match_Context;
+         Fun_Ctx_Have : constant Boolean := Have_Context;
          Fail_V : constant Core.Real_Var_Id := Fresh ("$fail", Span);
          Result : Core.Real_Expr_Id;
       begin
@@ -2186,7 +2504,9 @@ package body AHC.Desugar is
                                Fail_Match
                                  ("function " & Table.Text (U.Name), F_Span,
                                   Args_Value (Arg_Vars, Span),
-                                  "non-exhaustive guards"),
+                                  "non-exhaustive guards",
+                                  --  the arguments matched; a guard failed
+                                  Headline => "no guard is true"),
                                Span);
                      for I in reverse 1 .. N.Fun_Pats.Last_Index loop
                         declare
@@ -2207,6 +2527,10 @@ package body AHC.Desugar is
             Args.Append (Fresh ("$a", Span));
          end loop;
 
+         --  A lazy pattern in an equation reports the whole function
+         --  (M149 review).
+         Match_Context := F_Span;
+         Have_Context := True;
          Result := VarE (Fail_V, Span);
          for EI in reverse 1 .. U.Equations.Last_Index loop
             declare
@@ -2229,6 +2553,8 @@ package body AHC.Desugar is
                   N.Span);
             end;
          end loop;
+         Match_Context := Fun_Ctx_Saved;
+         Have_Context := Fun_Ctx_Have;
 
          Result := Let1
            (Fail_V,
@@ -2284,11 +2610,26 @@ package body AHC.Desugar is
                      PN : constant Pat_Node := Arena.Node (N.Pat);
                      PR : constant Resolution :=
                        Res.Pat_Res (Positive (N.Pat));
+                     Unit_V : constant Core.Real_Expr_Id :=
+                       ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
+                     --  Guards that all fail (M149 review): GHC calls a
+                     --  variable binding a function, a pattern binding
+                     --  a pattern binding.
+                     Guard_Fail : constant Core.Real_Expr_Id :=
+                       (if PN.Kind = Var_P
+                        then Fail_Match
+                               ("function " & Table.Text (PN.Var), Ext_D (D),
+                                Unit_V, "non-exhaustive guards")
+                        else Fail_Match
+                               ("", Ext_D (D), Unit_V, "non-exhaustive guards",
+                                Ghc_Text =>
+                                  (if Sites.Enabled (Ctx)
+                                   then Sites.Ghc_Span (Ctx, Ext_D (D))
+                                        & ": Non-exhaustive guards in pattern"
+                                        & " binding" & ASCII.LF
+                                   else "")));
                      RHS_E : constant Core.Real_Expr_Id :=
-                       Ds_Rhs (N.Pat_Rhs, N.Pat_Where,
-                               Error_Call
-                                 ("non-exhaustive guards", Span),
-                               Span);
+                       Ds_Rhs (N.Pat_Rhs, N.Pat_Where, Guard_Fail, Span);
                   begin
                      if PN.Kind = Var_P and then PR.Kind = Var_Res then
                         --  x = e directly.
@@ -2311,21 +2652,44 @@ package body AHC.Desugar is
                            for V of Vars loop
                               M.Vars (V).From_Pattern_Binding := True;
                            end loop;
-                           for V of Vars loop
-                              Into.Append
-                                (Core.Bind_Pair'
-                                   (Binder => V,
-                                    Rhs => Match_One
-                                      (PB, N.Pat, VarE (V, Span),
-                                       --  GHC: the binding's span, the
-                                       --  pattern's text (M149).
-                                       Fail_Match
-                                         (Pat_Text (Ext_P (N.Pat)),
-                                          Ext_D (D), VarE (PB, Span),
-                                          "irrefutable pattern failed",
-                                          Handled => Handled_Of_One (N.Pat),
-                                          Schema => Pat_Schema (N.Pat)))));
-                           end loop;
+                           declare
+                              --  A lazy pattern inside reports the
+                              --  binding (M149 review).
+                              Saved : constant Diagnostics.Source_Span :=
+                                Match_Context;
+                              Saved_Have : constant Boolean := Have_Context;
+                           begin
+                              Match_Context := Ext_D (D);
+                              Have_Context := True;
+                              for V of Vars loop
+                                 declare
+                                    --  One node-minting call per
+                                    --  statement (actuals' order is
+                                    --  unspecified).
+                                    PB_Ref : constant Core.Real_Expr_Id :=
+                                      VarE (PB, Span);
+                                    --  GHC: the binding's span, the
+                                    --  pattern's text (M149).
+                                    Fail : constant Core.Real_Expr_Id :=
+                                      Fail_Match
+                                        (Pat_Text (Ext_P (N.Pat)),
+                                         Ext_D (D), PB_Ref,
+                                         "irrefutable pattern failed",
+                                         Handled => Handled_Of_One (N.Pat),
+                                         Schema => Pat_Schema (N.Pat));
+                                    V_Ref : constant Core.Real_Expr_Id :=
+                                      VarE (V, Span);
+                                    Sel : constant Core.Real_Expr_Id :=
+                                      Match_One (PB, N.Pat, V_Ref, Fail);
+                                 begin
+                                    Into.Append
+                                      (Core.Bind_Pair'
+                                         (Binder => V, Rhs => Sel));
+                                 end;
+                              end loop;
+                              Match_Context := Saved;
+                              Have_Context := Saved_Have;
+                           end;
                         end;
                      end if;
                   end;
