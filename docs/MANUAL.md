@@ -1757,6 +1757,103 @@ of its first action; `catch` must not (GHC's does not), and once
 that was written down the `thenIO` forcing was plainly wrong too —
 `return undefined >> act` runs `act` in GHC. Neither forces now.
 
+### Runtime errors: sites, reports and the trail (M149)
+
+GHC's runtime errors are famously unhelpful. `Prelude.head: empty
+list` names a line in `base`, `Prelude.read: no parse` hides the
+input, and `Non-exhaustive patterns in function area` hides the value
+that arrived. AHC now does two things with one mechanism:
+
+- **What a program observes is GHC's, exactly.** That is the `show`
+  of a caught exception, its type and the exit code.
+- **What it prints when nothing catches the error is AHC's own
+  report.** That goes to stderr, which conformance never compares.
+
+**Sites.** Desugar turns every place that can fail at run time into a
+*site*:
+- every pattern-match fallthrough;
+- every use of a partial Prelude entity (`head`, `!!`, `fromJust`,
+  `read`, ...);
+- every `error` and `undefined`.
+
+A site is one string literal (`AHC.Sites`) holding GHC's text for the
+exception and the report's material. The material is the file and
+span, the enclosing binding, the spanned source lines, the
+constructors the code handles, and a render schema. A literal stays
+local to its module's C unit, so separate compilation's cache is
+untouched. Literals longer than 64 bytes are built on first force,
+not at start-up; eager, the site literals of a large program would
+stay live for the whole run and cost every collection.
+
+- **Pattern failures** call `primFailMatch site value` and raise a
+  real `PatternMatchFail`. Its text uses GHC's span syntax:
+  `F:L:C1-C2`, or `F:(L1,C1)-(L2,C2)` across lines, with columns
+  counted in characters and tabs at multiples of 8. The parser
+  records every construct's full extent for this, since node spans
+  cover only a construct's first token.
+- **Partial functions** are recognised by identity: the Prelude's own
+  `head`, not a user's. A use of one becomes its located variant
+  (`head_at_ site`), whose `ErrorCall` carries GHC's exact
+  `CallStack` block: `base`'s internal frames, recorded from the
+  oracle, then the user's call site. `fromJust` lives in the Prelude
+  for this, and `Data.Maybe` re-exports it.
+- **Class methods are not located.** `div`, `toEnum` and `succ`
+  resolve their instance after desugar, so their call sites cannot be
+  rewritten by identity. GHC gives them no call stack either.
+
+**The report.** A located failure records `(exception, site, value)`
+in a small mutex-guarded side table. The exception node is the key:
+both collectors are non-moving, and a rethrow passes the same node.
+A typed rethrow (`throwIO (e :: PatternMatchFail)`) builds a new node
+around the old message, so failing the key, a record whose exception
+holds the same (by then forced) message matches.
+`exc_uncaught` looks it up and prints:
+
+```
+ahc: runtime error: pattern match failure
+  --> Cmd.hs:6:9
+  |
+6 | run c = case c of
+7 |   Go n -> "go " ++ show n
+8 |   Stop -> "stop"
+  = no pattern matches `Turn 'L'`
+  = note: the patterns handle Go, Stop
+  = in: run
+```
+
+(tests/exec/m149_report_case.out, with the path shortened)
+
+**The value renderer never forces.** It follows only evaluated nodes,
+and anything else prints as `_` (with a note saying so), so a report
+cannot diverge or raise a second error. A constructor node carries
+only its tag, so each pattern site embeds a *render schema*: its
+type's constructor names and arities, with field codes for `Int`,
+`Double`, `Char`, `Integer`, `String`, lists and nested types down to
+depth 3. The output is GHC's `show` shape (`Order (Item "lamp" (-2))
+[1,2,3]`), capped at 60 characters.
+
+**`ahc build --trail`.** Every call of a named function in the
+user's own modules pushes its name onto a 16-entry per-thread ring, a
+repeat of the newest name folded into a count. One call is one entry,
+however many arguments it takes. A local `where`/`let` function
+records its own name. Lambdas, point-free definitions (`total = sum .
+map area` is a value, not a call), compiler-made `$` bindings and
+class instance methods record nothing, and a spark's trail lives on
+the worker that ran it. An uncaught error, including a
+plain `divide by zero` or a stack overflow (whose handler writes with
+`write(2)` alone), then ends with the most recent evaluations, newest
+first:
+
+```
+ahc: divide by zero
+  = most recent evaluations (newest first): main x3, ratio, area x2
+```
+
+It is evaluation order, not a lexical call stack, which is the honest
+thing to show under laziness. Without the flag no trail code is
+emitted at all, and `run_build.sh` checks that. With it, call-heavy
+code pays a few percent (b_fib +8%, b_map +0.5%).
+
 ### The own collector
 
 So AHC grew its own — `AHC_GC=own` selects it, `boehm` remains the

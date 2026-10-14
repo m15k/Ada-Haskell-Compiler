@@ -588,6 +588,13 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.20** — runtime errors better than GHC's (M149): a caught
+  error's `show` is GHC 9.4.8's exact text (`CallStack` blocks for
+  `error`, `undefined` and the partial Prelude functions, a real
+  `PatternMatchFail` with GHC's span for every pattern kind), and an
+  uncaught one prints a report — location, source lines, the failing
+  value rendered without forcing, the constructors handled — with
+  `ahc build --trail` adding the most recent evaluations.
 - **v1.19.1** — Linux works again: the runtime compiles on glibc
   (broken since v1.16), a `System.Process` stdin race is fixed, CI's
   oracle is really GHC 9.4.8, and the first Linux tarball since v1.15

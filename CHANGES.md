@@ -1,5 +1,68 @@
 # AHC Changelog
 
+## v1.20 (unreleased)
+
+**M149 - runtime errors better than GHC's.** GHC's runtime errors are a
+known weakness: `Prelude.head: empty list` points into `base`, `no
+parse` hides the input, and a failed pattern hides the value. AHC now
+matches GHC exactly where a program can observe the error, and goes
+further where it cannot.
+
+- **Caught errors show GHC 9.4.8's exact text.** v1.19.1 differed in
+  8 of 10 probed cases.
+  - `error`, `undefined` and the partial Prelude functions carry
+    GHC's `CallStack` block, with `base`'s internal frames and the
+    user's call site.
+  - Pattern failures raise a real `PatternMatchFail` (new in
+    `Control.Exception`) with GHC's span syntax and wording for every
+    kind: function, guards, case, lambda, let and lazy patterns,
+    multi-way if, missing fields, record update.
+  - Derived `toEnum`/`succ`/`pred`, `Bool`/`Ordering`/`()`'s
+    `Enum`, record selectors, `chr`, `read`'s ambiguous parse,
+    `maximum`/`minimum` at a non-list `Foldable` and
+    `foldr1`/`foldl1` use GHC's texts too.
+  - A `--lib` library's `ahc_last_error` now carries the same GHC
+    text for a pattern failure (it was AHC's own wording).
+- **An uncaught error prints a report on stderr:**
+  - the location, the source lines and a caret;
+  - the failing value, rendered without forcing anything
+    (unevaluated parts are `_`);
+  - the constructors the code handles, and the enclosing function;
+  - for `read` and `!!`, what went in (the input string,
+    the index against the length).
+  - A rethrown error (`throwIO (e :: PatternMatchFail)`) keeps its
+    report.
+- **`ahc build --trail`** ends every uncaught error with the most
+  recent evaluations of the user's functions, newest first, a
+  recursion folded into a count. An entry is one call of a named
+  function, a local `where`/`let` function included, under its own
+  name; lambdas, point-free definitions and class instance methods
+  record nothing. It also covers a plain `divide by zero` and a
+  stack overflow. Without the flag no trail code exists.
+- **Long string literals are built on first use**, not at start-up.
+  Found while benchmarking: the new site literals, built eagerly, made
+  `b_fib` 7% slower through 8% more collections.
+
+Adversarial review: 27 defects found after a green gate, all fixed
+with regression cases (m149_review_*). Gate: full suites in both builds
+and both GC modes, own soak with `AHC_OWN_VERIFY=1`, TSan, 300-seed
+fuzz. Bench against v1.19.1 (best of 5, `--trail` off): b_fib +3%,
+b_strictfold +3%, b_sumfold/b_parsort/b_parmap +2%, b_map and b_strings
+-1%, the rest within 1%; b_bignum +6% is 3 ms on a 53 ms run.
+
+Decided while planning, recorded in EXCLUSIONS:
+- class methods (`div`, `toEnum`, `succ`) are not located, since
+  their instance is chosen after desugar;
+- `show (e :: ErrorCall)` omits the call stack (it needs pattern
+  synonyms; `SomeException`'s `show` has it);
+- missing-field and record-update failures cannot be caught as
+  `RecConError`/`RecUpdError`;
+- `read`'s report shows the input but not the target type;
+- library modules (`Data.Map`, `Data.Array`, `Numeric`,
+  `Data.Char`'s `digitToInt`) keep their own texts, without GHC's
+  call stacks, and derived `Enum` errors lack the call stack GHC
+  points at the deriving clause - both for a later milestone.
+
 ## v1.19.1 (2026-10-12)
 
 **Linux works again.** No Linux release tarball had shipped since
