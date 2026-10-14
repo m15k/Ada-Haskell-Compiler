@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.20 (unreleased)
+## v1.20 (2026-10-14)
 
 **M149 - runtime errors better than GHC's.** GHC's runtime errors are a
 known weakness: `Prelude.head: empty list` points into `base`, `no
