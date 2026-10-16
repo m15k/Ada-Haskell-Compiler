@@ -315,6 +315,20 @@ package body AHC.Typechecker is
          return Core.Printer.Pretty_Scheme (M, Table, Id, Qualify);
       end Type_Str;
 
+      --  `C T` for a message, as GHC prints a constraint: T in
+      --  parentheses when it is an application or a function type
+      --  not already bracketed (M150: was 'Eq Int -> Int').
+      function Constraint_Text (C : Class_Id; T : Real_Type_Id)
+        return String
+      is
+         Img : constant String := Type_Str (T);
+      begin
+         return Table.Text (M.Info (Real_Class_Id (C)).Name) & " "
+           & (if M.Node (Repr (T)).Kind in TApp_T | TFun_T
+                and then Img (Img'First) not in '(' | '['
+              then "(" & Img & ")" else Img);
+      end Constraint_Text;
+
       procedure Unify
         (A, B : Real_Type_Id; Span : Diagnostics.Source_Span)
       is
@@ -1003,8 +1017,7 @@ package body AHC.Typechecker is
                Bag.Add (Diagnostics.Error,
                         Diagnostics.Class_No_Instance, W.C.Span,
                         "no instance for '"
-                        & Table.Text (M.Info (W.C.Class).Name) & " "
-                        & Type_Str (W.C.Arg) & "'");
+                        & Constraint_Text (W.C.Class, W.C.Arg) & "'");
             end if;
             W.Sol := By_Error;
             W_List.Replace_Element (I, W);
@@ -1957,9 +1970,173 @@ package body AHC.Typechecker is
       --  rigid) supplies the context; a bare type variable target
       --  needs C v. With newtypes erased, AHC.Elaborate then binds the
       --  dictionary to the target's.
+      --  Derived-context inference, shared by GND (M147) and stock
+      --  deriving (M150): reduce `C T` to constraints on type
+      --  variables. A constraint equal to the instance's own head is
+      --  satisfied by the (recursive) dictionary itself; any other is
+      --  reduced through its one matching instance (M147 review:
+      --  copying the instance context unreduced ran as $dMISSING).
+      --  The first failure is recorded, not reported: each caller
+      --  words its own message.
+      type Reduce_Failure is (No_Failure, No_Instance, Overlapping, Cyclic);
+
+      type Reduce_State is record
+         Self       : Real_Instance_Id := 1;
+         Self_Class : Class_Id := No_Class;
+         Self_Head  : Real_Type_Id := Real_Type_Id'First;
+         --  GND: never select the instance itself (its head IS the
+         --  representation's) and resolve matching newtypes on
+         --  demand. Stock: the instance may meet itself at other
+         --  arguments (`data N a = N (N [a])`).
+         For_GND    : Boolean := False;
+         Span       : Diagnostics.Source_Span;
+         Ctx        : Constraint_Vectors.Vector;
+         Failure    : Reduce_Failure := No_Failure;
+         Fail_Class : Class_Id := No_Class;
+         Fail_Type  : Type_Id := No_Type;
+      end record;
+
       procedure Resolve_GND (II : Real_Instance_Id; Depth : Natural);
 
       GND_Active : Instance_Id_Vectors.Vector;   --  being resolved
+
+      function Spine_Is_Var (T : Real_Type_Id) return Boolean is
+         N : constant Type_Node := M.Node (Repr (T));
+      begin
+         case N.Kind is
+            when TVar_T => return True;
+            when TApp_T => return Spine_Is_Var (N.T_Fun);
+            when others => return False;
+         end case;
+      end Spine_Is_Var;
+
+      procedure Reduce_Context
+        (S : in out Reduce_State; C : Class_Id; T : Real_Type_Id;
+         D : Natural; Depth : Natural)
+      is
+         Hits : Natural := 0;
+         Pending : Boolean := False;
+         Hit : Real_Instance_Id := S.Self;
+         Hit_Args : Type_Id_Vectors.Vector;
+         Hit_Ids : Instance_Id_Vectors.Vector;
+
+         procedure Fail (K : Reduce_Failure) is
+         begin
+            S.Failure := K;
+            S.Fail_Class := C;
+            S.Fail_Type := Type_Id (T);
+         end Fail;
+      begin
+         if S.Failure /= No_Failure or else D > 40 then
+            return;
+         elsif M.Node (Repr (T)).Kind = TVar_T
+           or else Spine_Is_Var (T)
+         then
+            --  A type variable, or one applied (`Eq (f a)` for
+            --  `newtype Wrap f a = Wrap (f a)`), cannot be reduced:
+            --  it joins the context as GHC infers it.
+            for Old of S.Ctx loop
+               if Old.Class = C and then Same_Arg (Old.Arg, T) then
+                  return;
+               end if;
+            end loop;
+            S.Ctx.Append (Constraint'(Class => C, Arg => T,
+                                      Span => S.Span));
+            return;
+         elsif C = S.Self_Class and then Same_Arg (T, S.Self_Head) then
+            return;
+         end if;
+         for J of M.Info (Real_Class_Id (C)).Instances loop
+            if J /= S.Self or else not S.For_GND then
+               --  An unresolved GND instance still matches by its
+               --  head TyCon (Haskell 2010 rule), so match FIRST and
+               --  resolve only an instance that matches: resolving
+               --  every one met here reached back into instances in
+               --  progress and reported false cycles.
+               if S.For_GND
+                 and then M.Info (J).Is_GND
+                 and then M.Info (J).GND_Target = No_Type
+                 and then not GND_Active.Contains (J)
+               then
+                  declare
+                     A0 : Type_Id_Vectors.Vector;
+                  begin
+                     if Inst_Match."=" (Match_TC (M, Env, M.Info (J), T, A0),
+                                        Inst_Match.Matched)
+                     then
+                        Resolve_GND (J, Depth + 1);
+                     end if;
+                  end;
+               end if;
+               declare
+                  A : Type_Id_Vectors.Vector;
+                  MR : constant Inst_Match.Match_Result :=
+                    Match_TC (M, Env, M.Info (J), T, A);
+               begin
+                  if Inst_Match."=" (MR, Inst_Match.Matched)
+                    and then M.Info (J).Is_GND
+                    and then GND_Active.Contains (J)
+                    and then M.Info (J).GND_Target = No_Type
+                  then
+                     --  A matching newtype instance still being
+                     --  resolved: A = A B, B = B A (M147 review).
+                     Fail (Cyclic);
+                     return;
+                  elsif Inst_Match."=" (MR, Inst_Match.Matched) then
+                     Hits := Hits + 1;
+                     Hit := J;
+                     Hit_Args := A;
+                     Hit_Ids.Append (J);
+                  elsif Inst_Match."=" (MR, Inst_Match.Undecided)
+                    and then M.Info (J).Overlap /= Incoherent
+                    and then not Only_Apart_Vars (T)
+                  then
+                     Pending := True;
+                  end if;
+               end;
+            end if;
+         end loop;
+         if Hits > 1 then
+            declare
+               P : constant Natural := Inst_Match.Pick (M, Env, Hit_Ids);
+            begin
+               if P /= 0 then
+                  Hit := Real_Instance_Id (P);
+                  declare
+                     Ign : constant Inst_Match.Match_Result :=
+                       Match_TC (M, Env, M.Info (Hit), T, Hit_Args);
+                     pragma Unreferenced (Ign);
+                  begin
+                     Hits := 1;
+                  end;
+               end if;
+            end;
+         end if;
+         if Hits = 1 and then M.Info (Hit).Overlap = Incoherent then
+            Pending := False;
+         end if;
+         if Hits = 0 and then not Pending then
+            Fail (No_Instance);
+            return;
+         elsif Hits > 1 or else Pending then
+            Fail (Overlapping);
+            return;
+         end if;
+         declare
+            HI : constant Instance_Info := M.Info (Hit);
+            Map : TyVar_Type_Maps.Map;
+         begin
+            for VI in 1 .. HI.Head_Vars.Last_Index loop
+               if VI <= Hit_Args.Last_Index then
+                  Map.Include (HI.Head_Vars (VI), Hit_Args.Element (VI));
+               end if;
+            end loop;
+            for IC of HI.Context loop
+               Reduce_Context (S, IC.Class, Subst_TyVars (IC.Arg, Map),
+                               D + 1, Depth);
+            end loop;
+         end;
+      end Reduce_Context;
 
       procedure Resolve_GND_Now (II : Real_Instance_Id; Depth : Natural) is
          Inst : constant Instance_Info := M.Info (II);
@@ -1976,21 +2153,11 @@ package body AHC.Typechecker is
          Head_T : Real_Type_Id := TCon (Core.TyCon_Id (TC));
          Ctx : Constraint_Vectors.Vector;
          Failed : Boolean := False;
+         S : Reduce_State;
 
          function Name return String is
            (Table.Text (M.Info (Cl).Name) & "' for '"
             & Table.Text (Names.Real_Name_Id (TCI.Name)));
-
-         --  `C T` for a message: parenthesized only when T is an
-         --  application or function not already bracketed.
-         function Shown (C : Class_Id; T : Real_Type_Id) return String is
-            Img : constant String := Type_Str (T);
-         begin
-            return Table.Text (M.Info (Real_Class_Id (C)).Name) & " "
-              & (if M.Node (Repr (T)).Kind in TApp_T | TFun_T
-                   and then Img (Img'First) not in '(' | '['
-                 then "(" & Img & ")" else Img);
-         end Shown;
 
          function Occurs (V : Real_TyVar_Id; T : Real_Type_Id)
            return Boolean
@@ -2007,16 +2174,6 @@ package body AHC.Typechecker is
             end case;
          end Occurs;
 
-         function Spine_Is_Var (T : Real_Type_Id) return Boolean is
-            N : constant Type_Node := M.Node (Repr (T));
-         begin
-            case N.Kind is
-               when TVar_T => return True;
-               when TApp_T => return Spine_Is_Var (N.T_Fun);
-               when others => return False;
-            end case;
-         end Spine_Is_Var;
-
          procedure Fail (Msg : String) is
          begin
             if not Failed then
@@ -2026,127 +2183,6 @@ package body AHC.Typechecker is
             Failed := True;
          end Fail;
 
-         --  Reduce `C T` to constraints on type variables (GHC's
-         --  derived-context inference): a constraint equal to this
-         --  instance's own head is satisfied by the (recursive)
-         --  dictionary itself - `newtype L = L [L] deriving Eq` - and
-         --  any other is reduced through its one matching instance
-         --  (M147 review: copying the instance context unreduced ran
-         --  as $dMISSING).
-         procedure Reduce (C : Class_Id; T : Real_Type_Id; D : Natural) is
-            Hits : Natural := 0;
-            Pending : Boolean := False;
-            Hit : Real_Instance_Id := II;
-            Hit_Args : Type_Id_Vectors.Vector;
-            Hit_Ids : Instance_Id_Vectors.Vector;
-         begin
-            if Failed or else D > 40 then
-               return;
-            elsif M.Node (Repr (T)).Kind = TVar_T
-              or else Spine_Is_Var (T)
-            then
-               --  A type variable, or one applied (`Eq (f a)` for
-               --  `newtype Wrap f a = Wrap (f a)`), cannot be reduced:
-               --  it joins the context as GHC infers it.
-               for Old of Ctx loop
-                  if Old.Class = C and then Same_Arg (Old.Arg, T) then
-                     return;
-                  end if;
-               end loop;
-               Ctx.Append (Constraint'(Class => C, Arg => T,
-                                       Span => Inst.Span));
-               return;
-            elsif C = Class_Id (Cl) and then Same_Arg (T, Head_T) then
-               return;
-            end if;
-            for J of M.Info (Real_Class_Id (C)).Instances loop
-               if J /= II then
-                  --  An unresolved GND instance still matches by its
-                  --  head TyCon (Haskell 2010 rule), so match FIRST and
-                  --  resolve only an instance that matches: resolving
-                  --  every one met here reached back into instances in
-                  --  progress and reported false cycles.
-                  if M.Info (J).Is_GND and then M.Info (J).GND_Target = No_Type
-                    and then not GND_Active.Contains (J)
-                  then
-                     declare
-                        A0 : Type_Id_Vectors.Vector;
-                     begin
-                        if Inst_Match."=" (Match_TC (M, Env, M.Info (J), T, A0),
-                                           Inst_Match.Matched)
-                        then
-                           Resolve_GND (J, Depth + 1);
-                        end if;
-                     end;
-                  end if;
-                  declare
-                     A : Type_Id_Vectors.Vector;
-                     MR : constant Inst_Match.Match_Result :=
-                       Match_TC (M, Env, M.Info (J), T, A);
-                  begin
-                     if Inst_Match."=" (MR, Inst_Match.Matched)
-                       and then M.Info (J).Is_GND
-                       and then GND_Active.Contains (J)
-                       and then M.Info (J).GND_Target = No_Type
-                     then
-                        --  A matching newtype instance still being
-                        --  resolved: A = A B, B = B A (M147 review).
-                        Fail ("its representation is cyclic");
-                        return;
-                     elsif Inst_Match."=" (MR, Inst_Match.Matched) then
-                        Hits := Hits + 1;
-                        Hit := J;
-                        Hit_Args := A;
-                        Hit_Ids.Append (J);
-                     elsif Inst_Match."=" (MR, Inst_Match.Undecided)
-                       and then M.Info (J).Overlap /= Incoherent
-                       and then not Only_Apart_Vars (T)
-                     then
-                        Pending := True;
-                     end if;
-                  end;
-               end if;
-            end loop;
-            if Hits > 1 then
-               declare
-                  P : constant Natural := Inst_Match.Pick (M, Env, Hit_Ids);
-               begin
-                  if P /= 0 then
-                     Hit := Real_Instance_Id (P);
-                     declare
-                        Ign : constant Inst_Match.Match_Result :=
-                          Match_TC (M, Env, M.Info (Hit), T, Hit_Args);
-                        pragma Unreferenced (Ign);
-                     begin
-                        Hits := 1;
-                     end;
-                  end if;
-               end;
-            end if;
-            if Hits = 1 and then M.Info (Hit).Overlap = Incoherent then
-               Pending := False;
-            end if;
-            if Hits = 0 and then not Pending then
-               Fail ("no instance '" & Shown (C, T) & "'");
-               return;
-            elsif Hits > 1 or else Pending then
-               Fail ("overlapping instances for '" & Shown (C, T) & "'");
-               return;
-            end if;
-            declare
-               HI : constant Instance_Info := M.Info (Hit);
-               Map : TyVar_Type_Maps.Map;
-            begin
-               for VI in 1 .. HI.Head_Vars.Last_Index loop
-                  if VI <= Hit_Args.Last_Index then
-                     Map.Include (HI.Head_Vars (VI), Hit_Args.Element (VI));
-                  end if;
-               end loop;
-               for IC of HI.Context loop
-                  Reduce (IC.Class, Subst_TyVars (IC.Arg, Map), D + 1);
-               end loop;
-            end;
-         end Reduce;
       begin
          GND_Active.Append (II);
          if Ctor_Class then
@@ -2189,7 +2225,29 @@ package body AHC.Typechecker is
               (Kind => TVar_T, Tv => V)));
          end loop;
 
-         Reduce (Class_Id (Cl), Target, 0);
+         S.Self := II;
+         S.Self_Class := Class_Id (Cl);
+         S.Self_Head := Head_T;
+         S.For_GND := True;
+         S.Span := Inst.Span;
+         Reduce_Context (S, Class_Id (Cl), Target, 0, Depth);
+         case S.Failure is
+            when No_Failure =>
+               null;
+            when No_Instance =>
+               Fail ("no instance '"
+                     & Constraint_Text (S.Fail_Class,
+                                        Real_Type_Id (S.Fail_Type))
+                     & "'");
+            when Overlapping =>
+               Fail ("overlapping instances for '"
+                     & Constraint_Text (S.Fail_Class,
+                                        Real_Type_Id (S.Fail_Type))
+                     & "'");
+            when Cyclic =>
+               Fail ("its representation is cyclic");
+         end case;
+         Ctx := S.Ctx;
 
          GND_Active.Delete_Last;
          if Failed then
@@ -2215,12 +2273,187 @@ package body AHC.Typechecker is
          end if;
       end Resolve_GND;
 
+      --  M150 D2: a stock-derived instance's context is inferred from
+      --  its constructors' fields, as GHC infers it - a phantom
+      --  parameter needs nothing, and a field without an instance is a
+      --  compile error at the deriving clause's class name, never a
+      --  run-time "unsupported field type". Contexts restart empty (the
+      --  renamer's one-per-variable placeholders are dropped) and grow
+      --  to the least fixpoint, so mutually recursive types settle
+      --  (`data E a = EZ | ES a (O a)`, `data O a = OS a (E a)`). Runs
+      --  after GND resolution, which reads the placeholders (deviation
+      --  2). Field types are substituted onto the instance's own
+      --  Head_Vars: a context mentions only those, and they are what
+      --  Only_Apart_Vars recognises as rigid instance variables.
+      procedure Infer_Derived_Contexts is
+
+         --  GHC's speakNth: first .. sixth, then 7th, 21st, 22nd ...
+         function Ordinal (N : Positive) return String is
+            Img : constant String := Positive'Image (N);
+            Num : constant String := Img (Img'First + 1 .. Img'Last);
+         begin
+            case N is
+               when 1 => return "first";
+               when 2 => return "second";
+               when 3 => return "third";
+               when 4 => return "fourth";
+               when 5 => return "fifth";
+               when 6 => return "sixth";
+               when others =>
+                  return Num & (if N <= 20 then "th"
+                                elsif N mod 10 = 1 then "st"
+                                elsif N mod 10 = 2 then "nd"
+                                elsif N mod 10 = 3 then "rd"
+                                else "th");
+            end case;
+         end Ordinal;
+
+         function Is_Inferred (II : Real_Instance_Id) return Boolean is
+            Inst : constant Instance_Info := M.Info (II);
+         begin
+            return Inst.Is_Derived
+              and then Inst.Stock_Derive = No_Stock_Derive
+              and then not Inst.Is_GND
+              and then Inst.Head /= No_TyCon
+              and then not M.Info (Real_TyCon_Id (Inst.Head)).Cons.Is_Empty;
+         end Is_Inferred;
+
+         function Same_Context (A, B : Constraint_Vectors.Vector)
+           return Boolean is
+         begin
+            if A.Last_Index /= B.Last_Index then
+               return False;
+            end if;
+            for I in 1 .. A.Last_Index loop
+               if A (I).Class /= B (I).Class
+                 or else not Same_Arg (A (I).Arg, B (I).Arg)
+               then
+                  return False;
+               end if;
+            end loop;
+            return True;
+         end Same_Context;
+
+         procedure Report_Missing
+           (II : Real_Instance_Id; S : Reduce_State; K : Positive;
+            Con : Names.Name_Id; FT, Head_T : Real_Type_Id)
+         is
+            Inst : constant Instance_Info := M.Info (II);
+         begin
+            if Natural (II) <= Inst_Origins.Last_Index then
+               Bag.Set_Origin (Inst_Origins (Natural (II)));
+            end if;
+            Bag.Add
+              (Diagnostics.Error, Diagnostics.Class_No_Instance, Inst.Span,
+               (if S.Failure = Overlapping
+                then "overlapping instances for '"
+                else "no instance for '")
+               & Constraint_Text (S.Fail_Class, Real_Type_Id (S.Fail_Type))
+               & "', arising from the " & Ordinal (K) & " field of '"
+               & Table.Text (Names.Real_Name_Id (Con))
+               & "' (type '" & Type_Str (FT) & "'), when deriving '"
+               & Constraint_Text (Inst.Of_Class, Head_T) & "'");
+         end Report_Missing;
+
+         procedure Infer_One
+           (II : Real_Instance_Id; Report : Boolean;
+            Changed : in out Boolean)
+         is
+            Inst : constant Instance_Info := M.Info (II);
+            TCI : constant TyCon_Info := M.Info (Real_TyCon_Id (Inst.Head));
+            Head_T : Real_Type_Id := TCon (Inst.Head);
+            Vars_T : Type_Id_Vectors.Vector;
+            S : Reduce_State;
+         begin
+            for HV of Inst.Head_Vars loop
+               declare
+                  VT : constant Real_Type_Id := M.Add (Type_Node'
+                    (Kind => TVar_T, Tv => Real_TyVar_Id (HV)));
+               begin
+                  Vars_T.Append (Type_Id (VT));
+                  Head_T := Make_App (Head_T, VT);
+               end;
+            end loop;
+            S.Self := II;
+            S.Self_Class := Inst.Of_Class;
+            S.Self_Head := Head_T;
+            S.For_GND := False;
+            S.Span := Inst.Span;
+            for DCI of TCI.Cons loop
+               declare
+                  DCInfo : constant DataCon_Info :=
+                    M.Info (Real_DataCon_Id (DCI));
+                  Sch : constant Scheme :=
+                    M.Node (Real_Scheme_Id (DCInfo.Con_Scheme));
+                  Map : TyVar_Type_Maps.Map;
+                  T : Real_Type_Id := Real_Type_Id (Sch.S_Body);
+                  K : Natural := 0;
+               begin
+                  for I in 1 .. Natural'Min (Sch.Tvs.Last_Index,
+                                             Vars_T.Last_Index)
+                  loop
+                     Map.Include (Real_TyVar_Id (Sch.Tvs.Element (I)),
+                                  Real_Type_Id (Vars_T.Element (I)));
+                  end loop;
+                  while M.Node (T).Kind = TFun_T loop
+                     K := K + 1;
+                     declare
+                        FT : constant Real_Type_Id :=
+                          Subst_TyVars (M.Node (T).From, Map);
+                     begin
+                        Reduce_Context (S, Inst.Of_Class, FT, 0, 0);
+                        if S.Failure /= No_Failure then
+                           if Report then
+                              Report_Missing (II, S, K, DCInfo.Name, FT,
+                                              Head_T);
+                           end if;
+                           return;
+                        end if;
+                     end;
+                     T := M.Node (T).To;
+                  end loop;
+               end;
+            end loop;
+            if not Same_Context (S.Ctx, Inst.Context) then
+               M.Instances (II).Context := S.Ctx;
+               Changed := True;
+            end if;
+         end Infer_One;
+
+         Changed : Boolean := True;
+         Rounds : Natural := 0;
+      begin
+         for II in 1 .. M.Last_Instance loop
+            if Is_Inferred (Real_Instance_Id (II)) then
+               M.Instances (Real_Instance_Id (II)).Context.Clear;
+            end if;
+         end loop;
+         while Changed and then Rounds < 50 loop
+            Changed := False;
+            Rounds := Rounds + 1;
+            for II in 1 .. M.Last_Instance loop
+               if Is_Inferred (Real_Instance_Id (II)) then
+                  Infer_One (Real_Instance_Id (II), False, Changed);
+               end if;
+            end loop;
+         end loop;
+         --  One reporting pass over the settled contexts: the first
+         --  missing field instance of each derived instance.
+         for II in 1 .. M.Last_Instance loop
+            if Is_Inferred (Real_Instance_Id (II)) then
+               Infer_One (Real_Instance_Id (II), True, Changed);
+            end if;
+         end loop;
+      end Infer_Derived_Contexts;
+
    begin
       --  Before any constraint is solved: GND instances get their heads
       --  and contexts (M147).
       for II in 1 .. M.Last_Instance loop
          Resolve_GND (Real_Instance_Id (II), 0);
       end loop;
+      --  M150 D2: then the stock-derived contexts, from the fields.
+      Infer_Derived_Contexts;
 
       for GI in 1 .. M.Top_Binds.Last_Index loop
          for B of M.Top_Binds (GI).Binds loop
@@ -2341,9 +2574,9 @@ package body AHC.Typechecker is
                                     Diagnostics.Class_No_Instance,
                                     Inst.Span,
                                     "no instance for '"
-                                    & Table.Text
-                                        (M.Info (W_List (I).C.Class).Name)
-                                    & " " & Shown
+                                    & Constraint_Text
+                                        (W_List (I).C.Class,
+                                         W_List (I).C.Arg)
                                     & "', required by the superclasses"
                                     & " of an instance declaration"
                                     & AMP_Hint (Inst.Of_Class, Missing,

@@ -1,0 +1,7 @@
+tests/golden/check_m150_derive_errors.hs:3:27: error: no instance for 'Show F', arising from the second field of 'T' (type 'F'), when deriving 'Show T'
+tests/golden/check_m150_derive_errors.hs:5:30: error: no instance for 'Eq F', arising from the first field of 'U' (type '[F]'), when deriving 'Eq U'
+tests/golden/check_m150_derive_errors.hs:7:41: error: no instance for 'Eq (Int -> Int)', arising from the first field of 'R' (type 'Int -> Int'), when deriving 'Eq R'
+tests/golden/check_m150_derive_errors.hs:9:28: error: no instance for 'Eq F', arising from the second field of 'W' (type 'F'), when deriving 'Eq (W a)'
+tests/golden/check_m150_derive_errors.hs:9:32: error: no instance for 'Ord F', arising from the second field of 'W' (type 'F'), when deriving 'Ord (W a)'
+tests/golden/check_m150_derive_errors.hs:11:41: error: no instance for 'Read F', arising from the third field of 'Q' (type 'Maybe F'), when deriving 'Read Q'
+tests/golden/check_m150_derive_errors.hs:13:30: error: no instance for 'Show (IO ())', arising from the first field of 'K' (type 'IO ()'), when deriving 'Show K'

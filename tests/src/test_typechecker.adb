@@ -222,6 +222,19 @@ package body Test_Typechecker is
         (TC ("swap (a, b) = (b, a)"),
          "swap :: (a, b) -> (b, a)",
          "tuple constructor scheme");
+      --  M150 D2: derived contexts are inferred from the fields.
+      Check_Equal
+        (TC ("data F = F" & ASCII.LF
+             & "data T = T Int F deriving Show"),
+         "!errors: 1",
+         "derived Show without a field instance is a compile error");
+
+      Check_Equal
+        (TC ("data Ph a = Ph Int deriving Eq" & ASCII.LF
+             & "same = Ph 1 == (Ph 1 :: Ph (Int -> Int))"),
+         "same :: Bool",
+         "a phantom parameter needs no Eq");
+
    end Run;
 
 end Test_Typechecker;
