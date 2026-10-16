@@ -1021,14 +1021,12 @@ procedure AHC_Main is
                      L_Annos, L_Preds, Reg'Unchecked_Access);
                end if;
                if not Bag.Has_Errors then
-                  AHC.Desugar.Desugar_Module
-                    (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
-                     L_Annos, L_Preds,
-                     Warn_Matches => Is_Root,
+                  declare
+                     use type AHC.Core.Class_Id;
                      --  Runtime failure sites (M149) for the user's
                      --  own modules; a library module's failures are
                      --  base's in GHC, so they keep the plain text.
-                     Ctx =>
+                     Site_Ctx : constant AHC.Sites.Site_Context :=
                        --  REPL modules too (only they carry
                        --  OPTIONS_AHC_SHADOW): their file is a generated
                        --  temp file, which a report must not leak.
@@ -1055,7 +1053,38 @@ procedure AHC_Main is
                                 Ada.Strings.Unbounded.To_Unbounded_String
                                   (AHC.Sites.Normalise
                                      (Ada.Strings.Unbounded.To_String
-                                        (L.Path))))));
+                                        (L.Path)))));
+                  begin
+                     AHC.Desugar.Desugar_Module
+                       (L.Ref.all, L_Res, Table, Bag, M, Env, Sigs,
+                        L_Annos, L_Preds,
+                        Warn_Matches => Is_Root,
+                        Ctx => Site_Ctx);
+                     --  M150 D3: a derived Enum of this module raises
+                     --  its succ/pred/toEnum errors with GHC's call
+                     --  stack at the deriving clause's class name (the
+                     --  instance's span since Task D2). A library
+                     --  module's stays plain: GHC's is base's.
+                     if AHC.Sites.Enabled (Site_Ctx) then
+                        for II in I0 + 1 .. Natural (M.Last_Instance) loop
+                           declare
+                              Id : constant AHC.Core.Real_Instance_Id :=
+                                AHC.Core.Real_Instance_Id (II);
+                              Inst : constant AHC.Core.Instance_Info :=
+                                M.Info (Id);
+                           begin
+                              if Inst.Is_Derived
+                                and then Inst.Of_Class = Env.Enum_Cl
+                              then
+                                 M.Instances (Id).Derive_Loc :=
+                                   AHC.Names.Name_Id (Table.Intern
+                                     (AHC.Sites.Call_Stack
+                                        (Site_Ctx, "error", Inst.Span)));
+                              end if;
+                           end;
+                        end loop;
+                     end if;
+                  end;
                end if;
                if not L.Ref.Is_Library then
                   User_Units.Append

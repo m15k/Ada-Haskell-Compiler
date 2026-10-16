@@ -722,15 +722,47 @@ package body AHC.Prelude_Core is
       --  toEnum as a fresh lambda: eq-chain over tags.
       --  The Prelude's own enumerations, whose Enum errors GHC words
       --  "Prelude.Enum.T.op: bad argument".
+      --  error Msg, or (M150 D3) primErrorLoc Msg Loc: the ErrorCall
+      --  then shows GHC's call stack at the deriving clause.
+      function Err_At (Msg : Real_Expr_Id; Loc : Names.Name_Id)
+        return Real_Expr_Id is
+      begin
+         if Names."=" (Loc, Names.No_Name) then
+            declare
+               Fn : constant Real_Expr_Id := V (Env.Error_V);
+            begin
+               return Ap (Fn, Msg);
+            end;
+         end if;
+         declare
+            Fn : constant Real_Expr_Id := V (Lookup ("primErrorLoc"));
+            L : constant Real_Expr_Id :=
+              Str (Table.Text (Names.Real_Name_Id (Loc)));
+         begin
+            return Ap2 (Fn, Msg, L);
+         end;
+      end Err_At;
+
+      function Err_At (Msg : String; Loc : Names.Name_Id)
+        return Real_Expr_Id
+      is
+         S : constant Real_Expr_Id := Str (Msg);
+      begin
+         return Err_At (S, Loc);
+      end Err_At;
+
       function Is_Wired_Enum (TC : Real_TyCon_Id) return Boolean is
         (TyCon_Id (TC) = Env.Bool_TC or else TyCon_Id (TC) = Env.Ordering_TC
          or else TyCon_Id (TC) = Env.Unit_TC);
 
       --  GHC 9.4.8's texts (M149): the Prelude's own enumerations say
       --  "Prelude.Enum.T.toEnum: bad argument"; a derived one names the
-      --  tag and the range. (GHC also prints a call stack at the
-      --  deriving clause there, which AHC does not - EXCLUSIONS.)
-      function To_E_Lam (TC : Real_TyCon_Id) return Real_Expr_Id is
+      --  tag and the range. A derived one in a user module raises
+      --  through primErrorLoc with GHC's call stack at the deriving
+      --  clause (M150).
+      function To_E_Lam
+        (TC : Real_TyCon_Id; Loc : Names.Name_Id := Names.No_Name)
+         return Real_Expr_Id is
          I : constant Real_Var_Id := Fresh ("i");
          N : constant Positive := M.Info (TC).Cons.Last_Index;
          Name : constant String :=
@@ -757,9 +789,8 @@ package body AHC.Prelude_Core is
                  Str ("toEnum{" & Name & "}: tag (");
                Cat2 : constant Real_Expr_Id := V (Lookup ("++"));
                Msg : constant Real_Expr_Id := Ap2 (Cat2, Head_S, Rest);
-               Err_Fn : constant Real_Expr_Id := V (Env.Error_V);
             begin
-               Body_E := Ap (Err_Fn, Msg);
+               Body_E := Err_At (Msg, Loc);
             end;
          end if;
          for K in reverse 1 .. N loop
@@ -779,6 +810,9 @@ package body AHC.Prelude_Core is
          TC : constant Real_TyCon_Id :=
            Real_TyCon_Id (M.Info (II).Head);
          N : constant Positive := M.Info (TC).Cons.Last_Index;
+         --  M150 D3: GHC's call stack at the deriving clause, or
+         --  No_Name (library module: plain error, as before).
+         Loc : constant Names.Name_Id := M.Info (II).Derive_Loc;
          Ms : Expr_Id_Vectors.Vector;
 
          --  GHC 9.4.8's texts (M149 review): the Prelude's own types
@@ -790,13 +824,13 @@ package body AHC.Prelude_Core is
          function Succ_F (Tag : Positive) return Real_Expr_Id
          is (if Tag < N then ConE (M.Info (TC).Cons (Tag + 1))
              elsif Wired then Err ("Prelude.Enum." & Name & ".succ: bad argument")
-             else Err ("succ{" & Name & "}: tried to take `succ' of last tag"
-                       & " in enumeration"));
+             else Err_At ("succ{" & Name & "}: tried to take `succ' of last tag"
+                          & " in enumeration", Loc));
          function Pred_F (Tag : Positive) return Real_Expr_Id
          is (if Tag > 1 then ConE (M.Info (TC).Cons (Tag - 1))
              elsif Wired then Err ("Prelude.Enum." & Name & ".pred: bad argument")
-             else Err ("pred{" & Name & "}: tried to take `pred' of first tag"
-                       & " in enumeration"));
+             else Err_At ("pred{" & Name & "}: tried to take `pred' of first tag"
+                          & " in enumeration", Loc));
       begin
          declare
             X : constant Real_Var_Id := Fresh ("x");
@@ -808,7 +842,7 @@ package body AHC.Prelude_Core is
          begin
             Ms.Append (Lam (X, Tag_Case (TC, X, Pred_F'Access)));
          end;
-         Ms.Append (To_E_Lam (TC));
+         Ms.Append (To_E_Lam (TC, Loc));
          declare
             X : constant Real_Var_Id := Fresh ("x");
          begin
