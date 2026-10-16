@@ -1,0 +1,15 @@
+5
+Just 10
+'q'
+one
+two
+[1,4,9]
+Just [1,2,3]
+[Right 4,Right 5]
+[Just 'c']
+(6,[0,2,9])
+(6,[5,6,0])
+(1,Just (0,'z'))
+("abc",fromList [(1,0),(2,2)])
+Just [1,2]
+Left 1

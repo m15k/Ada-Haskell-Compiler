@@ -1,0 +1,38 @@
+Just (Just 3)
+Just Nothing
+[Just 1,Just 2]
+Right (Just 'x')
+21
+Just 42
+Left "bad -3"
+Right [1,2,3]
+Just (Right 3)
+Just (Left "no")
+Just (fromList [(1,10),(2,20),(3,30)])
+Nothing
+10
+20
+30
+[fromList [(1,1),(2,3)],fromList [(1,2),(2,3)]]
+Just (Node (Node Leaf 1 Leaf) 2 (Node Leaf 3 Leaf))
+[Node Leaf 1 (Node Leaf 2 Leaf),Node Leaf 1 (Node Leaf 20 Leaf),Node Leaf 10 (Node Leaf 2 Leaf),Node Leaf 10 (Node Leaf 20 Leaf)]
+Just (Node (Node Leaf 1 Leaf) 2 (Node Leaf 3 Leaf))
+(6,3,3)
+("k",2)
+(1,5,True)
+[("k",1),("k",2)]
+Just ('a',True)
+Nothing
+[2,4,6]
+[Identity 3,Identity (-3)]
+(7,Identity "True")
+array (0,2) [(0,2),(1,4),(2,6)]
+(6,3,3)
+Just (array (0,2) [(0,1),(1,2),(2,3)])
+Nothing
+visit 1
+visit 2
+visit 3
+[2,3,4]
+ab
+bcd

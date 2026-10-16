@@ -1,0 +1,3 @@
+Main.hs:7:1: error: no instance for 'Applicative Parser', required by the superclasses of an instance declaration
+  hint: add  instance Applicative Parser where
+               pure = return; (<*>) = ap

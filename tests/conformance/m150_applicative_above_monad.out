@@ -1,0 +1,14 @@
+Just (1,'a')
+[(1,'x'),(1,'y'),(2,'x'),(2,'y')]
+Right 42
+(Just 2,Nothing)
+[1,1,2,2]
+Just 5
+Just "zz"
+effect
+(1,True)
+21
+(1,200)
+Box 42
+Box 6
+(Box 'b',Box 'a')
