@@ -7,7 +7,7 @@
 --
 -- ABSENT-NAMES: MonadFail lex floatRadix floatDigits floatRange decodeFloat
 --   encodeFloat exponent significand scaleFloat isDenormalized isIEEE
--- NOT-METHODS: <$ divMod quotRem mapM sequence sequenceA
+-- NOT-METHODS: <$ divMod quotRem
 --   (GHC class methods that are plain functions here; EXCLUSIONS)
 -- (the lines above are read by scripts/check_prelude_exports.sh). GHC
 -- exports these, AHC's Prelude does not define them:
@@ -429,17 +429,19 @@ unlines :: [String] -> String
 unlines [] = ""
 unlines (l : ls) = l ++ "\n" ++ unlines ls
 
-mapM :: Monad m => (a -> m b) -> [a] -> m [b]
-mapM _ [] = return []
-mapM f (x : xs) = f x >>= \y -> mapM f xs >>= \ys -> return (y : ys)
+-- The list instance's mapM (M150): the Report's direct monadic
+-- recursion, one bind per element, where traverse goes through <*>
+-- (two binds in IO). Equal to traverse for every lawful monad.
+mapMListR_ :: Monad m => (a -> m b) -> [a] -> m [b]
+mapMListR_ _ [] = return []
+mapMListR_ f (x : xs) =
+  f x >>= \y -> mapMListR_ f xs >>= \ys -> return (y : ys)
 
 mapMList__ :: Monad m => (a -> m b) -> [a] -> m ()
 mapMList__ f xs = go xs
   where go [] = return ()
         go (y : ys) = f y >> go ys
 
-sequence :: Monad m => [m a] -> m [a]
-sequence ms = mapM (\m -> m) ms
 
 sequenceList__ :: Monad m => [m a] -> m ()
 sequenceList__ [] = return ()
@@ -1403,22 +1405,23 @@ mapM_ f t = mapMList__ f (toListF_ t)
 sequence_ :: (Foldable t, Monad m) => t (m a) -> m ()
 sequence_ t = sequenceList__ (toListF_ t)
 
--- Traversable (base-compat beyond the 2010 Report, like Applicative
--- and Semigroup): `traverse` and `sequenceA` only. The Report's
--- `mapM`/`sequence` stay the list-specific Prelude functions above, so
--- this class does not carry them - the divergence is in EXCLUSIONS.
-class Functor t => Traversable t where
+-- Traversable, base's shape (M150): mapM and sequence are methods, so
+-- they work over every Traversable, not only lists. Minimal definition
+-- as base's: traverse | sequenceA.
+class (Functor t, Foldable t) => Traversable t where
   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
-
--- GHC has sequenceA as a second method whose default is `traverse id`
--- (and traverse's default is `sequenceA . fmap f`). One method and one
--- function are indistinguishable to a user of the class, and they do
--- not need mutually recursive defaults to typecheck.
-sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
-sequenceA xs = traverse id xs
+  traverse f t = sequenceA (fmap f t)
+  sequenceA :: Applicative f => t (f a) -> f (t a)
+  sequenceA t = traverse id t
+  mapM :: Monad m => (a -> m b) -> t a -> m (t b)
+  mapM f t = traverse f t
+  sequence :: Monad m => t (m a) -> m (t a)
+  sequence t = sequenceA t
 
 instance Traversable [] where
   traverse f = foldrList_ (\x acc -> pure (:) <*> f x <*> acc) (pure [])
+  mapM f xs = mapMListR_ f xs
+  sequence ms = mapMListR_ id ms
 
 instance Traversable Maybe where
   traverse _ Nothing = pure Nothing
@@ -1427,6 +1430,19 @@ instance Traversable Maybe where
 instance Traversable (Either a) where
   traverse _ (Left e) = pure (Left e)
   traverse f (Right x) = pure Right <*> f x
+
+-- Pairs over their second component, as base: fmap (+1) ("k", 1) is
+-- ("k", 2) and length (x, y) is 1.
+instance Functor ((,) a) where
+  fmap f (x, y) = (x, f y)
+
+instance Foldable ((,) a) where
+  foldr f z (_, y) = f y z
+  null _ = False
+  length _ = 1
+
+instance Traversable ((,) a) where
+  traverse f (x, y) = fmap (\y' -> (x, y')) (f y)
 
 
 -- Fixed-width integers (Data.Int / Data.Word, M139) -----------------
