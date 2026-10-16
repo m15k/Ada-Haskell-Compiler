@@ -4,3 +4,5 @@ hello, C!
 sumTo(100) = 5050
 boom(7) failed: error: boom: 7
 square(6) = 36 (still alive)
+wordPred(0) = 18446744073709551615
+wordPred(UINT64_MAX) = 18446744073709551614

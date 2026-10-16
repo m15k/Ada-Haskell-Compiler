@@ -24,3 +24,8 @@ sumTo n = return (sum [1 .. n])
 foreign export ccall boom :: Int -> Int
 boom :: Int -> Int
 boom n = if n > 0 then error ("boom: " ++ show n) else n
+
+-- Word is its own type (M150) and crosses as uint64_t, as Word64.
+foreign export ccall wordPred :: Word -> Word
+wordPred :: Word -> Word
+wordPred w = w - 1

@@ -1,4 +1,5 @@
 /* Drives the MathLib.hs foreign exports through ahc_exports.h. */
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "ahc_exports.h"
@@ -20,5 +21,9 @@ int main(void) {
   else
     printf("boom(7) = %ld (unexpected)\n", b);
   printf("square(6) = %ld (still alive)\n", square(6));
+
+  /* Word wraps below zero and returns above 2^63 (M150). */
+  printf("wordPred(0) = %" PRIu64 "\n", wordPred(0));
+  printf("wordPred(UINT64_MAX) = %" PRIu64 "\n", wordPred(UINT64_MAX));
   return 0;
 }
