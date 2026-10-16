@@ -101,6 +101,8 @@ package body AHC.Exhaustive is
                return Wild;
             when Lazy_P =>
                return Wild;   --  irrefutable by definition
+            when Bang_P =>
+               return Norm (Syntax.Pat_Id (N.Bang_Pat));   --  transparent
             when As_P =>
                return Norm (Syntax.Pat_Id (N.As_Pat));
             when Sig_P =>

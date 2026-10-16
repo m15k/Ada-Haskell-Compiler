@@ -135,6 +135,8 @@ package body AHC.Syntax is
             return N.As_Var /= Names.No_Name and then Ok (A, N.As_Pat);
          when Lazy_P =>
             return Ok (A, N.Lazy_Pat);
+         when Bang_P =>
+            return Ok (A, N.Bang_Pat);
          when Rec_P =>
             return N.Rec_Con.Name /= Names.No_Name
               and then (for all F of N.Rec_Fields => Ok (A, F.Value));

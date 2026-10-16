@@ -321,7 +321,6 @@ package body AHC.Lexer is
          end loop;
          return J;
       end Prev_Start;
-      pragma Unreferenced (Alnum_At, Prev_Start);  --  A4 uses them
 
       ------------------------------------------------------------------
       --  Comments and whitespace
@@ -538,12 +537,43 @@ package body AHC.Lexer is
          end;
       end Scan_Large_Ident;
 
+      --  GHC 9's prefix occurrence of an operator (proposal 229): not
+      --  preceded by a closing token, and followed by an opening one.
+      --  Start is the operator's first byte; Pos is one past its end.
+      function Is_Prefix_Occurrence (Start : Positive) return Boolean is
+         Closing_Before : Boolean := False;
+         Opening_After  : Boolean := False;
+      begin
+         if Start > 1 then
+            declare
+               P : constant Positive := Prev_Start (Start);
+               C : constant Character := At_Offset (P);
+            begin
+               Closing_Before :=
+                 (case C is
+                    when ')' | ']' | '"' | ''' | '_' => True,
+                    when '}' => not (P > 1 and then At_Offset (P - 1) = '-'),
+                    when others => Alnum_At (P));
+            end;
+         end if;
+         if Pos <= Len then
+            Opening_After :=
+              (case Peek is
+                 when '(' | '[' | '"' | ''' | '_' => True,
+                 when '{' => Peek (1) /= '-',
+                 when others => Alnum_At (Pos));
+         end if;
+         return not Closing_Before and then Opening_After;
+      end Is_Prefix_Occurrence;
+
       procedure Scan_Operator is
          Start : constant Positive := Munch_Symbols;
          Sym   : constant String := Slice (Start, Pos);
          Kind  : constant Token_Kind := Symbol_Kind (Sym);
       begin
-         if Kind = Varsym then
+         if Sym = "!" and then Is_Prefix_Occurrence (Start) then
+            Emit_Plain (Prefix_Bang, Start);   --  a bang (M150)
+         elsif Kind = Varsym then
             Emit ((Kind => Varsym, Name => Table.Intern (Sym),
                    others => <>), Start);
          elsif Kind = Consym then

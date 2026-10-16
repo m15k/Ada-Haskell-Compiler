@@ -341,6 +341,8 @@ package body AHC.Fixity is
                Resolve_Pat (N.As_Pat);
             when Lazy_P =>
                Resolve_Pat (N.Lazy_Pat);
+            when Bang_P =>
+               Resolve_Pat (N.Bang_Pat);
             when Rec_P =>
                for F of N.Rec_Fields loop
                   Resolve_Pat (F.Value);

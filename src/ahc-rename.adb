@@ -1133,6 +1133,8 @@ package body AHC.Rename is
                Rename_Pat (N.As_Pat, Global_Binders);
             when Lazy_P =>
                Rename_Pat (N.Lazy_Pat, Global_Binders);
+            when Bang_P =>
+               Rename_Pat (N.Bang_Pat, Global_Binders);
             when Rec_P =>
                declare
                   R : constant Resolution :=

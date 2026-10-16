@@ -1,0 +1,7 @@
+(module M)
+(fun f (pats (pbang (pvar x)) (ptuple (pbang (pvar a)) (pvar b)) (pcon Just (pbang (pvar y)))) (var x))
+(patbind (pvar g) (lam (pats (pbang (pvar z)) (plazy (pbang (pvar w)))) (var z)))
+(fun h (pats (pvar xs)) (let (binds (patbind (pbang (pvar n)) (app (var length) (var xs)))) (var n)))
+(fun ! (pats (pvar xs) (pvar i)) (var i))
+(fun k (pats (pvar arr)) (app (app (var !) (var arr)) (int 0)))
+(data T (vars) (cons (con T !(tcon Int) !(tcon Int))))

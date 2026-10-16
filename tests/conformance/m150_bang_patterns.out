@@ -1,0 +1,15 @@
+5050
+equation !_: forced
+equation _: 1
+tuple (!a, _): forced
+Just !x: forced
+~(!x): 3
+lambda: forced
+lambda lazy: 4
+case !_: forced
+case _: 5
+\case: forced
+newtype Box !_: forced
+positive
+(20,30,[1,2])
+'a'

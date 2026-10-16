@@ -247,6 +247,7 @@ package body AHC.Syntax.Printer is
                return "(pas " & NM (N.As_Var) & " "
                  & Pat_S (N.As_Pat) & ")";
             when Lazy_P => return "(plazy " & Pat_S (N.Lazy_Pat) & ")";
+            when Bang_P => return "(pbang " & Pat_S (N.Bang_Pat) & ")";
             when Rec_P =>
                declare
                   R : Unbounded_String;

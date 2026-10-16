@@ -198,7 +198,7 @@ package AHC.Syntax is
       Neg_Int_P, Neg_Float_P,
       Con_P, Con_Chain_P,
       Tuple_P, List_P,
-      As_P, Lazy_P, Rec_P, Sig_P);
+      As_P, Lazy_P, Bang_P, Rec_P, Sig_P);
 
    type Pat_Node (Kind : Pat_Kind := Wild_P) is record
       Span : Diagnostics.Source_Span;
@@ -225,6 +225,9 @@ package AHC.Syntax is
             As_Pat : Real_Pat_Id;
          when Lazy_P =>
             Lazy_Pat : Real_Pat_Id;
+         when Bang_P =>
+            --  `!p` (M150): force the value, then match p.
+            Bang_Pat : Real_Pat_Id;
          when Rec_P =>
             Rec_Con    : QName;
             Rec_Fields : Field_Pat_Vectors.Vector;

@@ -1,0 +1,2 @@
+(module M)
+tests/golden/parse_m150_bang_expr.hs:2:11: error: bang pattern in expression context (did you mean to add a space after the '!'?) (found '!')

@@ -85,6 +85,31 @@ package body Test_Lexer is
                    "varid ""a""|<error>|varid ""b""!errors: 1",
                    "open punctuation is not an operator character (GHC)");
 
+      --  Bang patterns: GHC 9's prefix-occurrence rule (M150)
+      Check_Equal (Lex ("f !x = x"),
+                   "varid ""f""|!|varid ""x""|=|varid ""x""",
+                   "prefix ! is a bang");
+      Check_Equal (Lex ("a ! b"), "varid ""a""|varsym ""!""|varid ""b""",
+                   "loose infix ! is the operator");
+      Check_Equal (Lex ("a!b"), "varid ""a""|varsym ""!""|varid ""b""",
+                   "tight infix ! is the operator");
+      Check_Equal (Lex ("a! b"), "varid ""a""|varsym ""!""|varid ""b""",
+                   "suffix ! is the operator");
+      Check_Equal (Lex ("(!)"), "(|varsym ""!""|)",
+                   "! before a closing bracket is the operator");
+      Check_Equal (Lex ("(!x,!_)"), "(|!|varid ""x""|,|!|_|)",
+                   "! after an opening bracket or a comma is a bang");
+      Check_Equal (Lex ("!(a)"), "!|(|varid ""a""|)",
+                   "! at the start of input is a bang");
+      Check_Equal (Lex ("T !Int"), "conid ""T""|!|conid ""Int""",
+                   "a strictness flag is a bang");
+      Check_Equal (Lex ("f {- c -}!x"), "varid ""f""|!|varid ""x""",
+                   "a block comment's -} is not a closing token");
+      Check_Equal (Lex ("x !! y"), "varid ""x""|varsym ""!!""|varid ""y""",
+                   "!! stays one operator");
+      Check_Equal (Lex (U8 ("ñ!x")), U8 ("varid ""ñ""|varsym ""!""|varid ""x"""),
+                   "a Unicode letter before ! is a closing token");
+
       Check_Equal
         (Lex ("f x = x + 1"),
          "varid ""f""|varid ""x""|=|varid ""x""|varsym ""+""|int ""1""",

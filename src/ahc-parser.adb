@@ -231,9 +231,12 @@ package body AHC.Parser is
       is (Tok.Kind = Varsym and then Tok.Qualifier = Names.No_Name
           and then Tok.Name = Minus_Name);
 
+      --  A strictness flag on a constructor field: the prefix `!` of
+      --  `T !Int`, or a loose `T ! Int` (accepted as before M150).
       function Is_Bang return Boolean
-      is (Tok.Kind = Varsym and then Tok.Qualifier = Names.No_Name
-          and then Tok.Name = Bang_Name);
+      is (Tok.Kind = Prefix_Bang
+          or else (Tok.Kind = Varsym and then Tok.Qualifier = Names.No_Name
+                   and then Tok.Name = Bang_Name));
 
       --  Contextual keyword of the refinement-types extension: a bare
       --  varid 'satisfying' in type position introduces a predicate
@@ -618,7 +621,7 @@ package body AHC.Parser is
       function Can_Start_APat return Boolean
       is (Tok.Kind in Varid | Conid | Qconid | Underscore
             | Int_Lit | Float_Lit | Char_Lit | String_Lit
-            | Left_Paren | Left_Bracket | Tilde);
+            | Left_Paren | Left_Bracket | Tilde | Prefix_Bang);
 
       function Parse_APat_Inner return Real_Pat_Id;
 
@@ -746,6 +749,12 @@ package body AHC.Parser is
                return Arena.Add
                  (Pat_Node'(Kind => Lazy_P, Span => Span,
                             Lazy_Pat => Parse_APat));
+            when Prefix_Bang =>
+               --  BangPatterns (M150; GHC2021): `!apat`.
+               Advance;
+               return Arena.Add
+                 (Pat_Node'(Kind => Bang_P, Span => Span,
+                            Bang_Pat => Parse_APat));
             when Left_Paren =>
                Advance;
                if At_K (Right_Paren) then
@@ -874,10 +883,12 @@ package body AHC.Parser is
       --  Expressions (Report 3)
       ------------------------------------------------------------------
 
+      --  Prefix_Bang starts no expression; it is listed so that
+      --  Parse_AExp reports it as GHC does (M150).
       function Can_Start_AExp return Boolean
       is (Tok.Kind in Varid | Qvarid | Conid | Qconid
             | Int_Lit | Float_Lit | Char_Lit | String_Lit
-            | Left_Paren | Left_Bracket);
+            | Left_Paren | Left_Bracket | Prefix_Bang);
 
       function Parse_Guarded
         (Sep : Token_Kind; Sep_Name : String) return Rhs;
@@ -993,6 +1004,9 @@ package body AHC.Parser is
                Result := Parse_Paren_Exp (Span);
             when Left_Bracket =>
                Result := Parse_Bracket_Exp (Span);
+            when Prefix_Bang =>
+               Fail ("bang pattern in expression context (did you mean"
+                     & " to add a space after the '!'?)");
             when others =>
                Fail ("expected an expression");
          end case;
@@ -2363,13 +2377,14 @@ package body AHC.Parser is
              and then (Peek (1).Kind
                          in Varid | Conid | Qconid | Underscore
                           | Int_Lit | Float_Lit | Char_Lit | String_Lit
-                          | Left_Paren | Left_Bracket | Tilde))
+                          | Left_Paren | Left_Bracket | Tilde
+                          | Prefix_Bang))
            or else (At_Paren_Op
                     and then Peek (3).Kind
                          in Varid | Conid | Qconid | Underscore
                           | Int_Lit | Float_Lit | Char_Lit | String_Lit
                           | Left_Paren | Left_Bracket | Tilde
-                          | Equals | Pipe)
+                          | Prefix_Bang | Equals | Pipe)
          then
             declare
                Name : constant Names.Name_Id := Parse_Var_Name;

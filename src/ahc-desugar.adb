@@ -139,6 +139,42 @@ package body AHC.Desugar is
         return Core.Real_Expr_Id
       is (VarE (Core.Real_Var_Id (V), Span));
 
+      --  `seq A B`, the builtin found by name as EmptyCase finds it
+      --  (M150: bang patterns and strict bindings).
+      function Seq_E
+        (A, B : Core.Real_Expr_Id; Span : Diagnostics.Source_Span)
+         return Core.Real_Expr_Id
+      is
+         Seq_C : constant Builtins.Var_Maps.Cursor :=
+           Env.Values.Find (Table.Intern ("seq"));
+      begin
+         return App2
+           (Global (Core.Var_Id (Builtins.Var_Maps.Element (Seq_C)), Span),
+            A, B, Span);
+      end Seq_E;
+
+      --  Body_E under `seq f` for each strict binding F of a group,
+      --  first binding outermost (M150): `let !x = e in b` forces x
+      --  before b.
+      function Force_All
+        (Forces : Core.Var_Id_Vectors.Vector;
+         Body_E : Core.Real_Expr_Id;
+         Span   : Diagnostics.Source_Span) return Core.Real_Expr_Id
+      is
+         Result : Core.Real_Expr_Id := Body_E;
+      begin
+         for I in reverse 1 .. Forces.Last_Index loop
+            declare
+               F_Ref : constant Core.Real_Expr_Id :=
+                 VarE (Core.Real_Var_Id (Forces.Element (I)), Span);
+            begin
+               Result := Seq_E (F_Ref, Result, Span);
+            end;
+         end loop;
+         return Result;
+      end Force_All;
+      pragma Unreferenced (Force_All);  --  A5 uses it
+
       function Str_Lit
         (S : String; Span : Diagnostics.Source_Span)
          return Core.Real_Expr_Id
@@ -667,6 +703,8 @@ package body AHC.Desugar is
                end;
             when Lazy_P =>
                return Pat_TyCon (N.Lazy_Pat);
+            when Bang_P =>
+               return Pat_TyCon (N.Bang_Pat);
             when As_P =>
                return Pat_TyCon (N.As_Pat);
             when others =>
@@ -703,6 +741,8 @@ package body AHC.Desugar is
             end;
          elsif N.Kind = As_P then
             Add_Handled (N.As_Pat, Into);
+         elsif N.Kind = Bang_P then
+            Add_Handled (N.Bang_Pat, Into);
          end if;
       end Add_Handled;
 
@@ -1054,6 +1094,9 @@ package body AHC.Desugar is
                return True;
             when Sig_P =>
                return Unfailable (Pat_Id (N.Sig_Pat));
+            when Bang_P =>
+               --  A bang can diverge but never fails to match.
+               return Unfailable (Pat_Id (N.Bang_Pat));
             when As_P =>
                return Unfailable (Pat_Id (N.As_Pat));
             when Tuple_P =>
@@ -1125,6 +1168,8 @@ package body AHC.Desugar is
                end loop;
             when Lazy_P =>
                Bound_Vars (N.Lazy_Pat, Into);
+            when Bang_P =>
+               Bound_Vars (N.Bang_Pat, Into);
             when Rec_P =>
                for F of N.Rec_Fields loop
                   Bound_Vars (F.Value, Into);
@@ -1353,6 +1398,15 @@ package body AHC.Desugar is
                end;
             when Lazy_P =>
                return Bind_Lazily (Scrut, N.Lazy_Pat, Inner, Span);
+            when Bang_P =>
+               --  `!p` (M150): force the scrutinee, then match p.
+               declare
+                  S_Ref : constant Core.Real_Expr_Id := VarE (Scrut, Span);
+                  Rest  : constant Core.Real_Expr_Id :=
+                    Match_One (Scrut, N.Bang_Pat, Inner, Fail);
+               begin
+                  return Seq_E (S_Ref, Rest, Span);
+               end;
             when Sig_P =>
                --  Kind-checked in AHC.Kinds; the annotation does not
                --  affect matching.
