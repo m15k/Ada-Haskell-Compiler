@@ -1,0 +1,19 @@
+Int => Ix{Int}.index: Index (5) out of range ((0,2))
+Int negative => Ix{Int}.index: Index (0) out of range ((-3,-1))
+Char => Ix{Char}.index: Index ('z') out of range (('a','c'))
+Integer => Ix{Integer}.index: Index (5) out of range ((0,2))
+Integer big => Ix{Integer}.index: Index (1180591620717411303424) out of range ((0,2))
+pair => Error in array index
+pair of Char => Error in array index
+derived => Error in array index
+Int8 => Error in array index
+Int64 => Error in array index
+Word8 => Error in array index
+Word64 => Error in array index
+([3,4,5,6],2)
+(False,4,0)
+[(0,0),(0,1),(0,2),(1,0),(1,1),(1,2)]
+[0,2,3,5]
+(False,6)
+(0,[(1,'a'),(1,'b'),(2,'a'),(2,'b')])
+2

@@ -3,6 +3,7 @@ module Data.Array
   , (//)
   ) where
 
+import Data.Ix (index)
 import Data.List (find, sortOn)
 import Data.Maybe (fromMaybe)
 
@@ -18,23 +19,22 @@ array (lo, hi) ivs =
     [ pick i | i <- [lo .. hi] ]
   where
     pick i =
-      fromMaybe (error "(Array.!): undefined array element")
+      fromMaybe (errorWithoutStackTrace "(Array.!): undefined array element")
         (lookup i ivsSorted)
     ivsSorted = sortOn fst ivs
 
 listArray :: (Int, Int) -> [e] -> Array e
 listArray (lo, hi) es = MkArray (lo, hi) (take (hi - lo + 1) es)
 
+-- Out of range is the index type's Ix error, as GHC's (!) reports it:
+-- Ix{Int}.index: Index (5) out of range ((0,2)).
 (!) :: Array e -> Int -> e
-(!) (MkArray (lo, hi) es) i =
-  if i < lo || i > hi
-    then error "(Array.!): index out of range"
-    else pickAt es (i - lo)
+(!) (MkArray b es) i = pickAt es (index b i)
 
 pickAt :: [e] -> Int -> e
 pickAt (x : _) 0 = x
 pickAt (_ : xs) n = pickAt xs (n - 1)
-pickAt [] _ = error "(Array.!): undefined array element"
+pickAt [] _ = errorWithoutStackTrace "(Array.!): undefined array element"
 
 bounds :: Array e -> (Int, Int)
 bounds (MkArray b _) = b
