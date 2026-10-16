@@ -177,19 +177,27 @@ inits :: [a] -> [[a]]
 inits [] = [[]]
 inits (x : xs) = [] : map (\ys -> x : ys) (inits xs)
 
-maximumBy :: (a -> a -> Ordering) -> [a] -> a
-maximumBy _ [] = error "List.maximumBy: empty list"
-maximumBy cmp xs = foldl1 (pickMax cmp) xs
+-- Foldable-general, as base's (Data.List re-exports Data.Foldable's):
+-- a strict left fold where a tie keeps the LATER element for
+-- maximumBy and the earlier one for minimumBy, and an empty structure
+-- is base's errorWithoutStackTrace text.
+maximumBy :: Foldable t => (a -> a -> Ordering) -> t a -> a
+maximumBy cmp t = case foldr (:) [] t of
+  [] -> errorWithoutStackTrace "maximumBy: empty structure"
+  (x : xs) -> go x xs
+  where
+    go acc [] = acc
+    go acc (y : ys) =
+      let m = case cmp acc y of { GT -> acc; _ -> y } in m `seq` go m ys
 
-pickMax :: (a -> a -> Ordering) -> a -> a -> a
-pickMax cmp a b = if cmp a b == LT then b else a
-
-minimumBy :: (a -> a -> Ordering) -> [a] -> a
-minimumBy _ [] = error "List.minimumBy: empty list"
-minimumBy cmp xs = foldl1 (pickMin cmp) xs
-
-pickMin :: (a -> a -> Ordering) -> a -> a -> a
-pickMin cmp a b = if cmp a b == GT then b else a
+minimumBy :: Foldable t => (a -> a -> Ordering) -> t a -> a
+minimumBy cmp t = case foldr (:) [] t of
+  [] -> errorWithoutStackTrace "minimumBy: empty structure"
+  (x : xs) -> go x xs
+  where
+    go acc [] = acc
+    go acc (y : ys) =
+      let m = case cmp acc y of { GT -> y; _ -> acc } in m `seq` go m ys
 
 --  Accumulator fold; observable behavior matches foldl (AHC has no
 --  seq), with the large runtime stack absorbing chain depth.

@@ -7,7 +7,10 @@ module Data.Foldable
   , foldr1, foldl1
   , mapM_, forM_, sequence_
   , find
+  , maximumBy, minimumBy
   ) where
+
+import Data.List (maximumBy, minimumBy)
 
 --  The class itself and every Foldable-general function the Prelude
 --  exports live in the Prelude (Report 9.1's shape: base exports the

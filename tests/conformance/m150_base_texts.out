@@ -1,0 +1,23 @@
+Array ! high => Ix{Int}.index: Index (5) out of range ((0,2))
+Array ! low => Ix{Int}.index: Index (-1) out of range ((0,2))
+Array undefined element => (Array.!): undefined array element
+Array short list => (Array.!): undefined array element
+showIntAtBase negative => Numeric.showIntAtBase: applied to negative number -1
+showIntAtBase base 1 => Numeric.showIntAtBase: applied to unsupported base 1
+showHex negative => Numeric.showIntAtBase: applied to negative number -255
+digitToInt => Char.digitToInt: not a digit 'z'
+intToDigit => Char.intToDigit: not a digit 20
+intToDigit negative => Char.intToDigit: not a digit -1
+maximumBy => maximumBy: empty structure
+minimumBy => minimumBy: empty structure
+maximumBy Maybe => maximumBy: empty structure
+minimumBy Set => minimumBy: empty structure
+ratio zero => Ratio has zero denominator
+recip zero => Ratio has zero denominator
+ArithException: Ratio has zero denominator
+('c',"1010")
+([0,9,10,15,10,15],"09af")
+((3,'c'),(1,'a'))
+5
+8
+('q',3 % 2,4 % 3)

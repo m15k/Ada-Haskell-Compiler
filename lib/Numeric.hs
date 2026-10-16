@@ -11,7 +11,10 @@ import Data.Ratio (numerator, denominator)
 
 showIntAtBase :: Int -> (Int -> Char) -> Int -> String -> String
 showIntAtBase base toDig n s
-  | n < 0     = error "Numeric.showIntAtBase: negative"
+  | base <= 1 = errorWithoutStackTrace
+      ("Numeric.showIntAtBase: applied to unsupported base " ++ show base)
+  | n < 0     = errorWithoutStackTrace
+      ("Numeric.showIntAtBase: applied to negative number " ++ show n)
   | n < base  = toDig n : s
   | otherwise =
       showIntAtBase base toDig (div n base)

@@ -51,13 +51,15 @@ digitToInt c
   | isDigit c            = ord c - ord '0'
   | c >= 'a' && c <= 'f' = ord c - ord 'a' + 10
   | c >= 'A' && c <= 'F' = ord c - ord 'A' + 10
-  | otherwise            = error "Char.digitToInt: not a digit"
+  | otherwise            =
+      errorWithoutStackTrace ("Char.digitToInt: not a digit " ++ show c)
 
 intToDigit :: Int -> Char
 intToDigit n
   | n >= 0 && n <= 9   = chr (ord '0' + n)
   | n >= 10 && n <= 15 = chr (ord 'a' + n - 10)
-  | otherwise          = error "Char.intToDigit: not a digit"
+  | otherwise          =
+      errorWithoutStackTrace ("Char.intToDigit: not a digit " ++ show n)
 
 -- The predicates GHC defines without the general-category table (M142,
 -- found by the repo scout): isLetter IS isAlpha in GHC, and Cc - the

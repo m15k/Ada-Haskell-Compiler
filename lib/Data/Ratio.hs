@@ -17,7 +17,7 @@ type Rational = Ratio Integer
 --  Int now wrapping, divided minBound by -1 (an Overflow) where
 --  GHC's `3 % (minBound :: Int)` is (-3) % (-9223372036854775808).
 reduceR :: Integral a => a -> a -> Ratio a
-reduceR _ 0 = error "Ratio has zero denominator"
+reduceR _ 0 = primThrow (primExcArith 5)
 reduceR x y = quot x d :% quot y d
   where
     d = gcd x y
@@ -55,7 +55,7 @@ instance Integral a => Num (Ratio a) where
 instance Integral a => Fractional (Ratio a) where
   (a :% b) / (c :% d) = (a * d) % (b * c)
   recip (a :% b)
-    | a == 0 = error "Ratio has zero denominator"
+    | a == 0 = primThrow (primExcArith 5)
     | a < 0 = negate b :% negate a
     | otherwise = b :% a
   fromRational (n :% d) = fromInteger n % fromInteger d
