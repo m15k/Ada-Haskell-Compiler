@@ -3,6 +3,7 @@ with AHC.Lexer;
 with AHC.Names;
 with AHC.Source_Text;
 with AHC.Tokens;
+with AHC.Unicode;
 
 with Test_Harness; use Test_Harness;
 
@@ -32,8 +33,30 @@ package body Test_Lexer is
    end Lex;
 
    procedure Run is
+      use type AHC.Unicode.General_Category;
    begin
       Start_Suite ("Lexer");
+
+      --  GHC 9.4.8's generalCategory (M150), spot checks.
+      Check (AHC.Unicode.Category (16#61#) = AHC.Unicode.Ll, "a is Ll");
+      Check (AHC.Unicode.Category (16#394#) = AHC.Unicode.Lu, "Delta is Lu");
+      Check (AHC.Unicode.Category (16#1C5#) = AHC.Unicode.Lt, "Dz is Lt");
+      Check (AHC.Unicode.Category (16#6570#) = AHC.Unicode.Lo,
+             "CJK ideograph is Lo");
+      Check (AHC.Unicode.Category (16#2B0#) = AHC.Unicode.Lm,
+             "modifier h is Lm");
+      Check (AHC.Unicode.Category (16#303#) = AHC.Unicode.Mn,
+             "combining tilde is Mn");
+      Check (AHC.Unicode.Category (16#2218#) = AHC.Unicode.Sm,
+             "ring operator is Sm");
+      Check (AHC.Unicode.Category (16#B7#) = AHC.Unicode.Po,
+             "middle dot is Po");
+      Check (AHC.Unicode.Category (16#27E8#) = AHC.Unicode.Ps,
+             "angle bracket is Ps");
+      Check (AHC.Unicode.Category (16#D800#) = AHC.Unicode.Cs,
+             "surrogate is Cs");
+      Check (AHC.Unicode.Category (16#10FFFF#) = AHC.Unicode.Cn,
+             "last code point is Cn");
 
       Check_Equal
         (Lex ("f x = x + 1"),
