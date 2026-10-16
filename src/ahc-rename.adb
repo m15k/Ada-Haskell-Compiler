@@ -1333,9 +1333,13 @@ package body AHC.Rename is
                   begin
                      Push_Scope;
                      Rename_Pat (Alt.Pat);
+                     --  The where group's own scope: its bindings
+                     --  shadow the pattern's (M150, as in GHC).
+                     Push_Scope;
                      Declare_Group (Alt.Where_Ds, Global => False);
                      Rename_Rhs (Alt.Alt_Rhs);
                      Rename_Group_Bodies (Alt.Where_Ds);
+                     Pop_Scope;
                      Pop_Scope;
                   end;
                end loop;
@@ -1590,9 +1594,15 @@ package body AHC.Rename is
                for P of N.Fun_Pats loop
                   Rename_Pat (P);
                end loop;
+               --  The where group's own scope: `f x = x where x = 10`
+               --  shadows the argument over guards and body (M150).
+               --  Duplicates within the patterns, or within the group,
+               --  are still errors - each is one scope.
+               Push_Scope;
                Declare_Group (N.Fun_Where, Global => False);
                Rename_Rhs (N.Fun_Rhs);
                Rename_Group_Bodies (N.Fun_Where);
+               Pop_Scope;
                Pop_Scope;
             when Pat_D =>
                --  Pattern already renamed by Declare_Group.
