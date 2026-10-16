@@ -198,6 +198,26 @@ package body Test_Typechecker is
          "f :: Ord a => a -> a -> Bool",
          "superclass given discharges Eq via Ord");
 
+      --  M150: Monad m entails Applicative m and Functor m.
+      Check_Equal
+        (TC ("f :: Monad m => m Int -> m Int" & ASCII.LF
+             & "f m = fmap negate m"),
+         "f :: Monad a => a Int -> a Int",
+         "Monad given discharges Functor via Applicative");
+      Check_Equal
+        (TC ("g :: Monad m => a -> m a" & ASCII.LF
+             & "g x = pure x"),
+         "g :: Monad b => a -> b a",
+         "Monad given discharges Applicative");
+      Check_Equal
+        (TC ("data P a = P a" & ASCII.LF
+             & "instance Functor P where" & ASCII.LF
+             & "  fmap f (P a) = P (f a)" & ASCII.LF
+             & "instance Monad P where" & ASCII.LF
+             & "  P a >>= k = k a"),
+         "!errors: 1",
+         "Monad instance without Applicative rejected");
+
       Check_Equal
         (TC ("swap (a, b) = (b, a)"),
          "swap :: (a, b) -> (b, a)",

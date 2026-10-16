@@ -552,9 +552,62 @@ package body AHC.Builtins is
             Finish_Class (Cl);
          end;
 
+         --  Applicative (Functor) over f :: * -> *. Wired since M150
+         --  so that Monad can name it as its superclass (GHC 7.10's
+         --  Applicative-Monad Proposal). The defaults of <*>, liftA2,
+         --  *> and <* are Prelude source (apDefault_, liftA2Default_,
+         --  thenADefault_, thenLeftADefault_), applied to the
+         --  instance's own dictionary by AHC.Elaborate.
+         declare
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Applicative", Star1, Sup1 (Env.Functor_Cl));
+            F  : constant Real_TyVar_Id :=
+              M.Mint_TyVar ((Name => Table.Intern ("f"),
+                             Tv_Kind => Kind_Id (Star1)));
+            A  : constant Real_TyVar_Id := New_Tv ("a");
+            B  : constant Real_TyVar_Id := New_Tv ("b");
+            C  : constant Real_TyVar_Id := New_Tv ("c");
+
+            --  f t
+            function FA (T : Real_TyVar_Id) return Real_Type_Id
+            is (AP (TV (F), TV (T)));
+
+            --  The class variable first: the typechecker reads
+            --  Tvs (1) as the instance head's position.
+            function Sch4 (T : Real_Type_Id) return Real_Scheme_Id is
+               Tvs : TyVar_Id_Vectors.Vector;
+            begin
+               Tvs.Append (F);
+               Tvs.Append (A);
+               Tvs.Append (B);
+               Tvs.Append (C);
+               return M.Add (Scheme'(Tvs => Tvs,
+                                     Context => Ctx1 (Cl, TV (F)),
+                                     S_Body => Type_Id (T)));
+            end Sch4;
+         begin
+            Env.Applicative_Cl := Class_Id (Cl);
+            Ignore := Def_Method
+              (Cl, "pure", Sch4 (FN (TV (A), FA (A))), False);
+            Ignore := Def_Method
+              (Cl, "<*>",
+               Sch4 (FN (AP (TV (F), FN (TV (A), TV (B))),
+                         FA (A), FA (B))), True);
+            Ignore := Def_Method
+              (Cl, "liftA2",
+               Sch4 (FN (FN (TV (A), TV (B), TV (C)),
+                         FA (A), FN (FA (B), FA (C)))), True);
+            Ignore := Def_Method
+              (Cl, "*>", Sch4 (FN (FA (A), FA (B), FA (B))), True);
+            Ignore := Def_Method
+              (Cl, "<*", Sch4 (FN (FA (A), FA (B), FA (A))), True);
+            Finish_Class (Cl);
+         end;
+
          --  Monad (over m :: * -> *)
          declare
-            Cl : constant Real_Class_Id := Def_Class ("Monad", Star1);
+            Cl : constant Real_Class_Id :=
+              Def_Class ("Monad", Star1, Sup1 (Env.Applicative_Cl));
             Mv : constant Real_TyVar_Id :=
               M.Mint_TyVar ((Name => Table.Intern ("m"),
                              Tv_Kind => Kind_Id (Star1)));
@@ -583,9 +636,10 @@ package body AHC.Builtins is
                Sch3 (FN (AP (TV (Mv), TV (A)),
                          AP (TV (Mv), TV (B)),
                          AP (TV (Mv), TV (B)))), True));
-            --  return defaults to pure (base's shape; AHC.Elaborate
-            --  solves Applicative at the instance head), so a modern
-            --  instance omitting it draws no warning.
+            --  return defaults to pure (base's shape): AHC.Elaborate
+            --  applies the Prelude's returnDefault_ to the instance's
+            --  own dictionary, which reaches pure through the
+            --  Applicative superclass (M150).
             Env.Return_V := Var_Id (Def_Method
               (Cl, "return",
                Sch3 (FN (TV (A), AP (TV (Mv), TV (A)))), True));

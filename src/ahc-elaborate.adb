@@ -785,108 +785,23 @@ package body AHC.Elaborate is
                                              Lam2E (U, V2 (K))))));
                                     end;
                                  when 3 =>
-                                    --  return = pure, base's default:
-                                    --  the whole-program frontend can
-                                    --  solve Applicative at this
-                                    --  instance's head right here.
-                                    --  (Applicative is a Prelude
-                                    --  SOURCE class: Env holds only
-                                    --  builtin and Prelude entities,
-                                    --  so a user class of that name
-                                    --  can no longer stand in - a
-                                    --  scan of every class by name
-                                    --  let it, M75 review.)
+                                    --  return = pure, base's default
+                                    --  (M150): the Prelude's
+                                    --  returnDefault_ applied to this
+                                    --  dictionary takes pure through
+                                    --  the Applicative superclass,
+                                    --  whose instance the typechecker
+                                    --  has already demanded.
                                     declare
-                                       App_N : constant Names
-                                         .Real_Name_Id :=
-                                           Table.Intern ("Applicative");
-                                       App_Cl : constant Class_Id :=
-                                         (if Env.Classes.Contains (App_N)
-                                          then Class_Id
-                                            (Env.Classes.Element (App_N))
-                                          else No_Class);
-                                       PureF : constant Expr_Id :=
-                                         Global_Named ("pure");
+                                       F : constant Expr_Id :=
+                                         Global_Named ("returnDefault_");
                                     begin
-                                       if App_Cl = No_Class
-                                         or else PureF = No_Expr
-                                       then
+                                       if F = No_Expr then
                                           return No_Expr;
                                        end if;
-                                       declare
-                                          --  The full instance head (M147 review: a flexible
-                                          --  `Monad (P Int)` was rebuilt as bare `P`).
-                                          H : constant Real_Type_Id :=
-                                            Inst_Match.Instance_Type (M, Env, Inst);
-                                          --  Monad does NOT have
-                                          --  Applicative as a
-                                          --  superclass here, so the
-                                          --  instance can genuinely be
-                                          --  missing. Solve_Ev's
-                                          --  contract is that the
-                                          --  typechecker already
-                                          --  proved solvability; it
-                                          --  answers $dMISSING
-                                          --  otherwise, which would
-                                          --  only fail when the
-                                          --  program runs. Say so at
-                                          --  compile time instead.
-                                          Has_App : Boolean := False;
-                                       begin
-                                          for I2 of M.Info (App_Cl)
-                                                      .Instances
-                                          loop
-                                             declare
-                                                AI : constant Instance_Info
-                                                  := M.Info (I2);
-                                                HT : constant Real_Type_Id
-                                                  := Inst_Match
-                                                       .Instance_Type
-                                                         (M, Env, Inst);
-                                                Ign : Type_Id_Vectors
-                                                  .Vector;
-                                             begin
-                                                --  An Applicative
-                                                --  instance covering
-                                                --  this Monad's head
-                                                --  (M147: by matching).
-                                                if Match_EL
-                                                     (M, Env, AI, HT, Ign)
-                                                   = Inst_Match.Matched
-                                                then
-                                                   Has_App := True;
-                                                end if;
-                                             end;
-                                          end loop;
-                                          if not Has_App then
-                                             Bag.Add
-                                               (Diagnostics.Error,
-                                                Diagnostics
-                                                  .Class_No_Instance,
-                                                Inst.Span,
-                                                "no instance for"
-                                                & " 'Applicative "
-                                                & Table.Text
-                                                    (Names.Real_Name_Id
-                                                      (M.Info
-                                                        (Real_TyCon_Id
-                                                          (Inst.Head))
-                                                        .Name))
-                                                & "', required by the"
-                                                & " default for"
-                                                & " 'return'");
-                                             return No_Expr;
-                                          end if;
-                                          return Expr_Id
-                                            (Ap2E (Real_Expr_Id
-                                                     (PureF),
-                                               Solve_Ev
-                                                 (Constraint'
-                                                    (Class => App_Cl,
-                                                     Arg => H,
-                                                     Span => Span),
-                                                  Givens, Span, 0)));
-                                       end;
+                                       return Expr_Id
+                                         (Ap2E (Real_Expr_Id (F),
+                                                V2 (Self_D)));
                                     end;
                                  when 4 =>
                                     --  fail = error (2010's shape)
@@ -906,6 +821,28 @@ package body AHC.Elaborate is
                                  when others =>
                                     return No_Expr;
                               end case;
+                           elsif Inst.Of_Class = Env.Applicative_Cl
+                             and then MI in 2 .. 5
+                           then
+                              --  base's Applicative defaults, Prelude
+                              --  source (apDefault_ ...), applied to
+                              --  this dictionary (M150).
+                              declare
+                                 F : constant Expr_Id :=
+                                   Global_Named
+                                     ((case MI is
+                                         when 2 => "apDefault_",
+                                         when 3 => "liftA2Default_",
+                                         when 4 => "thenADefault_",
+                                         when others =>
+                                           "thenLeftADefault_"));
+                              begin
+                                 if F = No_Expr then
+                                    return No_Expr;
+                                 end if;
+                                 return Expr_Id
+                                   (Ap2E (Real_Expr_Id (F), V2 (Self_D)));
+                              end;
                            elsif (Inst.Of_Class = Env.Enum_Cl
                                   and then MI in 1 | 2 | 5 .. 8)
                              or else (Inst.Of_Class = Env.Fractional_Cl

@@ -608,17 +608,25 @@ f <$> x = fmap f x
 (<$) :: Functor f => a -> f b -> f a
 (<$) x fb = fmap (\_ -> x) fb
 
--- Applicative, as GHC's base has it (the Report predates it); an
--- ordinary source class over the wired Functor.
-class Functor f => Applicative f where
-  pure :: a -> f a
-  (<*>) :: f (a -> b) -> f a -> f b
-  liftA2 :: (a -> b -> c) -> f a -> f b -> f c
-  liftA2 f x y = fmap f x <*> y
-  (*>) :: f a -> f b -> f b
-  (*>) x y = liftA2 (\_ b -> b) x y
-  (<*) :: f a -> f b -> f a
-  (<*) x y = liftA2 (\a _ -> a) x y
+-- Applicative is wired (AHC.Builtins, M150) as Monad's superclass, as
+-- GHC's base has it since 7.10: class Functor f => Applicative f with
+-- pure, (<*>), liftA2, (*>), (<*). These are its class defaults, and
+-- Monad's `return`; AHC.Elaborate applies each to the instance's own
+-- dictionary. Minimal definition, as base's: pure, ((<*>) | liftA2).
+apDefault_ :: Applicative f => f (a -> b) -> f a -> f b
+apDefault_ fs xs = liftA2 id fs xs
+
+liftA2Default_ :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
+liftA2Default_ f x y = fmap f x <*> y
+
+thenADefault_ :: Applicative f => f a -> f b -> f b
+thenADefault_ x y = liftA2 (\_ b -> b) x y
+
+thenLeftADefault_ :: Applicative f => f a -> f b -> f a
+thenLeftADefault_ x y = liftA2 (\a _ -> a) x y
+
+returnDefault_ :: Monad m => a -> m a
+returnDefault_ x = pure x
 
 instance Applicative Maybe where
   pure x = Just x

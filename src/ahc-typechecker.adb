@@ -578,14 +578,6 @@ package body AHC.Typechecker is
          return N.Kind = TVar_T and then N.Tv = Tv;
       end Is_Tv;
 
-      function Same_Tv_Arg (A, B : Real_Type_Id) return Boolean is
-         NA : constant Type_Node := M.Node (Repr (A));
-         NB : constant Type_Node := M.Node (Repr (B));
-      begin
-         return NA.Kind = TVar_T and then NB.Kind = TVar_T
-           and then NA.Tv = NB.Tv;
-      end Same_Tv_Arg;
-
       --  Structural equality of two constraint arguments (M147 review):
       --  with FlexibleContexts-style inferred and given constraints, an
       --  argument need not be a bare type variable - `C (Maybe a)` must
@@ -656,30 +648,33 @@ package body AHC.Typechecker is
          end loop;
       end Assume;
 
-      --  GHC's Monad has Applicative and Functor above it; AHC's (the
-      --  2010 shape) does not. A residual Functor/Applicative-like
-      --  constraint on a variable that the instance context gives
-      --  Monad is therefore satisfiable in GHC (`instance Monad m =>
-      --  Applicative (StateT s m)` beside `instance Functor m =>
-      --  Functor (StateT s m)`) and must not be rejected here.
-      function Monad_Entails_In_GHC (C : Constraint) return Boolean is
-         Functorish : constant Boolean :=
-           Class_Id (C.Class) = Env.Functor_Cl
-           or else (for some S of M.Info (C.Class).Supers =>
-                      Class_Id (S) = Env.Functor_Cl);
+      --  M150: GHC 7.10 put Applicative above Monad, so a program
+      --  written to the 2010 Report declares Monad alone. Spell the
+      --  missing instance out (ap and liftM are Control.Monad's).
+      --  Shown is the head as Type_Str printed it, computed once by
+      --  the caller.
+      function AMP_Hint
+        (Of_Class, Missing : Class_Id; Shown : String) return String
+      is
+         Head : constant String :=
+           (if (for some Ch of Shown => Ch = ' ')
+            then "(" & Shown & ")" else Shown);
+         Pad : constant String := ASCII.LF & "               ";
       begin
-         if not Functorish then
-            return False;
+         if Missing = Env.Applicative_Cl
+           and then Of_Class = Env.Monad_Cl
+         then
+            return ASCII.LF & "  hint: add  instance Applicative "
+              & Head & " where" & Pad & "pure = return; (<*>) = ap";
+         elsif Missing = Env.Functor_Cl
+           and then (Of_Class = Env.Applicative_Cl
+                     or else Of_Class = Env.Monad_Cl)
+         then
+            return ASCII.LF & "  hint: add  instance Functor "
+              & Head & " where" & Pad & "fmap = liftM";
          end if;
-         for G of Givens loop
-            if Class_Id (G.C.Class) = Env.Monad_Cl
-              and then Same_Tv_Arg (G.C.Arg, C.Arg)
-            then
-               return True;
-            end if;
-         end loop;
-         return False;
-      end Monad_Entails_In_GHC;
+         return "";
+      end AMP_Hint;
 
       procedure Head_Of
         (T : Real_Type_Id;
@@ -2196,42 +2191,6 @@ package body AHC.Typechecker is
 
          Reduce (Class_Id (Cl), Target, 0);
 
-         --  A derived Monad needs an Applicative instance at the head,
-         --  as GHC's Monad has Applicative as its superclass (AHC's
-         --  Report-shaped Monad does not, so it is checked here).
-         if not Failed and then Class_Id (Cl) = Env.Monad_Cl then
-            declare
-               App_N : constant Names.Real_Name_Id :=
-                 Table.Intern ("Applicative");
-               Found : Boolean := False;
-            begin
-               if Env.Classes.Contains (App_N) then
-                  for J of M.Info (Env.Classes.Element (App_N)).Instances
-                  loop
-                     Resolve_GND (J, Depth + 1);
-                     declare
-                        A : Type_Id_Vectors.Vector;
-                     begin
-                        if Inst_Match."="
-                             (Match_TC (M, Env, M.Info (J), Head_T, A),
-                              Inst_Match.Matched)
-                        then
-                           Found := True;
-                        end if;
-                     end;
-                  end loop;
-                  if not Found then
-                     Bag.Add (Diagnostics.Error, Diagnostics.Class_No_Instance,
-                              Inst.Span,
-                              "no instance for 'Applicative "
-                              & Table.Text (Names.Real_Name_Id (TCI.Name))
-                              & "', required by the derived Monad");
-                     Failed := True;
-                  end if;
-               end if;
-            end;
-         end if;
-
          GND_Active.Delete_Last;
          if Failed then
             return;
@@ -2344,33 +2303,52 @@ package body AHC.Typechecker is
                        (Kind => Var_C, Span => Inst.Span,
                         V => Real_Var_Id (Inst.Dict_Global))));
                   end loop;
-                  for Super of M.Info (Real_Class_Id (Inst.Of_Class))
-                                 .Supers
-                  loop
-                     W_List.Append
-                       (Wanted_Rec'
-                          (C => Constraint'
-                             (Class => Super, Arg => Head_T,
-                              Span => Inst.Span),
-                           others => <>));
-                     Solve (W_List.Last_Index, 0);
-                  end loop;
-                  --  A context constraint the instance's own context
-                  --  does not give (`instance Ord (T a)` beside
-                  --  `instance Eq a => Eq (T a)`) stays a residual.
+                  --  Solved quietly (M150): a superclass with no
+                  --  instance is reported once, below, naming the
+                  --  instance declaration - with the missing
+                  --  Applicative/Functor spelled out for a Monad or
+                  --  Applicative instance (AMP_Hint).
+                  declare
+                     Was_Probing : constant Boolean := Probing;
+                  begin
+                     Probing := True;
+                     for Super of M.Info (Real_Class_Id (Inst.Of_Class))
+                                    .Supers
+                     loop
+                        W_List.Append
+                          (Wanted_Rec'
+                             (C => Constraint'
+                                (Class => Super, Arg => Head_T,
+                                 Span => Inst.Span),
+                              others => <>));
+                        Solve (W_List.Last_Index, 0);
+                     end loop;
+                     Probing := Was_Probing;
+                  end;
+                  --  No instance at all (By_Error), or a context
+                  --  constraint the instance's own context does not
+                  --  give (`instance Ord (T a)` beside `instance Eq a
+                  --  => Eq (T a)`), which stays a residual (Unsolved).
                   for I in W_Mark + 1 .. W_List.Last_Index loop
-                     if W_List (I).Sol = Unsolved
-                       and then not Monad_Entails_In_GHC (W_List (I).C)
-                     then
-                        Bag.Add (Diagnostics.Error,
-                                 Diagnostics.Class_No_Instance,
-                                 Inst.Span,
-                                 "no instance for '"
-                                 & Table.Text
-                                     (M.Info (W_List (I).C.Class).Name)
-                                 & " " & Type_Str (W_List (I).C.Arg)
-                                 & "', required by the superclasses"
-                                 & " of an instance declaration");
+                     if W_List (I).Sol in Unsolved | By_Error then
+                        declare
+                           Shown : constant String :=
+                             Type_Str (W_List (I).C.Arg);
+                           Missing : constant Class_Id :=
+                             Class_Id (W_List (I).C.Class);
+                        begin
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Class_No_Instance,
+                                    Inst.Span,
+                                    "no instance for '"
+                                    & Table.Text
+                                        (M.Info (W_List (I).C.Class).Name)
+                                    & " " & Shown
+                                    & "', required by the superclasses"
+                                    & " of an instance declaration"
+                                    & AMP_Hint (Inst.Of_Class, Missing,
+                                                Shown));
+                        end;
                         exit;
                      end if;
                   end loop;

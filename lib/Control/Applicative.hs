@@ -15,8 +15,9 @@ module Control.Applicative
 --  Alternative (its empty/<|> are exception-based), and asum's
 --  Foldable generality (list-only here, as Data.Bits is Int-only).
 --
---  Applicative itself (with liftA2, *>, <*), <$> and <$ live in the
---  Prelude and are re-exported here as base's export list has them.
+--  Applicative itself (with liftA2, *>, <*) is wired in as Monad's
+--  superclass (M150); it, <$> and <$ are re-exported here as base's
+--  export list has them.
 
 infixl 3 <|>
 infixl 4 <**>

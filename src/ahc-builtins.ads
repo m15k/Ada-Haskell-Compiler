@@ -86,7 +86,8 @@ package AHC.Builtins is
         : Core.DataCon_Id := 0;
       Tuple_DCs : Tuple_DC_Array := [others => 0];
 
-      Eq_Cl, Ord_Cl, Show_Cl, Functor_Cl, Monad_Cl, Num_Cl, Real_Cl,
+      Eq_Cl, Ord_Cl, Show_Cl, Functor_Cl, Applicative_Cl, Monad_Cl,
+      Num_Cl, Real_Cl,
       Fractional_Cl, Enum_Cl, Bounded_Cl,
       Integral_Cl, Floating_Cl, RealFrac_Cl, RealFloat_Cl,
       IsString_Cl
