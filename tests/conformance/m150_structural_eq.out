@@ -1,0 +1,19 @@
+(True,False)
+(True,True)
+True
+(True,False)
+True
+True
+(GT,EQ)
+(GT,True)
+(LT,LT)
+(EQ,True)
+(Ci "C",P (Ci "B") 0)
+(True,True)
+EQ
+(True,True)
+True
+(True,True,GT)
+(True,True)
+(P (Ci "a") 1,P (Ci "A") 1)
+([Ci "X"],-0.0,-0.0)

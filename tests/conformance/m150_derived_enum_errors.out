@@ -1,0 +1,17 @@
+succ Blue => succ{Colour}: tried to take `succ' of last tag in enumeration
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m150_derived_enum_errors.hs:6:23 in main:Main
+pred Red => pred{Colour}: tried to take `pred' of first tag in enumeration
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m150_derived_enum_errors.hs:6:23 in main:Main
+toEnum 7 => toEnum{Colour}: tag (7) is outside of enumeration's range (0,2)
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m150_derived_enum_errors.hs:6:23 in main:Main
+toEnum (-1) => toEnum{Dir}: tag (-1) is outside of enumeration's range (0,1)
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m150_derived_enum_errors.hs:8:42 in main:Main
+succ South => succ{Dir}: tried to take `succ' of last tag in enumeration
+CallStack (from HasCallStack):
+  error, called at tests/conformance/m150_derived_enum_errors.hs:8:42 in main:Main
+[Red,Green,Blue]
+[0,1]

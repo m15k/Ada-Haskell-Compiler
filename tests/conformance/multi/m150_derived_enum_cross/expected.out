@@ -1,0 +1,13 @@
+succ Square => succ{Shape}: tried to take `succ' of last tag in enumeration
+CallStack (from HasCallStack):
+  error, called at ./Shapes.hs:3:46 in main:Shapes
+pred Small => pred{Size}: tried to take `pred' of first tag in enumeration
+CallStack (from HasCallStack):
+  error, called at ./Shapes.hs:8:28 in main:Shapes
+toEnum 5 :: Size => toEnum{Size}: tag (5) is outside of enumeration's range (0,1)
+CallStack (from HasCallStack):
+  error, called at ./Shapes.hs:8:28 in main:Shapes
+succ Two => succ{Local}: tried to take `succ' of last tag in enumeration
+CallStack (from HasCallStack):
+  error, called at Main.hs:6:40 in main:Main
+[Circle,Square]
