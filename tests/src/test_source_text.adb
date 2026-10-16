@@ -1,3 +1,5 @@
+with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+
 with AHC.Source_Text; use AHC.Source_Text;
 
 with Test_Harness; use Test_Harness;
@@ -72,6 +74,28 @@ package body Test_Source_Text is
            Load_String ("t.hs", ASCII.HT & ASCII.HT & "x");
       begin
          Check_Equal (Integer (S.Column_Of (3)), 17, "consecutive tabs");
+      end;
+
+      --  Columns count code points (M150): 2- and 3-byte characters
+      --  are one column each.
+      declare
+         S : constant Source :=
+           Load_String
+             ("t.hs",
+              Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Encode ("año x"));
+      begin
+         Check_Equal (Integer (S.Column_Of (6)), 5,
+                      "a two-byte letter is one column");
+      end;
+
+      declare
+         S : constant Source :=
+           Load_String
+             ("t.hs",
+              Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Encode ("λ→x"));
+      begin
+         Check_Equal (Integer (S.Column_Of (6)), 3,
+                      "two- and three-byte characters are one column each");
       end;
 
       declare

@@ -4,7 +4,8 @@
 --  byte offsets always refer to the normalized buffer. LF and FF both
 --  terminate a line (Report 2.2 counts formfeed as a newline character).
 --  Columns follow Report 10.3: the first column is 1 and tab stops are
---  8 characters apart.
+--  8 characters apart. A column counts characters - code points of
+--  the UTF-8 text, as GHC's columns do - not bytes (M150).
 
 private with Ada.Strings.Unbounded;
 private with Ada.Containers.Vectors;

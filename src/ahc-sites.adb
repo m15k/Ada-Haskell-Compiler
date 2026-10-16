@@ -19,24 +19,10 @@ package body AHC.Sites is
    function Ghc_Column
      (Src : Source_Text.Source; O : Source_Text.Byte_Offset) return Positive
    is
-      Start : constant Source_Text.Byte_Offset :=
-        Src.Line_Start (Src.Line_Of (O));
-      Col : Positive := 1;
-      I : Source_Text.Byte_Offset := Start;
    begin
-      while I < O loop
-         declare
-            C : constant Character := Src.Char_At (I);
-         begin
-            if C = ASCII.HT then
-               Col := ((Col - 1) / 8 + 1) * 8 + 1;
-            elsif Character'Pos (C) not in 16#80# .. 16#BF# then
-               Col := Col + 1;   --  a UTF-8 continuation byte adds none
-            end if;
-         end;
-         I := I + 1;
-      end loop;
-      return Col;
+      --  Source_Text counts code points and tab stops, as GHC does
+      --  (M150).
+      return Positive (Src.Column_Of (O));
    end Ghc_Column;
 
    --  Line and GHC column of the first and the last character of Span.

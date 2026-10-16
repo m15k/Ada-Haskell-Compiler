@@ -94,6 +94,7 @@ package body AHC.Tokens is
          when End_Of_File   => return "<eof>";
          when Error_Token   => return "<error>";
          when Kw_Cases      => return "cases";
+         when Prefix_Bang   => return "!";
       end case;
    end Image;
 

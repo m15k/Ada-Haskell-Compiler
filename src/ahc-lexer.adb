@@ -1,4 +1,5 @@
 with Ada.Strings.Unbounded;
+with AHC.Unicode;
 
 package body AHC.Lexer is
 
@@ -21,10 +22,6 @@ package body AHC.Lexer is
 
    function Is_Digit (C : Character) return Boolean
    is (C in '0' .. '9');
-
-   function Is_Ident_Char (C : Character) return Boolean
-   is (Is_Small (C) or else Is_Large (C) or else Is_Digit (C)
-       or else C = ''');
 
    function Is_White (C : Character) return Boolean
    is (C in ' ' | ASCII.HT | ASCII.LF | ASCII.FF | ASCII.VT);
@@ -149,7 +146,11 @@ package body AHC.Lexer is
             Column := Text.Column_Of (Source_Text.Byte_Offset (O));
          else
             Line := Text.Line_Of (Source_Text.Byte_Offset (Len));
-            Column := Text.Column_Of (Source_Text.Byte_Offset (Len)) + 1;
+            --  One past the last character; a trailing continuation
+            --  byte is already past it (columns count code points).
+            Column := Text.Column_Of (Source_Text.Byte_Offset (Len))
+              + (if Character'Pos (At_Offset (Len)) in 16#80# .. 16#BF#
+                 then 0 else 1);
          end if;
       end Position_Of;
 
@@ -196,6 +197,133 @@ package body AHC.Lexer is
       end Error;
 
       ------------------------------------------------------------------
+      --  Characters beyond ASCII (Report 2.2, M150)
+      ------------------------------------------------------------------
+
+      --  The code point whose UTF-8 sequence starts at byte I and the
+      --  sequence's length in bytes; Width = 0 when the bytes there
+      --  are not one well-formed sequence.
+      procedure Decode_At
+        (I : Positive; Code : out Natural; Width : out Natural)
+      is
+         Lead : constant Natural :=
+           (if I <= Len then Character'Pos (At_Offset (I)) else 0);
+         Need : Natural;
+      begin
+         Code := 0;
+         Width := 0;
+         if I > Len then
+            return;
+         elsif Lead < 16#80# then
+            Code := Lead;
+            Width := 1;
+            return;
+         elsif Lead in 16#C2# .. 16#DF# then
+            Need := 1;
+            Code := Lead mod 32;
+         elsif Lead in 16#E0# .. 16#EF# then
+            Need := 2;
+            Code := Lead mod 16;
+         elsif Lead in 16#F0# .. 16#F4# then
+            Need := 3;
+            Code := Lead mod 8;
+         else
+            return;
+         end if;
+         for K in 1 .. Need loop
+            if I + K > Len
+              or else Character'Pos (At_Offset (I + K))
+                        not in 16#80# .. 16#BF#
+            then
+               Code := 0;
+               return;
+            end if;
+            Code := Code * 64 + Character'Pos (At_Offset (I + K)) mod 64;
+         end loop;
+         if Code > 16#10FFFF#
+           or else Code in 16#D800# .. 16#DFFF#
+           or else (Need = 2 and then Code < 16#800#)
+           or else (Need = 3 and then Code < 16#1_0000#)
+         then
+            Code := 0;
+            return;
+         end if;
+         Width := Need + 1;
+      end Decode_At;
+
+      --  GHC's lexical class of a character (Lexer.x's adj_c, over
+      --  GHC 9.4.8's generalCategory): Small and Large start a varid
+      --  and a conid; Digit, Modifier and Mark only continue one;
+      --  Symbol is an operator character; Other is everything else,
+      --  including Ps/Pe/Pi/Pf, whitespace and malformed UTF-8.
+      type Char_Class is
+        (Small, Large, Digit, Modifier, Mark, Symbol, Other);
+
+      subtype Ident_Class is Char_Class range Small .. Mark;
+
+      function Class_At (I : Positive) return Char_Class is
+         C : constant Character := At_Offset (I);
+      begin
+         if Character'Pos (C) < 16#80# then
+            return (if Is_Small (C) then Small
+                    elsif Is_Large (C) then Large
+                    elsif Is_Digit (C) then Digit
+                    elsif C = ''' then Mark
+                    elsif Is_Symbol_Char (C) then Symbol
+                    else Other);
+         end if;
+         declare
+            Code  : Natural;
+            Width : Natural;
+         begin
+            Decode_At (I, Code, Width);
+            if Width = 0 then
+               return Other;
+            end if;
+            case Unicode.Category (Code) is
+               when Unicode.Ll | Unicode.Lo => return Small;
+               when Unicode.Lu | Unicode.Lt => return Large;
+               when Unicode.Nd | Unicode.Nl | Unicode.No => return Digit;
+               when Unicode.Lm => return Modifier;
+               when Unicode.Mn => return Mark;
+               when Unicode.Pc | Unicode.Pd | Unicode.Po | Unicode.Sm
+                  | Unicode.Sc | Unicode.Sk | Unicode.So => return Symbol;
+               when others => return Other;
+            end case;
+         end;
+      end Class_At;
+
+      --  Bytes in the character at I: its UTF-8 length, 1 for ASCII
+      --  and for a malformed byte.
+      function Width_At (I : Positive) return Positive is
+         Code  : Natural;
+         Width : Natural;
+      begin
+         Decode_At (I, Code, Width);
+         return Positive'Max (Width, 1);
+      end Width_At;
+
+      --  Data.Char.isAlphaNum of the character at I: a letter (L*) or
+      --  a number (N*).
+      function Alnum_At (I : Positive) return Boolean
+      is (Class_At (I) in Small | Large | Digit | Modifier);
+
+      --  The first byte of the character that ends just before I.
+      function Prev_Start (I : Positive) return Positive
+        with Pre => I > 1
+      is
+         J : Positive := I - 1;
+      begin
+         while J > 1
+           and then Character'Pos (At_Offset (J)) in 16#80# .. 16#BF#
+         loop
+            J := J - 1;
+         end loop;
+         return J;
+      end Prev_Start;
+      pragma Unreferenced (Alnum_At, Prev_Start);  --  A4 uses them
+
+      ------------------------------------------------------------------
       --  Comments and whitespace
       ------------------------------------------------------------------
 
@@ -207,7 +335,9 @@ package body AHC.Lexer is
          while Peek (Ahead) = '-' loop
             Ahead := Ahead + 1;
          end loop;
-         return Ahead >= 2 and then not Is_Symbol_Char (Peek (Ahead));
+         return Ahead >= 2
+           and then not (Pos + Ahead <= Len
+                         and then Class_At (Pos + Ahead) = Symbol);
       end At_Line_Comment;
 
       procedure Skip_Line_Comment is
@@ -260,8 +390,8 @@ package body AHC.Lexer is
       function Munch_Ident return Positive is
          Start : constant Positive := Pos;
       begin
-         while Pos <= Len and then Is_Ident_Char (Peek) loop
-            Pos := Pos + 1;
+         while Pos <= Len and then Class_At (Pos) in Ident_Class loop
+            Pos := Pos + Width_At (Pos);
          end loop;
          return Start;
       end Munch_Ident;
@@ -269,8 +399,8 @@ package body AHC.Lexer is
       function Munch_Symbols return Positive is
          Start : constant Positive := Pos;
       begin
-         while Pos <= Len and then Is_Symbol_Char (Peek) loop
-            Pos := Pos + 1;
+         while Pos <= Len and then Class_At (Pos) = Symbol loop
+            Pos := Pos + Width_At (Pos);
          end loop;
          return Start;
       end Munch_Symbols;
@@ -327,14 +457,14 @@ package body AHC.Lexer is
             begin
                Pos := Pos + 1;
 
-               if Pos <= Len and then Is_Large (Peek) then
+               if Pos <= Len and then Class_At (Pos) = Large then
                   declare
                      Part_Start : constant Positive := Munch_Ident;
                      pragma Unreferenced (Part_Start);
                   begin
                      Qual_Stop := Pos;  --  chain grew; maybe more to come
                   end;
-               elsif Pos <= Len and then Is_Small (Peek) then
+               elsif Pos <= Len and then Class_At (Pos) = Small then
                   declare
                      Part_Start : constant Positive := Munch_Ident;
                      Word       : constant String := Slice (Part_Start, Pos);
@@ -350,7 +480,7 @@ package body AHC.Lexer is
                      Pos := Dot_Pos;  --  "F.where": not qualifiable
                      exit;
                   end;
-               elsif Pos <= Len and then Is_Symbol_Char (Peek) then
+               elsif Pos <= Len and then Class_At (Pos) = Symbol then
                   declare
                      Sym_Start : constant Positive := Munch_Symbols;
                      Sym       : constant String := Slice (Sym_Start, Pos);
@@ -833,6 +963,23 @@ package body AHC.Lexer is
                Scan_String;
             elsif Is_Symbol_Char (C) then
                Scan_Operator;
+            elsif Character'Pos (C) >= 16#80# then
+               --  Unicode letters and symbols (Report 2.2, M150).
+               case Class_At (Pos) is
+                  when Small => Scan_Small_Ident;
+                  when Large => Scan_Large_Ident;
+                  when Symbol => Scan_Operator;
+                  when others =>
+                     declare
+                        Start : constant Positive := Pos;
+                     begin
+                        Pos := Pos + Width_At (Pos);
+                        Error (Diagnostics.Lex_Invalid_Character, Start,
+                               "invalid character '" & Slice (Start, Pos)
+                               & "'");
+                        Emit_Plain (Error_Token, Start);
+                     end;
+               end case;
             else
                case C is
                   when '(' => Special := Left_Paren;

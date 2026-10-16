@@ -1,3 +1,5 @@
+with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+
 with AHC.Diagnostics;
 with AHC.Lexer;
 with AHC.Names;
@@ -32,6 +34,10 @@ package body Test_Lexer is
            then "!errors:" & Bag.Error_Count'Image else "");
    end Lex;
 
+   --  UTF-8 bytes of S (a String literal holds Latin-1 under -gnatW8).
+   function U8 (S : Wide_Wide_String) return String
+   is (Ada.Strings.UTF_Encoding.Wide_Wide_Strings.Encode (S));
+
    procedure Run is
       use type AHC.Unicode.General_Category;
    begin
@@ -57,6 +63,27 @@ package body Test_Lexer is
              "surrogate is Cs");
       Check (AHC.Unicode.Category (16#10FFFF#) = AHC.Unicode.Cn,
              "last code point is Cn");
+
+      --  Unicode identifiers and operators (Report 2.2, 2.4; M150)
+      Check_Equal (Lex (U8 ("ñ café λx 数")),
+                   U8 ("varid ""ñ""|varid ""café""|varid ""λx""|varid ""数"""),
+                   "Unicode varids (Ll and Lo start one)");
+      Check_Equal (Lex (U8 ("Δ Círculo.área")),
+                   U8 ("conid ""Δ""|qvarid ""Círculo.área"""),
+                   "Unicode conid and qualified varid");
+      Check_Equal (Lex (U8 ("x̃ aʰ año'")),
+                   U8 ("varid ""x̃""|varid ""aʰ""|varid ""año'"""),
+                   "marks, modifier letters and primes continue a name");
+      Check_Equal (Lex (U8 ("f ∘ g · h :⊗ k → m")),
+                   U8 ("varid ""f""|varsym ""∘""|varid ""g""|varsym ""·"""
+                       & "|varid ""h""|consym "":⊗""|varid ""k"""
+                       & "|varsym ""→""|varid ""m"""),
+                   "Unicode operators (Sm, Po; no UnicodeSyntax)");
+      Check_Equal (Lex (U8 ("ʰ")), "<error>!errors: 1",
+                   "a modifier letter cannot start a name");
+      Check_Equal (Lex (U8 ("a ⟨ b")),
+                   "varid ""a""|<error>|varid ""b""!errors: 1",
+                   "open punctuation is not an operator character (GHC)");
 
       Check_Equal
         (Lex ("f x = x + 1"),

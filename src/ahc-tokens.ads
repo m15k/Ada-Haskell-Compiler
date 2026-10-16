@@ -44,7 +44,13 @@ package AHC.Tokens is
       --  lexer's one context-sensitive keyword, so the layout pass can
       --  open a block after it as after `of`. Elsewhere `cases` is an
       --  ordinary variable.
-      Kw_Cases);
+      Kw_Cases,
+
+      --  A prefix occurrence of `!` (GHC 9's rule, M150): not preceded
+      --  by a closing token, followed by an opening one - `f !x`,
+      --  `(!a, b)`, `T !Int`. A bang pattern or a strictness flag;
+      --  any other `!` is the operator (varsym).
+      Prefix_Bang);
 
    subtype Reserved_Word_Kind is Token_Kind range Kw_Case .. Underscore;
    subtype Reserved_Op_Kind   is Token_Kind range Dot_Dot .. Fat_Arrow;

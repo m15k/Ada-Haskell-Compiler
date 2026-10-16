@@ -106,6 +106,8 @@ package body AHC.Source_Text is
       for I in S.Line_Start (S.Line_Of (O)) .. O - 1 loop
          if S.Char_At (I) = ASCII.HT then
             Col := Col + (Tab_Stop - (Col - 1) mod Tab_Stop);
+         elsif Character'Pos (S.Char_At (I)) in 16#80# .. 16#BF# then
+            null;   --  a UTF-8 continuation byte: the same character
          else
             Col := Col + 1;
          end if;
