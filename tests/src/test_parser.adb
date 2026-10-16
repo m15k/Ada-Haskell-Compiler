@@ -60,6 +60,13 @@ package body Test_Parser is
          & " (-> (tlist (tvar a)) (tlist (tvar a)))))",
          "parenthesized operator signature");
 
+      --  M150: the tuple type constructor is a prefix type.
+      Check_Equal
+        (P ("p :: (,) Int Bool"),
+         "(module)|(sig ( p ) (tap (tap (tcon (,)) (tcon Int))"
+         & " (tcon Bool)))",
+         "tuple type constructor in prefix position");
+
       Check_Equal
         (P ("xs +++ ys = xs"),
          "(module)|(fun +++ (pats (pvar xs) (pvar ys)) (var xs))",

@@ -445,6 +445,31 @@ package body AHC.Parser is
                   return Arena.Add
                     (Type_Node'(Kind => Con_T, Span => Span,
                                 Con => (Arrow_Name, Names.No_Name)));
+               elsif At_K (Comma) then
+                  --  The tuple type constructors (,) (,,) ... as
+                  --  prefix types (Report 4.1.2): `(,) a` heads base's
+                  --  Functor/Foldable/Traversable pair instances (M150).
+                  declare
+                     Commas : Natural := 0;
+                  begin
+                     while At_K (Comma) loop
+                        Advance;
+                        Commas := Commas + 1;
+                     end loop;
+                     Expect (Right_Paren, "')'");
+                     Check_Tuple_Width (Commas + 1, Span);
+                     declare
+                        Text : String (1 .. Commas + 2) :=
+                          [others => ','];
+                     begin
+                        Text (1) := '(';
+                        Text (Text'Last) := ')';
+                        return Arena.Add
+                          (Type_Node'(Kind => Con_T, Span => Span,
+                                      Con => (Table.Intern (Text),
+                                              Names.No_Name)));
+                     end;
+                  end;
                end if;
                declare
                   First : constant Real_Type_Id := Parse_Type;
