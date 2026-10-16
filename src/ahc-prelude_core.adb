@@ -281,10 +281,11 @@ package body AHC.Prelude_Core is
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
-      --  M150 D1: pointer identity of two evaluated values - the
-      --  run-time half of the structural-dictionary test.
-      P_Same  : constant Real_Var_Id :=
-        Prim ("primSameFun", "ahc_prim_same_fun");
+      --  M150 D1: is a dictionary structural at a method field
+      --  (lazily, cycle-aware) - the run-time half of the structural-
+      --  dictionary test.
+      P_Struct : constant Real_Var_Id :=
+        Prim ("primStructOk", "ahc_prim_struct_ok");
       P_ShowI : constant Real_Var_Id :=
         Prim ("primshowInt", "ahc_prim_show_int");
       P_ShowC : constant Real_Var_Id :=
@@ -1562,7 +1563,7 @@ package body AHC.Prelude_Core is
       --  A dictionary is structural when its ==/compare agrees with
       --  the primitive on every value of its type; it is then built
       --  with the primitive as that method, which is how run-time code
-      --  recognises it (primSameFun, ahc_rts.c). A wired base instance
+      --  recognises it (primStructOk, ahc_rts.c). A wired base instance
       --  is structural; [a], Maybe a, (a, b) and every derived
       --  instance are structural exactly when every dictionary they
       --  reach is. That is decided per dictionary construction: Need
@@ -1790,7 +1791,8 @@ package body AHC.Prelude_Core is
          end loop;
       end Solve_Needs;
 
-      --  primSameFun (sel d_k) prim && ... over N.On.
+      --  primStructOk d_k i prim && ... over N.On, where i is the
+      --  field of d_k's ==/compare (after its superclasses).
       function Struct_Test
         (Inst : Instance_Info; Params : Var_Id_Vectors.Vector; N : Need)
          return Real_Expr_Id
@@ -1801,12 +1803,15 @@ package body AHC.Prelude_Core is
             declare
                Cl_K : constant Class_Id :=
                  Class_Id (Inst.Context (K).Class);
-               Sel : constant Real_Expr_Id := V (Struct_Sel (Cl_K));
+               Field : constant Natural :=
+                 Natural (M.Info (Real_Class_Id (Cl_K)).Supers.Length);
+               Fn : constant Real_Expr_Id := V (P_Struct);
                D : constant Real_Expr_Id := V (Params.Element (K));
-               Meth : constant Real_Expr_Id := Ap (Sel, D);
-               Same_F : constant Real_Expr_Id := V (P_Same);
+               F1 : constant Real_Expr_Id := Ap (Fn, D);
+               Idx : constant Real_Expr_Id := IntE (Field);
+               F2 : constant Real_Expr_Id := Ap (F1, Idx);
                Prim_V : constant Real_Expr_Id := V (Struct_Prim (Cl_K));
-               Test : constant Real_Expr_Id := Ap2 (Same_F, Meth, Prim_V);
+               Test : constant Real_Expr_Id := Ap (F2, Prim_V);
                No : constant Real_Expr_Id := ConE (Env.False_DC);
             begin
                Acc := Bool_Case (Test, Acc, No);
@@ -2104,6 +2109,15 @@ package body AHC.Prelude_Core is
          elsif N.On.Is_Empty then
             Dict := Struct_Dict (Inst, Params);
          else
+            --  Decided when the dictionary is built. A GND newtype
+            --  whose representation reaches itself (newtype L = L [L])
+            --  is tested from inside its own construction: its
+            --  dictionary is then a blackhole of this thread, which
+            --  primStructOk reads as structural (the optimistic
+            --  fixpoint); a polymorphically recursive one (newtype
+            --  M a = M (Maybe (M a))) builds a dictionary per level,
+            --  and primStructOk's depth bound answers field-wise
+            --  (M150 review).
             declare
                Test : constant Real_Expr_Id :=
                  Struct_Test (Inst, Params, N);

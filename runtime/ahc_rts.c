@@ -2561,19 +2561,52 @@ static AhcNode *p_compare_poly(AhcNode *a, AhcNode *b) {
   return ahc_mk_con(c < 0 ? LT_TAG : (c == 0 ? EQ_TAG : GT_TAG), 0);
 }
 
-/* M150: are two values the same heap node once evaluated? A wired or
-   derived Eq/Ord dictionary is STRUCTURAL exactly when its == (or
-   compare) IS the one global ahc_prim_eq_poly (ahc_prim_compare_poly)
-   node - only AHC.Prelude_Core's structural builder puts it there, a
-   source instance cannot name it, and a GND dictionary is its
-   representation's. The [a]/Maybe a/(a,b)/derived instances test
-   their element dictionaries with this once, when their own
-   dictionary is built, and pick the primitive or field-wise code.
-   Both collectors are non-moving, so node identity is stable. */
-static AhcNode *p_same_fun(AhcNode *a, AhcNode *b) {
-  AhcNode *x = ahc_eval(a);
-  AhcNode *y = ahc_eval(b);
-  return mk_bool(x == y);
+/* M150: is dictionary D structural at its method field K - that
+   field evaluating to the very PRIM node (ahc_prim_eq_poly for ==,
+   ahc_prim_compare_poly for compare)? Only AHC.Prelude_Core's
+   structural builder puts that node there; a source instance cannot
+   name it, and a GND dictionary is its representation's. A wired or
+   derived Eq/Ord dictionary over element dictionaries asks this
+   lazily, on its first comparison, and then answers with the
+   primitive or with field-wise code. Both collectors are non-moving,
+   so node identity is stable.
+   A dictionary that reaches itself (GND: newtype L = L [L], whose Eq
+   IS the list instance at L's Eq) meets its own blackhole: that cycle
+   adds no hand-written instance, so it answers structural - the
+   optimistic fixpoint. Polymorphic recursion (newtype M a =
+   M (Maybe (M a))) builds a new dictionary per level and never meets
+   a blackhole; past a few nested tests the answer is "not
+   structural", and field-wise code is always correct. */
+static __thread int struct_depth;
+
+static int struct_self_held(AhcNode *n) {
+  while (__atomic_load_n(&n->tag, __ATOMIC_ACQUIRE) == AHC_IND)
+    n = (AhcNode *)__atomic_load_n(&n->u.ind, __ATOMIC_ACQUIRE);
+  return __atomic_load_n(&n->tag, __ATOMIC_ACQUIRE) == AHC_BLACKHOLE
+    && (AhcTask *)__atomic_load_n(&n->u.bh.owner, __ATOMIC_ACQUIRE)
+         == cur_task;
+}
+
+static AhcNode *p_struct_ok(AhcNode *d, AhcNode *k, AhcNode *prim) {
+  long i = ahc_eval(k)->u.i;
+  AhcNode *v, *f, *p;
+  if (struct_depth >= 8) return mk_bool(0);
+  if (struct_self_held(d)) return mk_bool(1);
+  struct_depth++;
+  v = ahc_eval(d);
+  if (v->tag != AHC_CON || i < 0 || i >= v->u.con.arity) {
+    struct_depth--;
+    return mk_bool(0);
+  }
+  f = v->u.con.fields[i];
+  if (struct_self_held(f)) {
+    struct_depth--;
+    return mk_bool(1);
+  }
+  f = ahc_eval(f);
+  p = ahc_eval(prim);
+  struct_depth--;
+  return mk_bool(f == p);
 }
 
 /* Stepped enumerations (Report 3.10 / 6.3.4). enumFromThen is a
@@ -8676,7 +8709,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_eq_int, *ahc_prim_ne_int, *ahc_prim_lt_int,
   *ahc_prim_le_int, *ahc_prim_gt_int, *ahc_prim_ge_int,
   *ahc_prim_eq_char, *ahc_prim_lt_char,
-  *ahc_prim_eq_poly, *ahc_prim_compare_poly, *ahc_prim_same_fun,
+  *ahc_prim_eq_poly, *ahc_prim_compare_poly, *ahc_prim_struct_ok,
   *ahc_prim_enum_from_int,
   *ahc_prim_show_int, *ahc_prim_show_char, *ahc_prim_show_bool,
   *ahc_prim_from_integer,
@@ -8850,7 +8883,7 @@ void ahc_rts_init(void) {
   ahc_prim_pred_int = mk_prim1(p_pred_int);
   ahc_prim_eq_poly = mk_prim2(p_eq_poly);
   ahc_prim_compare_poly = mk_prim2(p_compare_poly);
-  ahc_prim_same_fun = mk_prim2(p_same_fun);
+  ahc_prim_struct_ok = mk_prim3(p_struct_ok);
   ahc_prim_put_str = mk_prim1(p_put_str);
   ahc_prim_put_str_ln = mk_prim1(p_put_str_ln);
   ahc_prim_bind_io = mk_prim2(p_bind_io);

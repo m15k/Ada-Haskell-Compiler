@@ -396,8 +396,30 @@ package body AHC.Elaborate is
                              (Kind => Var_C, Span => Span,
                               V => Real_Var_Id
                                      (Cl_Info.Methods.Element (MI).Selector)));
-                           Rep : constant Real_Expr_Id := M.Add (Expr_Node'
-                             (Kind => Var_C, Span => Span, V => Rep_V));
+                           --  Eq/Ord (M150 review): each method selects
+                           --  from its OWN representation dictionary.
+                           --  A wired or derived Eq/Ord tests its
+                           --  element dictionaries' ==/compare when it
+                           --  is built (Prelude_Core, structural
+                           --  dictionaries); for newtype L = L [L] that
+                           --  test reads L's own compare, and through a
+                           --  shared $drep it forced $drep from inside
+                           --  its own evaluation (<<loop>>). Per method,
+                           --  the field under evaluation is the
+                           --  blackhole the test recognises as a cycle.
+                           Own_Rep : constant Boolean :=
+                             Class_Id (Cl) = Env.Eq_Cl
+                             or else Class_Id (Cl) = Env.Ord_Cl;
+                           Rep : constant Real_Expr_Id :=
+                             (if Own_Rep
+                              then Solve_Ev
+                                (Constraint'(Class => Inst.Of_Class,
+                                             Arg => Real_Type_Id
+                                               (Inst.GND_Target),
+                                             Span => Span),
+                                 Givens, Span, 0)
+                              else M.Add (Expr_Node'
+                                (Kind => Var_C, Span => Span, V => Rep_V)));
                         begin
                            Methods.Append (M.Add (Expr_Node'
                              (Kind => App_C, Span => Span,
