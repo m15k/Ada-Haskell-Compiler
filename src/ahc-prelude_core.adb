@@ -281,6 +281,10 @@ package body AHC.Prelude_Core is
       P_EqP   : constant Real_Var_Id := Prim ("primeq", "ahc_prim_eq_poly");
       P_CmpP  : constant Real_Var_Id :=
         Prim ("primcompare", "ahc_prim_compare_poly");
+      --  M150 D1: pointer identity of two evaluated values - the
+      --  run-time half of the structural-dictionary test.
+      P_Same  : constant Real_Var_Id :=
+        Prim ("primSameFun", "ahc_prim_same_fun");
       P_ShowI : constant Real_Var_Id :=
         Prim ("primshowInt", "ahc_prim_show_int");
       P_ShowC : constant Real_Var_Id :=
@@ -335,7 +339,7 @@ package body AHC.Prelude_Core is
       --  - so `nan > 1` must not ask compare whether x is GT.
       function Cmp_Method
         (Want_Tag : Real_DataCon_Id; Negate : Boolean;
-         Swap : Boolean := False)
+         Swap : Boolean := False; Using : Real_Var_Id := P_CmpP)
         return Real_Expr_Id
       is
          X : constant Real_Var_Id := Fresh ("x");
@@ -357,29 +361,41 @@ package body AHC.Prelude_Core is
          return Lam (X, Lam (Y, M.Add (Expr_Node'
            (Kind => Case_C, Span => Span,
             Scrutinee => (if Swap
-                          then Ap2 (V (P_CmpP), V (Y), V (X))
-                          else Ap2 (V (P_CmpP), V (X), V (Y))),
+                          then Ap2 (V (Using), V (Y), V (X))
+                          else Ap2 (V (Using), V (X), V (Y))),
             Alts => Alts))));
       end Cmp_Method;
 
-      function Max_Min (Is_Max : Boolean) return Real_Expr_Id is
+      --  Report 6.3.2: max x y = if x <= y then y else x and min x y
+      --  = if x <= y then x else y, so on a tie max answers y and min
+      --  answers x (M150: AHC answered x for both, visible at -0.0
+      --  and at any field-wise type whose equal values differ). For
+      --  every order x <= y is compare x y /= GT, NaN's GT included.
+      function Max_Min
+        (Is_Max : Boolean; Using : Real_Var_Id := P_CmpP)
+         return Real_Expr_Id
+      is
          X : constant Real_Var_Id := Fresh ("x");
          Y : constant Real_Var_Id := Fresh ("y");
          Alts : Alt_Id_Vectors.Vector;
+         Cmp : constant Real_Expr_Id := V (Using);
+         XE : constant Real_Expr_Id := V (X);
+         YE : constant Real_Expr_Id := V (Y);
+         Scrut : constant Real_Expr_Id := Ap2 (Cmp, XE, YE);
+         On_GT : constant Real_Expr_Id :=
+           V (Var_Id (if Is_Max then X else Y));
+         Not_GT : constant Real_Expr_Id :=
+           V (Var_Id (if Is_Max then Y else X));
       begin
          Alts.Append (M.Add (Alt_Node'
-           (Kind => Con_Alt, Span => Span,
-            Alt_Body => V (Var_Id (if Is_Max then Y else X)),
-            A_Con => Ordering_LT,
+           (Kind => Con_Alt, Span => Span, Alt_Body => On_GT,
+            A_Con => Ordering_GT,
             Binders => Var_Id_Vectors.Empty_Vector)));
          Alts.Append (M.Add (Alt_Node'
-           (Kind => Default_Alt, Span => Span,
-            Alt_Body => V (Var_Id (if Is_Max then X else Y)))));
+           (Kind => Default_Alt, Span => Span, Alt_Body => Not_GT)));
          return Lam (X, Lam (Y, M.Add (Expr_Node'
            (Kind => Case_C, Span => Span,
-            Scrutinee => Ap2 (V (P_CmpP), V (X),
-                              V (Y)),
-            Alts => Alts))));
+            Scrutinee => Scrut, Alts => Alts))));
       end Max_Min;
 
       ------------------------------------------------------------------
@@ -1506,6 +1522,570 @@ package body AHC.Prelude_Core is
          Bind (Inst.Dict_Global, Dict);
       end Derive_Show;
 
+      ------------------------------------------------------------------
+      --  Structural dictionaries (M150 D1)
+      --
+      --  A dictionary is structural when its ==/compare agrees with
+      --  the primitive on every value of its type; it is then built
+      --  with the primitive as that method, which is how run-time code
+      --  recognises it (primSameFun, ahc_rts.c). A wired base instance
+      --  is structural; [a], Maybe a, (a, b) and every derived
+      --  instance are structural exactly when every dictionary they
+      --  reach is. That is decided per dictionary construction: Need
+      --  says statically which of the instance's OWN context
+      --  dictionaries must be tested, so a recursive type never tests
+      --  itself.
+      ------------------------------------------------------------------
+
+      package Pos_Vectors is new Ada.Containers.Vectors
+        (Positive, Positive);
+
+      --  Never: some field reaches a hand-written instance or a
+      --  function. Otherwise On lists (sorted, distinct) the context
+      --  positions whose dictionaries must be structural.
+      type Need is record
+         Never : Boolean := False;
+         On    : Pos_Vectors.Vector;
+      end record;
+
+      package Need_Vectors is new Ada.Containers.Vectors
+        (Positive, Need);
+
+      Needs : Need_Vectors.Vector;   --  by instance index
+
+      procedure Add (N : in out Need; P : Positive) is
+      begin
+         for I in 1 .. N.On.Last_Index loop
+            if N.On (I) = P then
+               return;
+            elsif N.On (I) > P then
+               N.On.Insert (I, P);
+               return;
+            end if;
+         end loop;
+         N.On.Append (P);
+      end Add;
+
+      procedure Merge (Into : in out Need; From : Need) is
+      begin
+         if From.Never then
+            Into.Never := True;
+         end if;
+         for P of From.On loop
+            Add (Into, P);
+         end loop;
+      end Merge;
+
+      function Is_Eq_Ord (Cl : Class_Id) return Boolean is
+        (Cl = Env.Eq_Cl or else Cl = Env.Ord_Cl);
+
+      --  The method a structural dictionary of Cl carries as the
+      --  primitive (== / compare, both method 1), and that primitive.
+      function Struct_Sel (Cl : Class_Id) return Var_Id is
+        (M.Info (Real_Class_Id (Cl)).Methods (1).Selector);
+      function Struct_Prim (Cl : Class_Id) return Real_Var_Id is
+        (if Cl = Env.Eq_Cl then P_EqP else P_CmpP);
+
+      function DC_Scheme (DC : Real_DataCon_Id) return Scheme is
+        (M.Node (Real_Scheme_Id (M.Info (DC).Con_Scheme)));
+
+      function Field_Types
+        (DC : Real_DataCon_Id) return Type_Id_Vectors.Vector
+      is
+         T : Real_Type_Id := Real_Type_Id (DC_Scheme (DC).S_Body);
+         R : Type_Id_Vectors.Vector;
+      begin
+         while M.Node (T).Kind = TFun_T loop
+            R.Append (M.Node (T).From);
+            T := M.Node (T).To;
+         end loop;
+         return R;
+      end Field_Types;
+
+      --  What the structurality of class Cl at field type T (over
+      --  Tvs) inside Inst depends on, in Inst's context positions.
+      function Need_Of_Type
+        (T : Real_Type_Id; Cl : Real_Class_Id;
+         Tvs : TyVar_Id_Vectors.Vector; Inst : Instance_Info;
+         Depth : Natural := 0) return Need
+      is
+         R : Need;
+      begin
+         if Depth > 40 or else not Is_Eq_Ord (Class_Id (Cl)) then
+            R.Never := True;
+            return R;
+         elsif Var_Spine (T) then
+            declare
+               P, Via : Natural;
+            begin
+               Ctx_Pos (T, Cl, Tvs, Inst, P, Via);
+               if P = 0
+                 or else not Is_Eq_Ord
+                               (Class_Id (Inst.Context (P).Class))
+               then
+                  R.Never := True;
+               else
+                  Add (R, P);
+               end if;
+               return R;
+            end;
+         elsif M.Node (T).Kind not in TCon_T | TApp_T then
+            R.Never := True;   --  a function never compares
+            return R;
+         end if;
+         declare
+            Args : Type_Id_Vectors.Vector;
+            Pick : Natural;
+            JN : Need;
+         begin
+            Choose (T, Cl, Pick, Args);
+            if Pick = 0 then
+               R.Never := True;
+               return R;
+            end if;
+            declare
+               J : constant Instance_Info :=
+                 M.Info (Real_Instance_Id (Pick));
+            begin
+               if J.Is_GND then
+                  if J.GND_Target = No_Type then
+                     R.Never := True;
+                     return R;
+                  end if;
+                  --  A newtype's dictionary IS its representation's.
+                  declare
+                     Rep : constant Real_Type_Id :=
+                       Inst_Match.Subst_Vars
+                         (M, Real_Type_Id (J.GND_Target),
+                          J.Head_Vars, Args);
+                  begin
+                     return Need_Of_Type (Rep, Cl, Tvs, Inst, Depth + 1);
+                  end;
+               elsif J.From_Source then
+                  R.Never := True;      --  a hand-written ==/compare
+                  return R;
+               elsif J.Is_Derived then
+                  JN := Needs (Pick);
+               else
+                  --  Wired: Int, Char, Text, ... need nothing; [a],
+                  --  Maybe a, (a, b) need every element.
+                  for K in 1 .. J.Context.Last_Index loop
+                     Add (JN, K);
+                  end loop;
+               end if;
+               if JN.Never then
+                  R.Never := True;
+                  return R;
+               end if;
+               for K of JN.On loop
+                  declare
+                     A : constant Real_Type_Id :=
+                       Inst_Match.Subst_Vars
+                         (M, J.Context (K).Arg, J.Head_Vars, Args);
+                     Sub : constant Need :=
+                       Need_Of_Type (A, J.Context (K).Class, Tvs, Inst,
+                                     Depth + 1);
+                  begin
+                     Merge (R, Sub);
+                  end;
+               end loop;
+               return R;
+            end;
+         end;
+      end Need_Of_Type;
+
+      function Derived_Need (II : Real_Instance_Id) return Need is
+         Inst : constant Instance_Info := M.Info (II);
+         Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
+         R : Need;
+      begin
+         for DCI of M.Info (Real_TyCon_Id (Inst.Head)).Cons loop
+            declare
+               DC : constant Real_DataCon_Id := Real_DataCon_Id (DCI);
+               Tvs : constant TyVar_Id_Vectors.Vector := DC_Scheme (DC).Tvs;
+            begin
+               for FT of Field_Types (DC) loop
+                  Merge (R, Need_Of_Type (Real_Type_Id (FT), Cl, Tvs, Inst));
+               end loop;
+            end;
+         end loop;
+         return R;
+      end Derived_Need;
+
+      --  Least fixpoint from all-empty: Needs only grow, so recursive
+      --  and mutually recursive derived types settle. Past the round
+      --  cap every derived dictionary is field-wise, which is always
+      --  correct.
+      procedure Solve_Needs is
+         Changed : Boolean := True;
+         Rounds : Natural := 0;
+         function Derived_Eq_Ord (II : Real_Instance_Id) return Boolean
+         is (M.Info (II).Is_Derived
+             and then Is_Eq_Ord (M.Info (II).Of_Class)
+             and then M.Info (II).Head /= No_TyCon);
+      begin
+         Needs := Need_Vectors.To_Vector
+           (Need'(others => <>),
+            Ada.Containers.Count_Type (M.Last_Instance));
+         while Changed loop
+            Changed := False;
+            Rounds := Rounds + 1;
+            for II in 1 .. M.Last_Instance loop
+               if Derived_Eq_Ord (Real_Instance_Id (II)) then
+                  declare
+                     N : constant Need :=
+                       Derived_Need (Real_Instance_Id (II));
+                  begin
+                     if N /= Needs (Positive (II)) then
+                        Needs.Replace_Element (Positive (II), N);
+                        Changed := True;
+                     end if;
+                  end;
+               end if;
+            end loop;
+            if Changed and then Rounds >= 64 then
+               for II in 1 .. M.Last_Instance loop
+                  if Derived_Eq_Ord (Real_Instance_Id (II)) then
+                     Needs.Replace_Element
+                       (Positive (II),
+                        Need'(Never => True, On => <>));
+                  end if;
+               end loop;
+               exit;
+            end if;
+         end loop;
+      end Solve_Needs;
+
+      --  primSameFun (sel d_k) prim && ... over N.On.
+      function Struct_Test
+        (Inst : Instance_Info; Params : Var_Id_Vectors.Vector; N : Need)
+         return Real_Expr_Id
+      is
+         Acc : Real_Expr_Id := ConE (Env.True_DC);
+      begin
+         for K of reverse N.On loop
+            declare
+               Cl_K : constant Class_Id :=
+                 Class_Id (Inst.Context (K).Class);
+               Sel : constant Real_Expr_Id := V (Struct_Sel (Cl_K));
+               D : constant Real_Expr_Id := V (Params.Element (K));
+               Meth : constant Real_Expr_Id := Ap (Sel, D);
+               Same_F : constant Real_Expr_Id := V (P_Same);
+               Prim_V : constant Real_Expr_Id := V (Struct_Prim (Cl_K));
+               Test : constant Real_Expr_Id := Ap2 (Same_F, Meth, Prim_V);
+               No : constant Real_Expr_Id := ConE (Env.False_DC);
+            begin
+               Acc := Bool_Case (Test, Acc, No);
+            end;
+         end loop;
+         return Acc;
+      end Struct_Test;
+
+      --  The structural dictionary: the primitives (the methods every
+      --  wired and derived Eq/Ord had before M150).
+      function Struct_Dict
+        (Inst : Instance_Info; Params : Var_Id_Vectors.Vector)
+         return Real_Expr_Id
+      is
+         Supers : constant Expr_Id_Vectors.Vector :=
+           Super_Dicts (Inst, Params);
+         Ms : Expr_Id_Vectors.Vector;
+      begin
+         if Inst.Of_Class = Env.Eq_Cl then
+            declare
+               X : constant Real_Var_Id := Fresh ("x");
+               Y : constant Real_Var_Id := Fresh ("y");
+            begin
+               Ms.Append (V (P_EqP));
+               Ms.Append
+                 (Lam (X, Lam (Y,
+                    Bool_Case
+                      (Ap2 (V (P_EqP),
+                            V (X), V (Y)),
+                       ConE (Env.False_DC),
+                       ConE (Env.True_DC)))));
+            end;
+         else
+            Ms.Append (V (P_CmpP));   --  compare
+            Ms.Append (Cmp_Method (Ordering_LT, False));  --  <
+            Ms.Append (Cmp_Method (Ordering_GT, True));   --  <=
+            if Inst.Head = Env.Double_TC
+              or else Inst.Head = Env.Float_TC
+            then
+               --  IEEE: every comparison with a NaN is False.
+               Ms.Append (Cmp_Method (Ordering_LT, False,
+                                      Swap => True));  --  >
+               Ms.Append (Cmp_Method (Ordering_GT, True,
+                                      Swap => True));  --  >=
+            else
+               Ms.Append (Cmp_Method (Ordering_GT, False));
+               Ms.Append (Cmp_Method (Ordering_LT, True));
+            end if;
+            Ms.Append (Max_Min (True));
+            Ms.Append (Max_Min (False));
+         end if;
+         return Mk_Dict (M, Real_Class_Id (Inst.Of_Class), Supers, Ms,
+                         Span);
+      end Struct_Dict;
+
+      --  case C of LT -> LT; EQ -> Rest; GT -> GT
+      function Ord_Then (C, Rest : Real_Expr_Id) return Real_Expr_Id is
+         Alts : Alt_Id_Vectors.Vector;
+         LT_E : constant Real_Expr_Id := ConE (Ordering_LT);
+         GT_E : constant Real_Expr_Id := ConE (Ordering_GT);
+      begin
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => LT_E,
+            A_Con => Ordering_LT,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => Rest,
+            A_Con => Ordering_LT + 1,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => GT_E,
+            A_Con => Ordering_GT,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         return M.Add (Expr_Node'
+           (Kind => Case_C, Span => Span, Scrutinee => C, Alts => Alts));
+      end Ord_Then;
+
+      --  The field-wise ==/compare (Report 11.1) as \x y -> ...: the
+      --  same constructor compares its fields left to right through
+      --  their own instances; different constructors are unequal, or
+      --  order by declaration - primcompare decides that from the two
+      --  tags alone (poly_cmp returns on differing contags before it
+      --  reads a field). A field of the instance's own type calls
+      --  Self, the let-bound function: a list or tree builds no
+      --  dictionary per node.
+      function Con_Body
+        (Inst : Instance_Info; Params : Var_Id_Vectors.Vector;
+         Self : Real_Var_Id) return Real_Expr_Id
+      is
+         Is_Ord : constant Boolean := Inst.Of_Class = Env.Ord_Cl;
+         Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
+         TC : constant Real_TyCon_Id := Real_TyCon_Id (Inst.Head);
+         Sel : constant Var_Id := Struct_Sel (Inst.Of_Class);
+         Head_T : constant Real_Type_Id :=
+           Inst_Match.Instance_Type (M, Env, Inst);
+         Multi : constant Boolean :=
+           Natural (M.Info (TC).Cons.Length) > 1;
+         X : constant Real_Var_Id := Fresh ("x");
+         Y : constant Real_Var_Id := Fresh ("y");
+         Outer : Alt_Id_Vectors.Vector;
+
+         function Field_Op
+           (FT : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector;
+            A, B : Real_Var_Id) return Real_Expr_Id
+         is
+            Fn : Real_Expr_Id;
+         begin
+            if Same_Under (FT, Tvs, Head_T, Inst.Head_Vars) then
+               Fn := V (Self);
+            else
+               declare
+                  D : constant Expr_Id :=
+                    Dict_At (FT, Cl, Tvs, Inst, Params);
+               begin
+                  if D = No_Expr then
+                     return Err ((if Is_Ord then "deriving Ord"
+                                  else "deriving Eq")
+                                 & ": unsupported field type");
+                  end if;
+                  declare
+                     S : constant Real_Expr_Id := V (Sel);
+                  begin
+                     Fn := Ap (S, Real_Expr_Id (D));
+                  end;
+               end;
+            end if;
+            declare
+               AE : constant Real_Expr_Id := V (A);
+               BE : constant Real_Expr_Id := V (B);
+            begin
+               return Ap2 (Fn, AE, BE);
+            end;
+         end Field_Op;
+      begin
+         for DCI of M.Info (TC).Cons loop
+            declare
+               DC : constant Real_DataCon_Id := Real_DataCon_Id (DCI);
+               Tvs : constant TyVar_Id_Vectors.Vector :=
+                 DC_Scheme (DC).Tvs;
+               FTs : constant Type_Id_Vectors.Vector := Field_Types (DC);
+               As, Bs : Var_Id_Vectors.Vector;
+               Same : Real_Expr_Id;
+               Inner : Alt_Id_Vectors.Vector;
+               Inner_Case : Real_Expr_Id;
+            begin
+               for I in 1 .. FTs.Last_Index loop
+                  As.Append (Fresh ("a"));
+                  Bs.Append (Fresh ("b"));
+               end loop;
+               if not Is_Ord then
+                  Same := ConE (Env.True_DC);
+                  for I in reverse 1 .. FTs.Last_Index loop
+                     declare
+                        Test : constant Real_Expr_Id :=
+                          Field_Op (Real_Type_Id (FTs.Element (I)), Tvs,
+                                    Real_Var_Id (As.Element (I)),
+                                    Real_Var_Id (Bs.Element (I)));
+                        No : constant Real_Expr_Id := ConE (Env.False_DC);
+                     begin
+                        Same := Bool_Case (Test, Same, No);
+                     end;
+                  end loop;
+               elsif FTs.Is_Empty then
+                  Same := ConE (Ordering_LT + 1);   --  EQ
+               else
+                  Same := Field_Op
+                    (Real_Type_Id (FTs.Last_Element), Tvs,
+                     Real_Var_Id (As.Last_Element),
+                     Real_Var_Id (Bs.Last_Element));
+                  for I in reverse 1 .. FTs.Last_Index - 1 loop
+                     declare
+                        C : constant Real_Expr_Id :=
+                          Field_Op (Real_Type_Id (FTs.Element (I)), Tvs,
+                                    Real_Var_Id (As.Element (I)),
+                                    Real_Var_Id (Bs.Element (I)));
+                     begin
+                        Same := Ord_Then (C, Same);
+                     end;
+                  end loop;
+               end if;
+               Inner.Append (M.Add (Alt_Node'
+                 (Kind => Con_Alt, Span => Span, Alt_Body => Same,
+                  A_Con => DC, Binders => Bs)));
+               if Multi then
+                  declare
+                     Other : Real_Expr_Id;
+                  begin
+                     if Is_Ord then
+                        declare
+                           Cmp : constant Real_Expr_Id := V (P_CmpP);
+                           XE : constant Real_Expr_Id := V (X);
+                           YE : constant Real_Expr_Id := V (Y);
+                        begin
+                           Other := Ap2 (Cmp, XE, YE);
+                        end;
+                     else
+                        Other := ConE (Env.False_DC);
+                     end if;
+                     Inner.Append (M.Add (Alt_Node'
+                       (Kind => Default_Alt, Span => Span,
+                        Alt_Body => Other)));
+                  end;
+               end if;
+               declare
+                  YS : constant Real_Expr_Id := V (Y);
+               begin
+                  Inner_Case := M.Add (Expr_Node'
+                    (Kind => Case_C, Span => Span, Scrutinee => YS,
+                     Alts => Inner));
+               end;
+               Outer.Append (M.Add (Alt_Node'
+                 (Kind => Con_Alt, Span => Span, Alt_Body => Inner_Case,
+                  A_Con => DC, Binders => As)));
+            end;
+         end loop;
+         declare
+            XS : constant Real_Expr_Id := V (X);
+            Top : constant Real_Expr_Id := M.Add (Expr_Node'
+              (Kind => Case_C, Span => Span, Scrutinee => XS,
+               Alts => Outer));
+         begin
+            return Lam (X, Lam (Y, Top));
+         end;
+      end Con_Body;
+
+      --  let f = <Con_Body> in MkDict supers f <methods over f>
+      function Fieldwise_Dict
+        (Inst : Instance_Info; Params : Var_Id_Vectors.Vector)
+         return Real_Expr_Id
+      is
+         Is_Ord : constant Boolean := Inst.Of_Class = Env.Ord_Cl;
+         F : constant Real_Var_Id := Fresh (if Is_Ord then "cmp" else "eq");
+         Body_F : constant Real_Expr_Id := Con_Body (Inst, Params, F);
+         Supers : constant Expr_Id_Vectors.Vector :=
+           Super_Dicts (Inst, Params);
+         Ms : Expr_Id_Vectors.Vector;
+         Binds : Bind_Vectors.Vector;
+         Dict : Real_Expr_Id;
+      begin
+         Ms.Append (V (F));
+         if Is_Ord then
+            Ms.Append (Cmp_Method (Ordering_LT, False, Using => F));  --  <
+            Ms.Append (Cmp_Method (Ordering_GT, True, Using => F));   --  <=
+            Ms.Append (Cmp_Method (Ordering_GT, False, Using => F));  --  >
+            Ms.Append (Cmp_Method (Ordering_LT, True, Using => F));   --  >=
+            Ms.Append (Max_Min (True, Using => F));
+            Ms.Append (Max_Min (False, Using => F));
+         else
+            declare
+               X : constant Real_Var_Id := Fresh ("x");
+               Y : constant Real_Var_Id := Fresh ("y");
+               FE : constant Real_Expr_Id := V (F);
+               XE : constant Real_Expr_Id := V (X);
+               YE : constant Real_Expr_Id := V (Y);
+               Call : constant Real_Expr_Id := Ap2 (FE, XE, YE);
+               No : constant Real_Expr_Id := ConE (Env.False_DC);
+               Yes : constant Real_Expr_Id := ConE (Env.True_DC);
+            begin
+               Ms.Append (Lam (X, Lam (Y, Bool_Case (Call, No, Yes))));
+            end;
+         end if;
+         Dict := Mk_Dict (M, Real_Class_Id (Inst.Of_Class), Supers, Ms,
+                          Span);
+         Binds.Append (Bind_Pair'(Binder => F, Rhs => Body_F));
+         return M.Add (Expr_Node'
+           (Kind => Let_C, Span => Span, Is_Rec => True,
+            Binds => Binds, Let_Body => Dict));
+      end Fieldwise_Dict;
+
+      --  Every wired and derived Eq/Ord dictionary: structural,
+      --  field-wise, or \ds -> case <test ds> of True -> structural;
+      --  _ -> field-wise.
+      procedure Build_Eq_Ord (II : Real_Instance_Id) is
+         Inst : constant Instance_Info := M.Info (II);
+         Params : Var_Id_Vectors.Vector;
+         N : Need;
+         Dict : Real_Expr_Id;
+      begin
+         for CI in 1 .. Inst.Context.Last_Index loop
+            Params.Append (Fresh ("$d"));
+            pragma Unreferenced (CI);
+         end loop;
+         if Inst.Is_Derived then
+            N := Needs (Positive (II));
+         else
+            --  Wired: [a], Maybe a, (a, b) test every element; Int,
+            --  Char, Double, Text, Ptr ... have no context and are
+            --  structural outright.
+            for K in 1 .. Inst.Context.Last_Index loop
+               Add (N, K);
+            end loop;
+         end if;
+         if N.Never then
+            Dict := Fieldwise_Dict (Inst, Params);
+         elsif N.On.Is_Empty then
+            Dict := Struct_Dict (Inst, Params);
+         else
+            declare
+               Test : constant Real_Expr_Id :=
+                 Struct_Test (Inst, Params, N);
+               SD : constant Real_Expr_Id := Struct_Dict (Inst, Params);
+               FD : constant Real_Expr_Id :=
+                 Fieldwise_Dict (Inst, Params);
+            begin
+               Dict := Bool_Case (Test, SD, FD);
+            end;
+         end if;
+         for PI in reverse 1 .. Params.Last_Index loop
+            Dict := Lam (Params (PI), Dict);
+         end loop;
+         Bind (Inst.Dict_Global, Dict);
+      end Build_Eq_Ord;
+
       function Errs (Cl : Real_Class_Id;
                      Fill : Expr_Id_Vectors.Vector :=
                        Expr_Id_Vectors.Empty_Vector)
@@ -1952,6 +2532,9 @@ package body AHC.Prelude_Core is
       --  Instance dictionaries without bodies yet
       ------------------------------------------------------------------
 
+      --  M150 D1: which derived Eq/Ord dictionaries are structural.
+      Solve_Needs;
+
       for II in 1 .. M.Last_Instance loop
          declare
             Inst : constant Instance_Info :=
@@ -1982,40 +2565,10 @@ package body AHC.Prelude_Core is
                   Cl : constant Real_Class_Id := Real_Class_Id (Cl_Id);
                   Ms : Expr_Id_Vectors.Vector;
                begin
-                  if Cl_Id = Env.Eq_Cl then
-                     declare
-                        X : constant Real_Var_Id := Fresh ("x");
-                        Y : constant Real_Var_Id := Fresh ("y");
-                     begin
-                        Ms.Append (V (P_EqP));
-                        Ms.Append
-                          (Lam (X, Lam (Y,
-                             Bool_Case
-                               (Ap2 (V (P_EqP),
-                                     V (X), V (Y)),
-                                ConE (Env.False_DC),
-                                ConE (Env.True_DC)))));
-                     end;
-                     Give_Dict (Real_Instance_Id (II), Ms);
-                  elsif Cl_Id = Env.Ord_Cl then
-                     Ms.Append (V (P_CmpP));   --  compare
-                     Ms.Append (Cmp_Method (Ordering_LT, False));  --  <
-                     Ms.Append (Cmp_Method (Ordering_GT, True));   --  <=
-                     if Inst.Head = Env.Double_TC
-                       or else Inst.Head = Env.Float_TC
-                     then
-                        --  IEEE: every comparison with a NaN is False.
-                        Ms.Append (Cmp_Method (Ordering_LT, False,
-                                               Swap => True));  --  >
-                        Ms.Append (Cmp_Method (Ordering_GT, True,
-                                               Swap => True));  --  >=
-                     else
-                        Ms.Append (Cmp_Method (Ordering_GT, False));
-                        Ms.Append (Cmp_Method (Ordering_LT, True));
-                     end if;
-                     Ms.Append (Max_Min (True));
-                     Ms.Append (Max_Min (False));
-                     Give_Dict (Real_Instance_Id (II), Ms);
+                  if Cl_Id = Env.Eq_Cl or else Cl_Id = Env.Ord_Cl then
+                     --  M150 D1: structural, field-wise, or decided
+                     --  when the dictionary is built.
+                     Build_Eq_Ord (Real_Instance_Id (II));
                   elsif Cl_Id = Env.Num_Cl
                     and then Inst.Head = Env.Int_TC
                   then

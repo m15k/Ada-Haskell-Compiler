@@ -6,8 +6,10 @@
 --  instance that AHC.Elaborate did not already materialize, using a
 --  small set of runtime primitives:
 --
---    - structural equality/comparison prims cover Eq and Ord for all
---      first-order values (including user ADTs, hence derived Eq/Ord),
+--    - structural equality/comparison prims cover Eq and Ord wherever
+--      every instance a dictionary reaches is structural (M150);
+--      otherwise derived and wired Eq/Ord compare field-wise through
+--      the components' own instances,
 --    - Int/Integer arithmetic and show prims cover Num/Show/Enum at
 --      the defaultable types,
 --    - IO prims cover Monad IO; the list monad is built in Core.

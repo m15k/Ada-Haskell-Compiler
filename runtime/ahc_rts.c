@@ -2561,6 +2561,21 @@ static AhcNode *p_compare_poly(AhcNode *a, AhcNode *b) {
   return ahc_mk_con(c < 0 ? LT_TAG : (c == 0 ? EQ_TAG : GT_TAG), 0);
 }
 
+/* M150: are two values the same heap node once evaluated? A wired or
+   derived Eq/Ord dictionary is STRUCTURAL exactly when its == (or
+   compare) IS the one global ahc_prim_eq_poly (ahc_prim_compare_poly)
+   node - only AHC.Prelude_Core's structural builder puts it there, a
+   source instance cannot name it, and a GND dictionary is its
+   representation's. The [a]/Maybe a/(a,b)/derived instances test
+   their element dictionaries with this once, when their own
+   dictionary is built, and pick the primitive or field-wise code.
+   Both collectors are non-moving, so node identity is stable. */
+static AhcNode *p_same_fun(AhcNode *a, AhcNode *b) {
+  AhcNode *x = ahc_eval(a);
+  AhcNode *y = ahc_eval(b);
+  return mk_bool(x == y);
+}
+
 /* Stepped enumerations (Report 3.10 / 6.3.4). enumFromThen is a
    lazy infinite structure with the given stride; enumFromThenTo is
    finite (empty when the stride points away from the bound). The
@@ -8661,7 +8676,7 @@ AhcNode *ahc_prim_add_int, *ahc_prim_sub_int, *ahc_prim_mul_int,
   *ahc_prim_eq_int, *ahc_prim_ne_int, *ahc_prim_lt_int,
   *ahc_prim_le_int, *ahc_prim_gt_int, *ahc_prim_ge_int,
   *ahc_prim_eq_char, *ahc_prim_lt_char,
-  *ahc_prim_eq_poly, *ahc_prim_compare_poly,
+  *ahc_prim_eq_poly, *ahc_prim_compare_poly, *ahc_prim_same_fun,
   *ahc_prim_enum_from_int,
   *ahc_prim_show_int, *ahc_prim_show_char, *ahc_prim_show_bool,
   *ahc_prim_from_integer,
@@ -8835,6 +8850,7 @@ void ahc_rts_init(void) {
   ahc_prim_pred_int = mk_prim1(p_pred_int);
   ahc_prim_eq_poly = mk_prim2(p_eq_poly);
   ahc_prim_compare_poly = mk_prim2(p_compare_poly);
+  ahc_prim_same_fun = mk_prim2(p_same_fun);
   ahc_prim_put_str = mk_prim1(p_put_str);
   ahc_prim_put_str_ln = mk_prim1(p_put_str_ln);
   ahc_prim_bind_io = mk_prim2(p_bind_io);
