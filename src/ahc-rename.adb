@@ -1534,6 +1534,14 @@ package body AHC.Rename is
                      D : constant Real_Decl_Id := U.Equations (1);
                      N : constant Decl_Node := Arena.Node (D);
                   begin
+                     --  GHC: "Top-level strict bindings aren't allowed".
+                     if Global and then Arena.Node (N.Pat).Kind = Bang_P
+                     then
+                        Bag.Add (Diagnostics.Error,
+                                 Diagnostics.Rename_Unsupported, N.Span,
+                                 "top-level strict bindings aren't "
+                                 & "allowed");
+                     end if;
                      Rename_Pat (N.Pat, Global_Binders => Global);
                   end;
             end case;

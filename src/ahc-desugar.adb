@@ -173,7 +173,6 @@ package body AHC.Desugar is
          end loop;
          return Result;
       end Force_All;
-      pragma Unreferenced (Force_All);  --  A5 uses it
 
       function Str_Lit
         (S : String; Span : Diagnostics.Source_Span)
@@ -1018,9 +1017,13 @@ package body AHC.Desugar is
 
       function Ds_Expr (E : Real_Expr_Id) return Core.Real_Expr_Id;
 
+      --  Forces receives, in order, the variables a strict binding of
+      --  the group (`!p = e`, M150) makes the group's body force;
+      --  wrap the body with Force_All.
       procedure Ds_Group
-        (Decls : Syntax.Decl_Id_Vectors.Vector;
-         Into  : in out Core.Bind_Vectors.Vector);
+        (Decls  : Syntax.Decl_Id_Vectors.Vector;
+         Into   : in out Core.Bind_Vectors.Vector;
+         Forces : in out Core.Var_Id_Vectors.Vector);
 
       --  Wrap Body in the bindings needed to match Pat against Scrut;
       --  on failure the result is Fail (a variable reference to a
@@ -1725,16 +1728,23 @@ package body AHC.Desugar is
                               when Let_S =>
                                  declare
                                     Binds : Core.Bind_Vectors.Vector;
+                                    Forces : Core.Var_Id_Vectors.Vector;
                                  begin
-                                    Ds_Group (QN.Let_Binds, Binds);
+                                    Ds_Group (QN.Let_Binds, Binds, Forces);
                                     if not Binds.Is_Empty then
-                                       Acc := M.Add
-                                         (Core.Expr_Node'
-                                            (Kind => Core.Let_C,
-                                             Span => Span,
-                                             Is_Rec => True,
-                                             Binds => Binds,
-                                             Let_Body => Acc));
+                                       declare
+                                          Forced : constant
+                                            Core.Real_Expr_Id :=
+                                              Force_All (Forces, Acc, Span);
+                                       begin
+                                          Acc := M.Add
+                                            (Core.Expr_Node'
+                                               (Kind => Core.Let_C,
+                                                Span => Span,
+                                                Is_Rec => True,
+                                                Binds => Binds,
+                                                Let_Body => Forced));
+                                       end;
                                     end if;
                                  end;
                            end case;
@@ -1751,12 +1761,19 @@ package body AHC.Desugar is
          if not Where_Ds.Is_Empty then
             declare
                Binds : Core.Bind_Vectors.Vector;
+               Forces : Core.Var_Id_Vectors.Vector;
             begin
-               Ds_Group (Where_Ds, Binds);
+               Ds_Group (Where_Ds, Binds, Forces);
                if not Binds.Is_Empty then
-                  Result := M.Add (Core.Expr_Node'
-                    (Kind => Core.Let_C, Span => Span, Is_Rec => True,
-                     Binds => Binds, Let_Body => Result));
+                  declare
+                     --  `where !x = e` forces x before the guards.
+                     Forced : constant Core.Real_Expr_Id :=
+                       Force_All (Forces, Result, Span);
+                  begin
+                     Result := M.Add (Core.Expr_Node'
+                       (Kind => Core.Let_C, Span => Span, Is_Rec => True,
+                        Binds => Binds, Let_Body => Forced));
+                  end;
                end if;
             end;
          end if;
@@ -1865,16 +1882,22 @@ package body AHC.Desugar is
             when Let_S =>
                declare
                   Binds : Core.Bind_Vectors.Vector;
+                  Forces : Core.Var_Id_Vectors.Vector;
                   Rest : constant Core.Real_Expr_Id :=
                     Ds_Do (Stmts, From + 1, Span);
                begin
-                  Ds_Group (N.Let_Binds, Binds);
+                  Ds_Group (N.Let_Binds, Binds, Forces);
                   if Binds.Is_Empty then
                      return Rest;
                   end if;
-                  return M.Add (Core.Expr_Node'
-                    (Kind => Core.Let_C, Span => Span, Is_Rec => True,
-                     Binds => Binds, Let_Body => Rest));
+                  declare
+                     Forced : constant Core.Real_Expr_Id :=
+                       Force_All (Forces, Rest, Span);
+                  begin
+                     return M.Add (Core.Expr_Node'
+                       (Kind => Core.Let_C, Span => Span, Is_Rec => True,
+                        Binds => Binds, Let_Body => Forced));
+                  end;
                end;
          end case;
       end Ds_Do;
@@ -1932,17 +1955,23 @@ package body AHC.Desugar is
                when Let_S =>
                   declare
                      Binds : Core.Bind_Vectors.Vector;
+                     Forces : Core.Var_Id_Vectors.Vector;
                      Rest : constant Core.Real_Expr_Id :=
                        Ds_Comp (Quals, From + 1, Head, Span);
                   begin
-                     Ds_Group (N.Let_Binds, Binds);
+                     Ds_Group (N.Let_Binds, Binds, Forces);
                      if Binds.Is_Empty then
                         return Rest;
                      end if;
-                     return M.Add (Core.Expr_Node'
-                       (Kind => Core.Let_C, Span => Span,
-                        Is_Rec => True, Binds => Binds,
-                        Let_Body => Rest));
+                     declare
+                        Forced : constant Core.Real_Expr_Id :=
+                          Force_All (Forces, Rest, Span);
+                     begin
+                        return M.Add (Core.Expr_Node'
+                          (Kind => Core.Let_C, Span => Span,
+                           Is_Rec => True, Binds => Binds,
+                           Let_Body => Forced));
+                     end;
                   end;
             end case;
          end;
@@ -2123,16 +2152,22 @@ package body AHC.Desugar is
             when Let_E =>
                declare
                   Binds : Core.Bind_Vectors.Vector;
+                  Forces : Core.Var_Id_Vectors.Vector;
                   Body_E : constant Core.Real_Expr_Id :=
                     Ds_Expr (N.Let_Body);
                begin
-                  Ds_Group (N.Binds, Binds);
+                  Ds_Group (N.Binds, Binds, Forces);
                   if Binds.Is_Empty then
                      return Body_E;
                   end if;
-                  return M.Add (Core.Expr_Node'
-                    (Kind => Core.Let_C, Span => Span, Is_Rec => True,
-                     Binds => Binds, Let_Body => Body_E));
+                  declare
+                     Forced : constant Core.Real_Expr_Id :=
+                       Force_All (Forces, Body_E, Span);
+                  begin
+                     return M.Add (Core.Expr_Node'
+                       (Kind => Core.Let_C, Span => Span, Is_Rec => True,
+                        Binds => Binds, Let_Body => Forced));
+                  end;
                end;
 
             when If_E =>
@@ -2626,8 +2661,9 @@ package body AHC.Desugar is
       end Ds_Fun_Unit;
 
       procedure Ds_Group
-        (Decls : Syntax.Decl_Id_Vectors.Vector;
-         Into  : in out Core.Bind_Vectors.Vector)
+        (Decls  : Syntax.Decl_Id_Vectors.Vector;
+         Into   : in out Core.Bind_Vectors.Vector;
+         Forces : in out Core.Var_Id_Vectors.Vector)
       is
          Units : constant Unit_Vectors.Vector :=
            Rename.Group (Arena, Decls, Bag);
@@ -2664,6 +2700,14 @@ package body AHC.Desugar is
                      PN : constant Pat_Node := Arena.Node (N.Pat);
                      PR : constant Resolution :=
                        Res.Pat_Res (Positive (N.Pat));
+                     --  `!p = e` (M150): a strict binding. BN/BR are
+                     --  the pattern under the bang (PN/PR otherwise).
+                     Strict : constant Boolean := PN.Kind = Bang_P;
+                     BN : constant Pat_Node :=
+                       (if Strict then Arena.Node (PN.Bang_Pat) else PN);
+                     BR : constant Resolution :=
+                       (if Strict then Res.Pat_Res (Positive (PN.Bang_Pat))
+                        else PR);
                      Unit_V : constant Core.Real_Expr_Id :=
                        ConE (Core.Real_DataCon_Id (Env.Unit_DC), Span);
                      --  Guards that all fail (M149 review): GHC calls a
@@ -2685,12 +2729,15 @@ package body AHC.Desugar is
                      RHS_E : constant Core.Real_Expr_Id :=
                        Ds_Rhs (N.Pat_Rhs, N.Pat_Where, Guard_Fail, Span);
                   begin
-                     if PN.Kind = Var_P and then PR.Kind = Var_Res then
-                        --  x = e directly.
-                        M.Vars (PR.Var).From_Pattern_Binding := True;
+                     if BN.Kind = Var_P and then BR.Kind = Var_Res then
+                        --  x = e directly; `!x = e` also forces x.
+                        M.Vars (BR.Var).From_Pattern_Binding := True;
                         Into.Append
-                          (Core.Bind_Pair'(Binder => PR.Var,
+                          (Core.Bind_Pair'(Binder => BR.Var,
                                            Rhs => RHS_E));
+                        if Strict then
+                           Forces.Append (Core.Var_Id (BR.Var));
+                        end if;
                      else
                         --  Selector translation (Report 4.4.3.2).
                         declare
@@ -2741,6 +2788,34 @@ package body AHC.Desugar is
                                          (Binder => V, Rhs => Sel));
                                  end;
                               end loop;
+                              if Strict then
+                                 --  `!p = e`: $bm = case $pb of !p -> ()
+                                 --  forces e and matches p when the
+                                 --  body forces $bm (GHC's translation).
+                                 declare
+                                    BM : constant Core.Real_Var_Id :=
+                                      Fresh ("$bm", Span);
+                                    PB_Ref : constant Core.Real_Expr_Id :=
+                                      VarE (PB, Span);
+                                    Fail : constant Core.Real_Expr_Id :=
+                                      Fail_Match
+                                        (Pat_Text (Ext_P (N.Pat)),
+                                         Ext_D (D), PB_Ref,
+                                         "irrefutable pattern failed",
+                                         Handled => Handled_Of_One (N.Pat),
+                                         Schema => Pat_Schema (N.Pat));
+                                    Unit_R : constant Core.Real_Expr_Id :=
+                                      ConE (Core.Real_DataCon_Id
+                                              (Env.Unit_DC), Span);
+                                    Check : constant Core.Real_Expr_Id :=
+                                      Match_One (PB, N.Pat, Unit_R, Fail);
+                                 begin
+                                    Into.Append
+                                      (Core.Bind_Pair'
+                                         (Binder => BM, Rhs => Check));
+                                    Forces.Append (Core.Var_Id (BM));
+                                 end;
+                              end if;
                               Match_Context := Saved;
                               Have_Context := Saved_Have;
                            end;
@@ -2750,6 +2825,18 @@ package body AHC.Desugar is
             end case;
          end loop;
          Group_Depth := Group_Depth - 1;
+      end Ds_Group;
+
+      --  A group whose bindings cannot be strict: the module's top
+      --  level (the renamer rejects a bang there) and instance and
+      --  class bodies.
+      procedure Ds_Group
+        (Decls : Syntax.Decl_Id_Vectors.Vector;
+         Into  : in out Core.Bind_Vectors.Vector)
+      is
+         Ignored : Core.Var_Id_Vectors.Vector;
+      begin
+         Ds_Group (Decls, Into, Ignored);
       end Ds_Group;
 
       ------------------------------------------------------------------

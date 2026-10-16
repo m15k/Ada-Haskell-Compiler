@@ -1,0 +1,12 @@
+let !x: forced
+let x: 1
+let !(a, b): 2
+let !_: forced
+where 1: 8
+where 99: forced
+let use: 42
+\cases !a 0: forced
+\cases _ b: forced
+do !x <-: forced
+do x <-: lazy
+do let !x: forced

@@ -1,0 +1,1 @@
+tests/golden/check_m150_toplevel_bang.hs:1:1: error: top-level strict bindings aren't allowed
