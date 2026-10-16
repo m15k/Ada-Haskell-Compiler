@@ -2581,8 +2581,9 @@ package body AHC.Prelude_Core is
             --  carrier since M146), so the Is_Fix arms below that
             --  build them are never reached for these types.
             function Is_Fix (T : TyCon_Id) return Boolean
-            is (for some K in Builtins.C_Fix_Kind =>
-                  Env.CFix_TCs (K) = T);
+            is ((for some K in Builtins.C_Fix_Kind =>
+                   Env.CFix_TCs (K) = T)
+                or else T = Env.Word_TC);
          begin
             --  Source instances -- even empty-bodied ones, whose every
             --  method is a class default -- are AHC.Elaborate's; this

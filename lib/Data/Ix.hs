@@ -126,3 +126,12 @@ instance Ix Word64 where
   inRange (lo, hi) i = i >= lo && i <= hi
   rangeSize (lo, hi) =
     if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1
+
+instance Ix Word where
+  range (lo, hi) = [lo .. hi]
+  index b@(lo, _) i =
+    if inRange b i then fromIntegral i - fromIntegral lo
+    else errorWithoutStackTrace "Error in array index"
+  inRange (lo, hi) i = i >= lo && i <= hi
+  rangeSize (lo, hi) =
+    if hi < lo then 0 else fromIntegral hi - fromIntegral lo + 1

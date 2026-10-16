@@ -1456,9 +1456,8 @@ instance Traversable ((,) a) where
 -- Int's range primitives cannot see; quot/div of minBound by -1 raise
 -- Overflow like GHC's, rem/mod return 0 like GHC's. The error texts are
 -- GHC 9.4.8's. This block is GENERATED (one shape, eight types): edit
--- the generator's shape in the M139 plan, not one copy.
-
-type Word = Word64
+-- the generator's shape in the M139 plan, not one copy. Word, the
+-- ninth, follows Word64's block by hand (M150).
 
 overflowQuot_ :: Bool -> Bool -> a -> a
 overflowQuot_ isMin isNegOne r =
@@ -1919,6 +1918,68 @@ instance Integral Word64 where
 
 instance Read Word64 where
   readsPrec _ s = [(narrowWord64_ i, r) | (i, r) <- readsInteger_ s]
+
+-- Word (M150): GHC's distinct unsigned type of Word64's width, wired
+-- as its own TyCon (Builtins.Word_TC) with Word64's representation,
+-- so mixing the two needs fromIntegral. Written by hand in the
+-- generated blocks' shape; its texts name {Word}, as GHC's.
+
+narrowWord_ :: Integer -> Word
+narrowWord_ x = primFixCast (primNarrow 64 0 (primFixCast x))
+
+toWord_ :: Word -> Integer
+toWord_ = primFixCast
+
+instance Num Word where
+  a + b = narrowWord_ (toWord_ a + toWord_ b)
+  a - b = narrowWord_ (toWord_ a - toWord_ b)
+  a * b = narrowWord_ (toWord_ a * toWord_ b)
+  negate a = narrowWord_ (negate (toWord_ a))
+  abs a = narrowWord_ (abs (toWord_ a))
+  signum a = narrowWord_ (signum (toWord_ a))
+  fromInteger i = narrowWord_ i
+
+instance Bounded Word where
+  minBound = narrowWord_ (0)
+  maxBound = narrowWord_ (18446744073709551615)
+
+instance Real Word where
+  toRational a = toRational (toWord_ a)
+
+instance Enum Word where
+  toEnum i =
+    if i < 0
+      then error ("Enum.toEnum{Word}: tag (" ++ show i
+                  ++ ") is outside of bounds (0,18446744073709551615)")
+      else narrowWord_ (toInteger i)
+  fromEnum a =
+    let i = toWord_ a
+    in if i > 9223372036854775807
+         then errorWithoutStackTrace ("Enum.fromEnum{Word}: value (" ++ show i
+                     ++ ") is outside of Int's bounds (-9223372036854775808,9223372036854775807)")
+         else fromInteger i
+  succ a = if a == maxBound
+             then error "Enum.succ{Word}: tried to take `succ' of maxBound"
+             else a + 1
+  pred a = if a == minBound
+             then error "Enum.pred{Word}: tried to take `pred' of minBound"
+             else a - 1
+  enumFrom a = enumFromTo a maxBound
+  enumFromTo a b = fixedEnumFromTo_ a b
+  enumFromThen a b = enumFromThenTo a b (if b >= a then maxBound else minBound)
+  enumFromThenTo a b c = fixedEnumFromThenTo_ a b c
+
+instance Integral Word where
+  quot a b = overflowQuot_ (False) (b == narrowWord_ (-1))
+               (narrowWord_ (quot (toWord_ a) (toWord_ b)))
+  rem a b = narrowWord_ (rem (toWord_ a) (toWord_ b))
+  div a b = overflowQuot_ (False) (b == narrowWord_ (-1))
+              (narrowWord_ (div (toWord_ a) (toWord_ b)))
+  mod a b = narrowWord_ (mod (toWord_ a) (toWord_ b))
+  toInteger a = toWord_ a
+
+instance Read Word where
+  readsPrec _ s = [(narrowWord_ i, r) | (i, r) <- readsInteger_ s]
 
 
 -- Names GHC's Prelude exports that used to live in lib/ (M144b): the

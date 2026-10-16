@@ -344,6 +344,16 @@ instance Uniform Word64 where
 instance UniformRange Word64 where
   uniformRP = unsignedBitmaskWithRejectionRM genWord64
 
+-- Word (M150, its own type): random's Word instances are its Word64
+-- algorithms at the same width.
+uniformWord_ :: RandomGen g => g -> (Word, g)
+uniformWord_ g = case genWord64 g of (w, g') -> (fromIntegral w, g')
+
+instance Uniform Word where
+  uniformP = uniformWord_
+instance UniformRange Word where
+  uniformRP = unsignedBitmaskWithRejectionRM uniformWord_
+
 instance UniformRange Integer where
   uniformRP = uniformIntegerM
 
@@ -443,6 +453,9 @@ instance Random Word32 where
   randomR = uniformRP
   random = uniformP
 instance Random Word64 where
+  randomR = uniformRP
+  random = uniformP
+instance Random Word where
   randomR = uniformRP
   random = uniformP
 instance Random Char where

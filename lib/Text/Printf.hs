@@ -104,6 +104,9 @@ instance PrintfArg Word32 where
 instance PrintfArg Word64 where
   formatArg x = formatIntB (toInteger x) 0
   parseFormat _ = parseIntFormat
+instance PrintfArg Word where
+  formatArg x = formatIntB (toInteger x) 0
+  parseFormat _ = parseIntFormat
 instance PrintfArg Integer where
   formatArg = formatInteger
   parseFormat _ = parseIntFormat

@@ -273,6 +273,9 @@ package body AHC.Builtins is
       Env.CFix_TCs (C_U16) := TyCon_Id (Def_TyCon ("Word16", 0, Star_K));
       Env.CFix_TCs (C_U32) := TyCon_Id (Def_TyCon ("Word32", 0, Star_K));
       Env.CFix_TCs (C_U64) := TyCon_Id (Def_TyCon ("Word64", 0, Star_K));
+      --  Word: GHC's distinct type of Word64's width (M150). Same
+      --  runtime nodes as Word64 (AHC_INT, a bignum above 2^63).
+      Env.Word_TC := TyCon_Id (Def_TyCon ("Word", 0, Star_K));
 
       Env.False_DC := DataCon_Id
         (Def_DataCon ("False", Real_TyCon_Id (Env.Bool_TC), 1, 0));
@@ -1031,6 +1034,9 @@ package body AHC.Builtins is
             Def_Instance (Cl (Env.Ord_Cl), TCn (Env.CFix_TCs (K)));
             Def_Instance (Cl (Env.Show_Cl), TCn (Env.CFix_TCs (K)));
          end loop;
+         Def_Instance (Cl (Env.Eq_Cl), TCn (Env.Word_TC));
+         Def_Instance (Cl (Env.Ord_Cl), TCn (Env.Word_TC));
+         Def_Instance (Cl (Env.Show_Cl), TCn (Env.Word_TC));
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Float_TC));
          Def_Instance (Cl (Env.Floating_Cl), TCn (Env.Double_TC));
          Def_Instance (Cl (Env.RealFrac_Cl), TCn (Env.Float_TC));

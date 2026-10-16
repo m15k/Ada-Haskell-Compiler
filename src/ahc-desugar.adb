@@ -2979,6 +2979,9 @@ package body AHC.Desugar is
                         K := Core.M_Unit;
                      elsif Core.TyCon_Id (TN.Con) = Env.Text_TC then
                         K := Core.M_Text;
+                     elsif Core.TyCon_Id (TN.Con) = Env.Word_TC then
+                        --  Word crosses as uint64_t, as Word64 (M150).
+                        K := Core.M_U64;
                      else
                         for CK in Builtins.C_Fix_Kind loop
                            if Core.TyCon_Id (TN.Con)

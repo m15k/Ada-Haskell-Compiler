@@ -1,0 +1,35 @@
+(42,18446744073709551539,18446744073709551575,41,1)
+(18446744073709551615,0)
+-1
+18446744073709551615
+18446744073709551616
+(123,18446744073709551615,0)
+[(42," rest")]
+((14,2),(14,2))
+(8,43,40,10376293541461622784,15)
+(18446744073709551615,64,True)
+(64,9223372036854775808,169,40)
+([1,2,3,4,5],[10,8,6,4,2])
+[18446744073709551614,18446744073709551615]
+([3,4,5,6],2,False,4)
+(41 % 1,41.0,41.0)
+("41","[41,0]")
+(LT,50,True)
+41    41 ff 10 41
+(44,18446744073709551615)
+(42,40,7,41)
+Word 41, Word64 42
+([1275548033995301424,10417309031967933079,2112719111588962399],10)
+True
+succ maxBound => Enum.succ{Word}: tried to take `succ' of maxBound
+pred minBound => Enum.pred{Word}: tried to take `pred' of minBound
+toEnum negative => Enum.toEnum{Word}: tag (-1) is outside of bounds (0,18446744073709551615)
+fromEnum big => Enum.fromEnum{Word}: value (18446744073709551615) is outside of Int's bounds (-9223372036854775808,9223372036854775807)
+div zero => divide by zero
+quot zero => divide by zero
+rem zero => divide by zero
+mod zero => divide by zero
+index out of range => Error in array index
+read no parse => Prelude.read: no parse
+Word64 succ maxBound => Enum.succ{Word64}: tried to take `succ' of maxBound
+Word64 toEnum negative => Enum.toEnum{Word64}: tag (-1) is outside of bounds (0,18446744073709551615)

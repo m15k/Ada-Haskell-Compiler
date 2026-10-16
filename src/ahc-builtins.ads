@@ -79,6 +79,10 @@ package AHC.Builtins is
       Unit_TC, List_TC, IO_TC, Ordering_TC, Rational_TC, Maybe_TC,
       Arrow_TC, Ptr_TC, FunPtr_TC, Text_TC, Exc_TC, IOExc_TC, IORef_TC
         : Core.TyCon_Id := Core.No_TyCon;
+      --  Word (M150): its own type with Word64's representation and
+      --  marshalling; not a C_Fix_Kind (that enumeration is the C
+      --  widths, positional with Core.Fixed_Marshal).
+      Word_TC : Core.TyCon_Id := Core.No_TyCon;
       CFix_TCs : C_Fix_TC_Array := [others => Core.No_TyCon];
       Tuple_TCs : Tuple_TC_Array := [others => Core.No_TyCon];
 

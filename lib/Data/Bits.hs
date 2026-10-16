@@ -158,6 +158,20 @@ instance Bits Word32 where
   popCountBits a = primPopCountI (primNarrow 32 0 (primFixCast a))
   bitSizeOf _ = 32
 
+instance Bits Word where
+  (.&.) a b = primFixCast (primNarrow 64 0 (primAndI (primFixCast a) (primFixCast b))) :: Word
+  (.|.) a b = primFixCast (primNarrow 64 0 (primOrI (primFixCast a) (primFixCast b))) :: Word
+  xor a b = primFixCast (primNarrow 64 0 (primXorI (primFixCast a) (primFixCast b))) :: Word
+  complement a = primFixCast (primNarrow 64 0 (primComplementI (primFixCast a))) :: Word
+  shift a i = primFixCast (primNarrow 64 0 (if i >= 0 then primShiftLI (primFixCast a) i
+                                          else primShiftRU (primFixCast a) (negate i))) :: Word
+  bit i = if i < 0 then primThrow (primExcArith 0)
+          else primFixCast (primNarrow 64 0 (primShiftLI 1 i)) :: Word
+  testBit a i = if i < 0 then primThrow (primExcArith 0)
+                else i < 64 && primAndI (primShiftRU (primFixCast a :: Int) i) 1 /= 0
+  popCountBits a = primPopCountI (primNarrow 64 0 (primFixCast a))
+  bitSizeOf _ = 64
+
 instance Bits Word64 where
   (.&.) a b = primFixCast (primNarrow 64 0 (primAndI (primFixCast a) (primFixCast b))) :: Word64
   (.|.) a b = primFixCast (primNarrow 64 0 (primOrI (primFixCast a) (primFixCast b))) :: Word64
