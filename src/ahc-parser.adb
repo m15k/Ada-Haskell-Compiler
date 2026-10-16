@@ -265,6 +265,16 @@ package body AHC.Parser is
       function Op_Closes_Block return Boolean
       is (At_Op and then not Is_Minus and then not Is_Bang);
 
+      --  Report 10.3's parse-error(t) at the start of an item of an
+      --  implicit block: a token no statement, alternative or
+      --  declaration can start with closes the block, and the
+      --  enclosing construct continues - `(case n of` / alts / `, 2)`.
+      --  One rule for do, case, \cases, let and where blocks (M150).
+      function At_Item_Closer return Boolean
+      is (Tok.Kind in Kw_Where | Kw_In | Kw_Then | Kw_Else | Kw_Of
+            | Right_Paren | Right_Bracket | Comma
+          or else Op_Closes_Block);
+
       --  Consume an operator occurrence: symbol or `name`.
       function Parse_Op return Op_Occ is
          R : Op_Occ;
@@ -1646,12 +1656,7 @@ package body AHC.Parser is
             --  A token that cannot start a statement closes an
             --  implicit block via the parse-error(t) rule ('where'
             --  at the same indentation as the do statements).
-            if not Explicit
-              and then (Tok.Kind in Kw_Where | Kw_In | Kw_Then
-                          | Kw_Else | Right_Paren | Right_Bracket
-                          | Comma
-                        or else Op_Closes_Block)
-              and then Try_Layout_Close
+            if not Explicit and then At_Item_Closer and then Try_Layout_Close
             then
                null;   --  Tok is the V_Right_Brace; loop exits above
             else
@@ -1693,9 +1698,9 @@ package body AHC.Parser is
             end loop;
             exit when (Explicit and then At_K (Right_Brace))
               or else (not Explicit and then At_K (V_Right_Brace));
-            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            if not Explicit and then At_Item_Closer and then Try_Layout_Close
             then
-               exit;   --  the M148 operator rule, as in Parse_Alt_Block
+               exit;   --  parse-error(t), as in Parse_Alt_Block (M150)
             end if;
             declare
                Span : constant Diagnostics.Source_Span := Tok.Span;
@@ -1775,9 +1780,9 @@ package body AHC.Parser is
                end if;
                return;
             end if;
-            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            if not Explicit and then At_Item_Closer and then Try_Layout_Close
             then
-               exit;   --  Tok is the V_Right_Brace (M148 operator rule)
+               exit;   --  Tok is the V_Right_Brace (parse-error(t), M150)
             end if;
             declare
                Span : constant Diagnostics.Source_Span := Tok.Span;
@@ -2625,9 +2630,9 @@ package body AHC.Parser is
                end if;
                return;
             end if;
-            if not Explicit and then Op_Closes_Block and then Try_Layout_Close
+            if not Explicit and then At_Item_Closer and then Try_Layout_Close
             then
-               exit;   --  Tok is the V_Right_Brace (M148 operator rule)
+               exit;   --  Tok is the V_Right_Brace (parse-error(t), M150)
             end if;
             begin
                Into.Append (Parse_Decl);
