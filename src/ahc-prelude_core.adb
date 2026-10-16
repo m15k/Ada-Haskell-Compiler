@@ -382,9 +382,247 @@ package body AHC.Prelude_Core is
             Alts => Alts))));
       end Max_Min;
 
-      --  Build a dictionary for Inst with the given method list,
-      --  supers solved against sibling instances (context params
-      --  ignored: the generic prims need no element evidence).
+      ------------------------------------------------------------------
+      --  Dictionaries by type (M150): the dictionary of a class at a
+      --  type inside an instance - from the instance's own context
+      --  (looked up by type, any class, through a superclass when
+      --  needed) or from the instance the typechecker would choose.
+      ------------------------------------------------------------------
+
+      function Id_T (X : Real_Type_Id) return Real_Type_Id is (X);
+      function Match_Inst is new Inst_Match.Match_Instance (Id_T);
+
+      --  T (over Tvs, a constructor scheme's quantifiers) and A (over
+      --  Hvs, an instance's head variables) are the same type, the
+      --  variables corresponding by position - the declaration order
+      --  both lists follow. Wired constructors mint their own
+      --  variables per constructor, so the per-constructor Tvs is
+      --  always the one passed.
+      function Same_Under
+        (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector;
+         A : Real_Type_Id; Hvs : TyVar_Id_Vectors.Vector) return Boolean
+      is
+         NT : constant Type_Node := M.Node (T);
+         NA : constant Type_Node := M.Node (A);
+      begin
+         if NT.Kind /= NA.Kind then
+            return False;
+         end if;
+         case NT.Kind is
+            when TVar_T =>
+               declare
+                  IT : constant TyVar_Id_Vectors.Extended_Index :=
+                    Tvs.Find_Index (NT.Tv);
+                  IA : constant TyVar_Id_Vectors.Extended_Index :=
+                    Hvs.Find_Index (NA.Tv);
+               begin
+                  return NT.Tv = NA.Tv
+                    or else (IT /= TyVar_Id_Vectors.No_Index
+                             and then IT = IA);
+               end;
+            when TCon_T =>
+               return NT.Con = NA.Con;
+            when TApp_T =>
+               return Same_Under (NT.T_Fun, Tvs, NA.T_Fun, Hvs)
+                 and then Same_Under (NT.T_Arg, Tvs, NA.T_Arg, Hvs);
+            when TFun_T =>
+               return Same_Under (NT.From, Tvs, NA.From, Hvs)
+                 and then Same_Under (NT.To, Tvs, NA.To, Hvs);
+            when others =>
+               return False;
+         end case;
+      end Same_Under;
+
+      --  A type variable, or one applied (`f a`): only a context
+      --  constraint can supply its dictionary.
+      function Var_Spine (T : Real_Type_Id) return Boolean is
+         N : constant Type_Node := M.Node (T);
+      begin
+         return N.Kind = TVar_T
+           or else (N.Kind = TApp_T and then Var_Spine (N.T_Fun));
+      end Var_Spine;
+
+      --  The context position of Inst constraining T: of class Cl
+      --  itself (Via = 0), or of a class whose Via-th superclass is
+      --  Cl (an Ord a giving Eq a). P = 0 when there is none.
+      procedure Ctx_Pos
+        (T : Real_Type_Id; Cl : Real_Class_Id;
+         Tvs : TyVar_Id_Vectors.Vector; Inst : Instance_Info;
+         P : out Natural; Via : out Natural)
+      is
+      begin
+         P := 0;
+         Via := 0;
+         for K in 1 .. Inst.Context.Last_Index loop
+            if Inst.Context (K).Class = Cl
+              and then Same_Under (T, Tvs, Inst.Context (K).Arg,
+                                   Inst.Head_Vars)
+            then
+               P := K;
+               return;
+            end if;
+         end loop;
+         for K in 1 .. Inst.Context.Last_Index loop
+            if Same_Under (T, Tvs, Inst.Context (K).Arg, Inst.Head_Vars)
+            then
+               declare
+                  Sups : constant Class_Id_Vectors.Vector :=
+                    M.Info (Inst.Context (K).Class).Supers;
+               begin
+                  for S in 1 .. Sups.Last_Index loop
+                     if Sups (S) = Class_Id (Cl) then
+                        P := K;
+                        Via := S;
+                        return;
+                     end if;
+                  end loop;
+               end;
+            end if;
+         end loop;
+      end Ctx_Pos;
+
+      --  The instance of Cl the typechecker would choose at T - the
+      --  one shared matcher, overlap rule included (M148 review: an
+      --  OVERLAPPING `Eq [Bool]` must win over `Eq [a]`) - with its
+      --  head variables' bindings in Args. Pick = 0: none.
+      procedure Choose
+        (T : Real_Type_Id; Cl : Real_Class_Id;
+         Pick : out Natural; Args : out Type_Id_Vectors.Vector)
+      is
+         Cands : Instance_Id_Vectors.Vector;
+      begin
+         Pick := 0;
+         Args.Clear;
+         for SI of M.Info (Cl).Instances loop
+            declare
+               SI_Info : constant Instance_Info := M.Info (SI);
+               Ign : Type_Id_Vectors.Vector;
+            begin
+               if SI_Info.Dict_Global /= No_Var
+                 and then Inst_Match."="
+                   (Match_Inst (M, Env, SI_Info, T, Ign),
+                    Inst_Match.Matched)
+               then
+                  Cands.Append (SI);
+               end if;
+            end;
+         end loop;
+         if Natural (Cands.Length) = 1 then
+            Pick := Natural (Cands.First_Element);
+         elsif Natural (Cands.Length) > 1 then
+            Pick := Inst_Match.Pick (M, Env, Cands);
+         end if;
+         if Pick /= 0 then
+            declare
+               P_Info : constant Instance_Info :=
+                 M.Info (Real_Instance_Id (Pick));
+               Ign : constant Inst_Match.Match_Result :=
+                 Match_Inst (M, Env, P_Info, T, Args);
+               pragma Unreferenced (Ign);
+            begin
+               null;
+            end;
+         end if;
+      end Choose;
+
+      --  The Core dictionary of class Cl at the field type T inside
+      --  the instance Inst whose context dictionaries are Params. Tvs
+      --  are T's quantifiers (the constructor scheme's), positionally
+      --  Inst.Head_Vars. No_Expr when no instance supplies it (Task
+      --  D.5 makes that a compile error first).
+      function Dict_At
+        (T : Real_Type_Id; Cl : Real_Class_Id;
+         Tvs : TyVar_Id_Vectors.Vector; Inst : Instance_Info;
+         Params : Var_Id_Vectors.Vector) return Expr_Id
+      is
+      begin
+         if Var_Spine (T) then
+            declare
+               P, Via : Natural;
+            begin
+               Ctx_Pos (T, Cl, Tvs, Inst, P, Via);
+               if P = 0 or else P > Params.Last_Index then
+                  return No_Expr;
+               elsif Via = 0 then
+                  return Expr_Id (V (Params.Element (P)));
+               end if;
+               declare
+                  Sel : constant Real_Expr_Id :=
+                    V (M.Info (Inst.Context (P).Class).Super_Sels (Via));
+                  D : constant Real_Expr_Id := V (Params.Element (P));
+               begin
+                  return Expr_Id (Ap (Sel, D));
+               end;
+            end;
+         elsif M.Node (T).Kind not in TCon_T | TApp_T then
+            return No_Expr;   --  a function type has no Eq/Ord/Show/Read
+         end if;
+         declare
+            Args : Type_Id_Vectors.Vector;
+            Pick : Natural;
+         begin
+            Choose (T, Cl, Pick, Args);
+            if Pick = 0 then
+               return No_Expr;
+            end if;
+            declare
+               J : constant Instance_Info :=
+                 M.Info (Real_Instance_Id (Pick));
+               Acc : Expr_Id := Expr_Id (V (J.Dict_Global));
+            begin
+               for IC of J.Context loop
+                  declare
+                     A : constant Real_Type_Id :=
+                       Inst_Match.Subst_Vars (M, IC.Arg, J.Head_Vars, Args);
+                     DA : constant Expr_Id :=
+                       Dict_At (A, IC.Class, Tvs, Inst, Params);
+                  begin
+                     if DA = No_Expr then
+                        return No_Expr;
+                     end if;
+                     Acc := Expr_Id
+                       (Ap (Real_Expr_Id (Acc), Real_Expr_Id (DA)));
+                  end;
+               end loop;
+               return Acc;
+            end;
+         end;
+      end Dict_At;
+
+      --  The superclass dictionaries of Inst's dictionary: each the
+      --  sibling instance at Inst's own head, APPLIED to dictionaries
+      --  drawn from Inst's context. M150: Ord's Eq superclass of
+      --  `Ord a => Ord [a]` was the unapplied `$dEqList`, so `x == y`
+      --  under `Ord a` at a list raised "selector on a non-dictionary".
+      function Super_Dicts
+        (Inst : Instance_Info; Params : Var_Id_Vectors.Vector)
+         return Expr_Id_Vectors.Vector
+      is
+         Cl_Info : constant Class_Info :=
+           M.Info (Real_Class_Id (Inst.Of_Class));
+         Head_T : constant Real_Type_Id :=
+           Inst_Match.Instance_Type (M, Env, Inst);
+         R : Expr_Id_Vectors.Vector;
+      begin
+         for Super of Cl_Info.Supers loop
+            declare
+               D : constant Expr_Id :=
+                 Dict_At (Head_T, Real_Class_Id (Super),
+                          Inst.Head_Vars, Inst, Params);
+            begin
+               if D = No_Expr then
+                  R.Append (Err ("missing superclass dictionary"));
+               else
+                  R.Append (D);
+               end if;
+            end;
+         end loop;
+         return R;
+      end Super_Dicts;
+
+      --  Build a dictionary for Inst with the given method list; its
+      --  superclasses are the sibling instances applied to this
+      --  instance's own context dictionaries (Super_Dicts).
       procedure Give_Dict
         (Inst_Idx : Real_Instance_Id;
          Methods  : Expr_Id_Vectors.Vector)
@@ -392,32 +630,16 @@ package body AHC.Prelude_Core is
          Inst : constant Instance_Info := M.Info (Inst_Idx);
          Cl : constant Real_Class_Id :=
            Real_Class_Id (Inst.Of_Class);
-         Cl_Info : constant Class_Info := M.Info (Cl);
          Supers : Expr_Id_Vectors.Vector;
          Params : Var_Id_Vectors.Vector;
          Dict : Real_Expr_Id;
       begin
-         for Super of Cl_Info.Supers loop
-            declare
-               Found : Var_Id := No_Var;
-            begin
-               for SI of M.Info (Super).Instances loop
-                  if M.Info (SI).Head = Inst.Head then
-                     Found := M.Info (SI).Dict_Global;
-                  end if;
-               end loop;
-               if Found /= No_Var then
-                  Supers.Append (V (Found));
-               else
-                  Supers.Append (Err ("missing superclass dictionary"));
-               end if;
-            end;
-         end loop;
-         Dict := Mk_Dict (M, Cl, Supers, Methods, Span);
          for CI in 1 .. Inst.Context.Last_Index loop
             Params.Append (Fresh ("$d"));
             pragma Unreferenced (CI);
          end loop;
+         Supers := Super_Dicts (Inst, Params);
+         Dict := Mk_Dict (M, Cl, Supers, Methods, Span);
          for PI in reverse 1 .. Params.Last_Index loop
             Dict := Lam (Params (PI), Dict);
          end loop;
@@ -709,102 +931,6 @@ package body AHC.Prelude_Core is
          Give_Dict (II, Ms);
       end Derive_Ix;
 
-      --  Static dictionary for a field type, shared by the derives.
-      --  Tvs is the constructor scheme's quantifier list, whose order
-      --  matches the data declaration's type variables (and therefore
-      --  the derived instance's context parameters); the ids differ,
-      --  so map positionally. A type variable resolves to the
-      --  instance's own context parameter, a constructor to its
-      --  instance dictionary, an application to the head's dictionary
-      --  applied to the arguments'.
-      function Dict_For_Class
-        (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector;
-         Cl : Real_Class_Id; Params : Var_Id_Vectors.Vector)
-         return Expr_Id
-      is
-         N : constant Type_Node := M.Node (T);
-         function Dict_For
-           (T2 : Real_Type_Id; Tvs2 : TyVar_Id_Vectors.Vector)
-            return Expr_Id
-         is (Dict_For_Class (T2, Tvs2, Cl, Params));
-      begin
-         case N.Kind is
-            when TVar_T =>
-               for I in 1 .. Tvs.Last_Index loop
-                  if Tvs (I) = N.Tv
-                    and then I <= Params.Last_Index
-                  then
-                     return Expr_Id (V (Var_Id (Params.Element (I))));
-                  end if;
-               end loop;
-               return No_Expr;
-            when TCon_T | TApp_T =>
-               --  The instance the typechecker would choose: the one
-               --  shared matcher, overlap rule included (M148 review:
-               --  keying on the head TyCon took `Eq [a]` over an
-               --  OVERLAPPING `Eq [Bool]`, and applied `Show (T Bool)`
-               --  at `T Int`), applied to its context's dictionaries.
-               declare
-                  function Id (X : Real_Type_Id) return Real_Type_Id is (X);
-                  function Match is new Inst_Match.Match_Instance (Id);
-                  Cands : Instance_Id_Vectors.Vector;
-                  Chosen : Natural := 0;
-               begin
-                  for SI of M.Info (Cl).Instances loop
-                     declare
-                        Ign : Type_Id_Vectors.Vector;
-                     begin
-                        if M.Info (SI).Dict_Global /= No_Var
-                          and then Inst_Match."="
-                            (Match (M, Env, M.Info (SI), T, Ign),
-                             Inst_Match.Matched)
-                        then
-                           Cands.Append (SI);
-                        end if;
-                     end;
-                  end loop;
-                  if Natural (Cands.Length) = 1 then
-                     Chosen := Natural (Cands.First_Element);
-                  elsif Natural (Cands.Length) > 1 then
-                     Chosen := Inst_Match.Pick (M, Env, Cands);
-                  end if;
-                  if Chosen = 0 then
-                     return No_Expr;
-                  end if;
-                  declare
-                     SI : constant Real_Instance_Id :=
-                       Real_Instance_Id (Chosen);
-                     Inst : constant Instance_Info := M.Info (SI);
-                     Args : Type_Id_Vectors.Vector;
-                     Ign : constant Inst_Match.Match_Result :=
-                       Match (M, Env, Inst, T, Args);
-                     pragma Unreferenced (Ign);
-                     Acc : Expr_Id := Expr_Id (V (Inst.Dict_Global));
-                  begin
-                     for IC of Inst.Context loop
-                        if IC.Class /= Cl then
-                           return No_Expr;
-                        end if;
-                        declare
-                           A : constant Real_Type_Id :=
-                             Inst_Match.Subst_Vars
-                               (M, IC.Arg, Inst.Head_Vars, Args);
-                           DA : constant Expr_Id := Dict_For (A, Tvs);
-                        begin
-                           if DA = No_Expr then
-                              return No_Expr;
-                           end if;
-                           Acc := Expr_Id
-                             (Ap (Real_Expr_Id (Acc), Real_Expr_Id (DA)));
-                        end;
-                     end loop;
-                     return Acc;
-                  end;
-               end;
-            when others =>
-               return No_Expr;
-         end case;
-      end Dict_For_Class;
 
       --  deriving Read (Report 11.4, Appendix D): the exact inverse of
       --  Derive_Show below. An enumeration still goes through
@@ -891,7 +1017,7 @@ package body AHC.Prelude_Core is
                   else
                      declare
                         D : constant Expr_Id :=
-                          Dict_For_Class (St.FT, Tvs, Cl, Params);
+                          Dict_At (St.FT, Cl, Tvs, Inst, Params);
                      begin
                         if D = No_Expr then
                            return Err ("deriving Read: unsupported"
@@ -1190,7 +1316,7 @@ package body AHC.Prelude_Core is
          function Dict_For
            (T : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector)
             return Expr_Id
-         is (Dict_For_Class (T, Tvs, Cl, Params));
+         is (Dict_At (T, Cl, Tvs, Inst, Params));
 
          --  showsPrec 11 <field> "" as a string expression, or show
          --  at precedence 0 for record fields.
