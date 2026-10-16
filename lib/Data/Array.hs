@@ -66,3 +66,15 @@ instance Show e => Show (Array e) where
 
 instance Eq e => Eq (Array e) where
   a == b = bounds a == bounds b && elems a == elems b
+
+--  base's instances over the elements, in index order (M150).
+instance Functor Array where
+  fmap f (MkArray b es) = MkArray b (map f es)
+
+instance Foldable Array where
+  foldr f z (MkArray _ es) = foldr f z es
+  null (MkArray _ es) = null es
+  length (MkArray _ es) = length es
+
+instance Traversable Array where
+  traverse f (MkArray b es) = fmap (MkArray b) (traverse f es)

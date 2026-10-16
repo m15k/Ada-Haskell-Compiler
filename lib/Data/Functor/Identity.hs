@@ -15,6 +15,14 @@ instance Monad Identity where
   return = Identity
   Identity a >>= k = k a
 
+instance Foldable Identity where
+  foldr f z (Identity a) = f a z
+  null _ = False
+  length _ = 1
+
+instance Traversable Identity where
+  traverse f (Identity a) = fmap Identity (f a)
+
 instance Show a => Show (Identity a) where
   showsPrec d (Identity a) =
     showParen (d >= 11) (showString "Identity " . showsPrec 11 a)

@@ -11,6 +11,8 @@ module Control.Monad
   ) where
 
 import Control.Applicative (Alternative (..))
+import Data.Foldable (forM_)
+import Data.Traversable (forM)
 
 --  guard, as base has it since Alternative subsumed MonadPlus's
 --  role here: pure () passes, empty prunes.
@@ -47,13 +49,9 @@ unless p act = if p then return () else act
 void :: Monad m => m a -> m ()
 void act = act >> return ()
 
---  mapM/mapM_/sequence/sequence_ are the Prelude's, re-exported.
-
-forM :: Monad m => [a] -> (a -> m b) -> m [b]
-forM xs f = mapM f xs
-
-forM_ :: Monad m => [a] -> (a -> m b) -> m ()
-forM_ xs f = mapM_ f xs
+--  mapM/mapM_/sequence/sequence_ are the Prelude's, re-exported; forM
+--  is Data.Traversable's and forM_ is Data.Foldable's, so importing
+--  Control.Monad beside either module names one entity (M150).
 
 replicateM :: Monad m => Int -> m a -> m [a]
 replicateM n act =
