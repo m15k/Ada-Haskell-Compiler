@@ -326,6 +326,16 @@ package AHC.Core is
       --  minted by the typechecker (method bodies reference them as
       --  given evidence), consumed by AHC.Elaborate.
       Param_Vars  : Var_Id_Vectors.Vector;
+      --  M150: made by a stock deriving clause (Span is then the
+      --  clause's class name). Eq/Ord/Show/Read/Enum/Bounded/Ix ones
+      --  get their context inferred from the constructor fields by
+      --  the typechecker; Prelude_Core bodies them.
+      Is_Derived  : Boolean := False;
+      --  M150 D3: for a derived Enum in a user module, GHC's call
+      --  stack at that class name ("CallStack (from HasCallStack):"
+      --  LF "  error, called at F:L:C in main:Mod"), raised with
+      --  succ/pred/toEnum failures; No_Name otherwise.
+      Derive_Loc  : Names.Name_Id := Names.No_Name;
       Span        : Diagnostics.Source_Span;
    end record;
 

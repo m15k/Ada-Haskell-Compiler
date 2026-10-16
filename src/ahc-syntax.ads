@@ -26,6 +26,11 @@ package AHC.Syntax is
 
    package QName_Vectors is new Ada.Containers.Vectors (Positive, QName);
 
+   --  One source span per entry of a parallel vector (M150: the class
+   --  names of a deriving clause).
+   package Src_Span_Vectors is new Ada.Containers.Vectors
+     (Positive, Diagnostics.Source_Span, Diagnostics."=");
+
    ---------------------------------------------------------------------
    --  Ids (0 = absent)
    ---------------------------------------------------------------------
@@ -383,6 +388,7 @@ package AHC.Syntax is
             D_Vars     : QName_Vectors.Vector;    --  type variables
             D_Cons     : Con_Id_Vectors.Vector;
             D_Deriving : QName_Vectors.Vector;
+            D_Deriving_Spans : Src_Span_Vectors.Vector;  --  parallel
          when Type_Syn_D =>
             S_Name : Names.Name_Id;
             S_Vars : QName_Vectors.Vector;

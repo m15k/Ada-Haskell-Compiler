@@ -221,6 +221,7 @@ package body AHC.Builtins is
              Stock_Derive => No_Stock_Derive, Overlap => No_Overlap,
              Dict_Global => Var_Id (Dict),
              From_Source => False,   --  wired; Prelude_Core binds it
+             Is_Derived => False, Derive_Loc => Names.No_Name,
              Method_Binds => Bind_Vectors.Empty_Vector,
              Param_Vars => Var_Id_Vectors.Empty_Vector,
              Span => No_Span));

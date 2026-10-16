@@ -2138,7 +2138,9 @@ package body AHC.Parser is
          end;
       end Parse_Constructor;
 
-      procedure Parse_Deriving (Into : in out QName_Vectors.Vector) is
+      procedure Parse_Deriving
+        (Into  : in out QName_Vectors.Vector;
+         Spans : in out Src_Span_Vectors.Vector) is
       begin
          if not At_K (Kw_Deriving) then
             return;
@@ -2152,6 +2154,7 @@ package body AHC.Parser is
                      Fail ("expected a class name");
                   end if;
                   Into.Append (Tok_QName);
+                  Spans.Append (Tok.Span);
                   Advance;
                   exit when not At_K (Comma);
                   Advance;
@@ -2163,6 +2166,7 @@ package body AHC.Parser is
                Fail ("expected a class name");
             end if;
             Into.Append (Tok_QName);
+            Spans.Append (Tok.Span);
             Advance;
          end if;
       end Parse_Deriving;
@@ -2176,6 +2180,7 @@ package body AHC.Parser is
          Vars    : QName_Vectors.Vector;
          Cons    : Con_Id_Vectors.Vector;
          Derivs  : QName_Vectors.Vector;
+         Deriv_Spans : Src_Span_Vectors.Vector;
       begin
          Advance;  --  data / newtype
 
@@ -2222,7 +2227,7 @@ package body AHC.Parser is
             end loop;
          end if;
 
-         Parse_Deriving (Derivs);
+         Parse_Deriving (Derivs, Deriv_Spans);
 
          if Is_Newtype and then Natural (Cons.Length) /= 1 then
             Bag.Add (Diagnostics.Error, Diagnostics.Parse_Error, Span,
@@ -2271,13 +2276,13 @@ package body AHC.Parser is
               (Decl_Node'(Kind => Newtype_D, Span => Span,
                           D_Context => Context, D_Name => Name,
                           D_Vars => Vars, D_Cons => Cons,
-                          D_Deriving => Derivs));
+                          D_Deriving => Derivs, D_Deriving_Spans => Deriv_Spans));
          end if;
          return Arena.Add
            (Decl_Node'(Kind => Data_D, Span => Span,
                        D_Context => Context, D_Name => Name,
                        D_Vars => Vars, D_Cons => Cons,
-                       D_Deriving => Derivs));
+                       D_Deriving => Derivs, D_Deriving_Spans => Deriv_Spans));
       end Parse_Data_Decl;
 
       function Parse_Type_Syn

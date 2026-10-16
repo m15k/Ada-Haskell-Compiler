@@ -1863,8 +1863,14 @@ package body AHC.Rename is
 
          --  deriving (C1, ...): register signature-only instances so
          --  derived classes participate in context reduction.
-         for DC of N.D_Deriving loop
+         for DI in 1 .. N.D_Deriving.Last_Index loop
             declare
+               DC : constant QName := N.D_Deriving (DI);
+               --  M150 D3: the class name's own span, GHC's location
+               --  for this instance's errors and its call stacks.
+               DSpan : constant Diagnostics.Source_Span :=
+                 (if DI <= N.D_Deriving_Spans.Last_Index
+                  then N.D_Deriving_Spans (DI) else N.Span);
                Amb : Boolean;
                C : constant Core.Class_Id :=
                  Mod_Find_Class (DC, N.Span, Amb);
@@ -1903,9 +1909,10 @@ package body AHC.Rename is
                          Context => Core.Constraint_Vectors.Empty_Vector,
                          Dict_Global => Core.Var_Id (Dict),
                          From_Source => False,
+                         Is_Derived => False, Derive_Loc => Names.No_Name,
                          Method_Binds => Core.Bind_Vectors.Empty_Vector,
                          Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
-                         Span => N.Span));
+                         Span => DSpan));
                      pragma Unreferenced (Ignore);
                   end;
                elsif C /= Core.No_Class
@@ -2017,11 +2024,12 @@ package body AHC.Rename is
                          --  synthesized Core (AHC.Stock_Functor), so
                          --  elaborate builds it like a source instance.
                          From_Source => Core."/=" (FF, Core.No_Stock_Derive),
+                         Is_Derived => True, Derive_Loc => Names.No_Name,
                          Method_Binds =>
                            Core.Bind_Vectors.Empty_Vector,
                          Param_Vars =>
                            Core.Var_Id_Vectors.Empty_Vector,
-                         Span => N.Span));
+                         Span => DSpan));
                      pragma Unreferenced (Ignore);
                   end;
                elsif not Amb then
@@ -2309,6 +2317,7 @@ package body AHC.Rename is
                    Context => Core.Constraint_Vectors.Empty_Vector,
                    Dict_Global => Core.Var_Id (Dict),
                    From_Source => True,
+                  Is_Derived => False, Derive_Loc => Names.No_Name,
                    Method_Binds => Core.Bind_Vectors.Empty_Vector,
                    Param_Vars => Core.Var_Id_Vectors.Empty_Vector,
                    Span => N.Span));
