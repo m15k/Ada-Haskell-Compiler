@@ -21,6 +21,15 @@ data Map k a
   = Bin !Int !k a !(Map k a) !(Map k a)
   | Tip
 
+-- containers-0.6.7's call stack for an `error` at line:col of its
+-- Data/Map/Internal.hs, as GHC 9.4.8 shows it (recorded from the
+-- oracle, M150). containers' functions are not HasCallStack, so the
+-- stack has no frame in the user's program.
+mapError_ :: String -> String -> a
+mapError_ msg at = primErrorLoc msg
+  ("CallStack (from HasCallStack):\n  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:"
+   ++ at ++ " in containers-0.6.7:Data.Map.Internal")
+
 delta :: Int
 delta = 3
 
@@ -58,7 +67,7 @@ m !? k = lookup k m
 (!) :: Ord k => Map k a -> k -> a
 m ! k = case lookup k m of
   Just x  -> x
-  Nothing -> error "Map.!: given key is not an element in the map"
+  Nothing -> mapError_ "Map.!: given key is not an element in the map" "617:17"
 
 member :: Ord k => k -> Map k a -> Bool
 member k m = case lookup k m of
@@ -223,7 +232,7 @@ alter f k (Bin sx kx x l r) = case compare k kx of
 findIndex :: Ord k => k -> Map k a -> Int
 findIndex = go 0
   where
-    go _ _ Tip = error "Map.findIndex: element is not in the map"
+    go _ _ Tip = mapError_ "Map.findIndex: element is not in the map" "1444:23"
     go idx k (Bin _ kx _ l r) = case compare k kx of
       LT -> go idx k l
       GT -> go (idx + size l + 1) k r
@@ -239,7 +248,7 @@ lookupIndex = go 0
       EQ -> Just (idx + size l)
 
 elemAt :: Int -> Map k a -> (k, a)
-elemAt _ Tip = error "Map.elemAt: index out of range"
+elemAt _ Tip = mapError_ "Map.elemAt: index out of range" "1485:17"
 elemAt i (Bin _ kx x l r) = case compare i sizeL of
   LT -> elemAt i l
   GT -> elemAt (i - sizeL - 1) r
@@ -248,7 +257,7 @@ elemAt i (Bin _ kx x l r) = case compare i sizeL of
 
 deleteAt :: Int -> Map k a -> Map k a
 deleteAt i t = case t of
-  Tip -> error "Map.deleteAt: index out of range"
+  Tip -> mapError_ "Map.deleteAt: index out of range" "1598:12"
   Bin _ kx x l r -> let sizeL = size l in case compare i sizeL of
     LT -> balanceR kx x (deleteAt i l) r
     GT -> balanceL kx x l (deleteAt (i - sizeL - 1) r)
@@ -302,12 +311,12 @@ lookupMax (Bin _ k x _ r) = Just (go k x r)
 findMin :: Map k a -> (k, a)
 findMin t = case lookupMin t of
   Just r  -> r
-  Nothing -> error "Map.findMin: empty map has no minimal element"
+  Nothing -> mapError_ "Map.findMin: empty map has no minimal element" "1634:17"
 
 findMax :: Map k a -> (k, a)
 findMax t = case lookupMax t of
   Just r  -> r
-  Nothing -> error "Map.findMax: empty map has no maximal element"
+  Nothing -> mapError_ "Map.findMax: empty map has no maximal element" "1659:17"
 
 deleteMin :: Map k a -> Map k a
 deleteMin (Bin _ _ _ Tip r) = r
@@ -341,12 +350,12 @@ maxView t = case maxViewWithKey t of
 
 deleteFindMin :: Map k a -> ((k, a), Map k a)
 deleteFindMin t = case minViewWithKey t of
-  Nothing  -> (error "Map.deleteFindMin: can not return the minimal element of an empty map", Tip)
+  Nothing  -> (mapError_ "Map.deleteFindMin: can not return the minimal element of an empty map" "3960:15", Tip)
   Just res -> res
 
 deleteFindMax :: Map k a -> ((k, a), Map k a)
 deleteFindMax t = case maxViewWithKey t of
-  Nothing  -> (error "Map.deleteFindMax: can not return the maximal element of an empty map", Tip)
+  Nothing  -> (mapError_ "Map.deleteFindMax: can not return the maximal element of an empty map" "3970:15", Tip)
   Just res -> res
 
 -------------------------------------------------------------------
@@ -881,10 +890,10 @@ instance Foldable (Map k) where
   null m = Data.Map.Internal.null m
   length m = size m
   maximum m = case m of
-    Tip -> error "Data.Foldable.maximum (for Data.Map): empty map"
+    Tip -> mapError_ "Data.Foldable.maximum (for Data.Map): empty map" "4241:23"
     _   -> P.maximum (elems m)
   minimum m = case m of
-    Tip -> error "Data.Foldable.minimum (for Data.Map): empty map"
+    Tip -> mapError_ "Data.Foldable.minimum (for Data.Map): empty map" "4248:23"
     _   -> P.minimum (elems m)
 
 instance Traversable (Map k) where

@@ -3,6 +3,7 @@ module Data.Set
   , insert, delete, union, difference, intersection
   , fromList, fromDistinctAscList, toList, toAscList, elems
   , elemAt, findIndex, lookupIndex
+  , findMin, findMax
   , filter, map
   ) where
 
@@ -19,6 +20,13 @@ import Prelude hiding (null, filter, map)
 data Set a
   = SBin Int a (Set a) (Set a)
   | STip
+
+-- containers-0.6.7's call stack for an `error` at line:col of its
+-- Data/Set/Internal.hs, as GHC 9.4.8 shows it (recorded, M150).
+setError_ :: String -> String -> a
+setError_ msg at = primErrorLoc msg
+  ("CallStack (from HasCallStack):\n  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:"
+   ++ at ++ " in containers-0.6.7:Data.Set.Internal")
 
 delta :: Int
 delta = 3
@@ -61,9 +69,12 @@ instance Foldable Set where
   foldr f z s = foldrList_ f z (toAscList s)
   null s = Data.Set.null s
   length s = size s
+  -- containers: maximum = findMax, minimum = findMin (their texts).
+  maximum s = findMax s
+  minimum s = findMin s
 
 elemAt :: Int -> Set a -> a
-elemAt _ STip = error "Set.elemAt: index out of range"
+elemAt _ STip = setError_ "Set.elemAt: index out of range" "1381:17"
 elemAt i (SBin _ x l r) =
   case compare i sl of
     LT -> elemAt i l
@@ -73,7 +84,7 @@ elemAt i (SBin _ x l r) =
 
 --  The index of an element, and its Maybe form.
 findIndex :: Ord a => a -> Set a -> Int
-findIndex _ STip = error "Set.findIndex: element is not in the set"
+findIndex _ STip = setError_ "Set.findIndex: element is not in the set" "1336:21"
 findIndex a (SBin _ x l r) =
   case compare a x of
     LT -> findIndex a l
@@ -166,7 +177,20 @@ deleteFindMin (SBin _ x STip r) = (x, r)
 deleteFindMin (SBin _ x l r) =
   case deleteFindMin l of
     (m, l') -> (m, balance x l' r)
-deleteFindMin STip = error "Set.deleteFindMin: empty set"
+deleteFindMin STip =
+  setError_ "Set.deleteFindMin: can not return the minimal element of an empty set" "1611:18"
+
+--  The least and greatest elements: the leftmost and rightmost
+--  nodes, as containers (no comparisons).
+findMin :: Set a -> a
+findMin (SBin _ x STip _) = x
+findMin (SBin _ _ l _) = findMin l
+findMin STip = setError_ "Set.findMin: empty set has no minimal element" "776:17"
+
+findMax :: Set a -> a
+findMax (SBin _ x _ STip) = x
+findMax (SBin _ _ _ r) = findMax r
+findMax STip = setError_ "Set.findMax: empty set has no maximal element" "794:17"
 
 --  Left-biased union, like containers.
 union :: Ord a => Set a -> Set a -> Set a

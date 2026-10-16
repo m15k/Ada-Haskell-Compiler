@@ -1,0 +1,62 @@
+Map.! => Map.!: given key is not an element in the map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:617:17 in containers-0.6.7:Data.Map.Internal
+Map.Strict.! => Map.!: given key is not an element in the map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:617:17 in containers-0.6.7:Data.Map.Internal
+Map.findIndex => Map.findIndex: element is not in the map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1444:23 in containers-0.6.7:Data.Map.Internal
+Map.elemAt => Map.elemAt: index out of range
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1485:17 in containers-0.6.7:Data.Map.Internal
+Map.elemAt negative => Map.elemAt: index out of range
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1485:17 in containers-0.6.7:Data.Map.Internal
+Map.deleteAt => Map.deleteAt: index out of range
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1598:12 in containers-0.6.7:Data.Map.Internal
+Map.findMin => Map.findMin: empty map has no minimal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1634:17 in containers-0.6.7:Data.Map.Internal
+Map.findMax => Map.findMax: empty map has no maximal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:1659:17 in containers-0.6.7:Data.Map.Internal
+Map.deleteFindMin => Map.deleteFindMin: can not return the minimal element of an empty map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:3960:15 in containers-0.6.7:Data.Map.Internal
+Map.deleteFindMax => Map.deleteFindMax: can not return the maximal element of an empty map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:3970:15 in containers-0.6.7:Data.Map.Internal
+Map maximum => Data.Foldable.maximum (for Data.Map): empty map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:4241:23 in containers-0.6.7:Data.Map.Internal
+Map minimum => Data.Foldable.minimum (for Data.Map): empty map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:4248:23 in containers-0.6.7:Data.Map.Internal
+Map foldr1 => foldr1: empty structure
+Set.elemAt => Set.elemAt: index out of range
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:1381:17 in containers-0.6.7:Data.Set.Internal
+Set.findIndex => Set.findIndex: element is not in the set
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:1336:21 in containers-0.6.7:Data.Set.Internal
+Set.findMin => Set.findMin: empty set has no minimal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:776:17 in containers-0.6.7:Data.Set.Internal
+Set.findMax => Set.findMax: empty set has no maximal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:794:17 in containers-0.6.7:Data.Set.Internal
+Set maximum => Set.findMax: empty set has no maximal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:794:17 in containers-0.6.7:Data.Set.Internal
+Set minimum => Set.findMin: empty set has no minimal element
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Set/Internal.hs:776:17 in containers-0.6.7:Data.Set.Internal
+Set foldr1 => foldr1: empty structure
+('b',(2,'b'),(1,'a'),(2,'b'))
+(1,fromList [(2,'b')],(2,'b'))
+('b','a')
+(1,3,3,1)
+('e','o')
+(3,2)
