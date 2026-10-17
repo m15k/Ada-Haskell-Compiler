@@ -868,6 +868,14 @@ package body AHC.CodeGen is
                                 & "] = "
                                 & Var_Ref (G.FVs (K), Inner) & "; ");
                            end loop;
+                           --  The env was allocated before its later
+                           --  siblings: a collection in between made it
+                           --  old, and these stores put young nodes in
+                           --  it - the own collector's write barrier
+                           --  (M150 review; a no-op elsewhere).
+                           if not G.FVs.Is_Empty then
+                              Append (R, "ahc_env_patched(" & EN & "); ");
+                           end if;
                         end;
                      end loop;
                   end;

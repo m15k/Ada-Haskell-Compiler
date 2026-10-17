@@ -51,6 +51,7 @@ AhcNode *ahc_eval(AhcNode *n);                 /* to WHNF, updating   */
 AhcNode *ahc_apply(AhcNode *f, AhcNode *a);    /* general application */
 
 AhcNode **ahc_env(int n);                      /* allocate env array  */
+void ahc_env_patched(AhcNode **env);           /* letrec env written: GC barrier */
 AhcNode *ahc_mk_thunk(AhcCode code, AhcNode **env);
 AhcNode *ahc_mk_fun(AhcFn fn, AhcNode **env);
 AhcNode *ahc_mk_int(long v);

@@ -715,6 +715,18 @@ static void own_write_barrier(void *o) {
     own_remember(o);
 }
 
+/* A letrec's environment arrays are filled AFTER every sibling node
+   is allocated (they reference each other), so an allocation in
+   between can collect, leave an earlier env marked (sticky-old), and
+   the patch stores then put young nodes in an old object - the
+   construction-order hazard of design note section 8, in generated
+   code. Generated code calls this after patching each env (M150
+   review: gc_scope_retire missed exactly such an edge, ptrarr -> FUN,
+   once Word's instances shifted the collection points). */
+void ahc_env_patched(AhcNode **env) {
+  own_write_barrier(env);
+}
+
 static size_t own_block_index(void *p) {
   return (size_t)((char *)p - own_base) / OWN_BLOCK;
 }
@@ -903,6 +915,8 @@ static void own_stats(void) {
             own_t_sweep, own_t_rendezvous);
   }
 }
+#else
+void ahc_env_patched(AhcNode **env) { (void)env; }
 #endif /* AHC_GC_OWN */
 
 #if defined(AHC_GC_OWN)
