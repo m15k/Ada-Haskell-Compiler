@@ -76,6 +76,14 @@ package body AHC.CodeGen is
       TLit_Map  : Str_Nat_Maps.Map;
       TLit_Next : Natural := 0;
 
+      --  Closed dictionary applications (`$dEqList $dEqChar`): one
+      --  static slot per distinct one per unit, filled on first use,
+      --  so a dictionary built from global dictionaries alone is built
+      --  - and its structural test run - once per program, not at
+      --  every use (M150: per-use construction cost b_streq 29%).
+      DC_Map  : Str_Nat_Maps.Map;
+      DC_Next : Natural := 0;
+
       --  The wired primTextPack global (the evidence shortcut emits
       --  direct applications of it); No_Var when absent.
       Pack_Var : constant Core.Var_Id :=
@@ -431,6 +439,32 @@ package body AHC.CodeGen is
 
       package Scope_Maps renames Var_Str_Maps;
 
+      --  A global dictionary variable ($d..., not a $d parameter):
+      --  the instance dictionaries AHC.Elaborate and Prelude_Core bind.
+      function Is_Dict_Global (V : Var_Id) return Boolean is
+         Info : constant Var_Info := M.Info (Real_Var_Id (V));
+         Name : constant String :=
+           Table.Text (Names.Real_Name_Id (Info.Name));
+      begin
+         return Info.Is_Global
+           and then Name'Length > 2
+           and then Name (Name'First .. Name'First + 1) = "$d";
+      end Is_Dict_Global;
+
+      --  An application of global dictionaries to global dictionaries
+      --  (or to such applications): evidence with no free variable.
+      function Closed_Dict_App (E : Real_Expr_Id) return Boolean is
+         N : constant Expr_Node := M.Node (E);
+         function Part (P : Real_Expr_Id) return Boolean is
+            PN : constant Expr_Node := M.Node (P);
+         begin
+            return (PN.Kind = Var_C and then Is_Dict_Global (Var_Id (PN.V)))
+              or else Closed_Dict_App (P);
+         end Part;
+      begin
+         return N.Kind = App_C and then Part (N.Fun) and then Part (N.Arg);
+      end Closed_Dict_App;
+
       function Var_Ref
         (V : Real_Var_Id; Scope : Scope_Maps.Map) return String
       is
@@ -710,6 +744,33 @@ package body AHC.CodeGen is
                                 & Img (S'Length) & ");" & ASCII.LF);
                         TLit_Next := TLit_Next + 1;
                         return "lt_" & Img (TLit_Next - 1);
+                     end;
+                  end if;
+                  if Closed_Dict_App (E) then
+                     declare
+                        G : constant String :=
+                          "ahc_apply(" & Gen_Lazy (N.Fun, Scope) & ", "
+                          & Gen_Lazy (N.Arg, Scope) & ")";
+                        K : constant Unbounded_String :=
+                          To_Unbounded_String (G);
+                        C : constant Str_Nat_Maps.Cursor := DC_Map.Find (K);
+                        Slot : Natural;
+                     begin
+                        if Str_Nat_Maps.Has_Element (C) then
+                           Slot := Str_Nat_Maps.Element (C);
+                        else
+                           Slot := DC_Next;
+                           DC_Map.Include (K, Slot);
+                           Append (Decl, "static AhcNode *dc_" & Img (Slot)
+                                   & ";" & ASCII.LF);
+                           DC_Next := DC_Next + 1;
+                        end if;
+                        --  Workers race benignly: both build a valid
+                        --  dictionary, one is kept.
+                        return "({ AhcNode *c_ = __atomic_load_n(&dc_"
+                          & Img (Slot) & ", __ATOMIC_ACQUIRE); if (!c_) { c_ = "
+                          & G & "; __atomic_store_n(&dc_" & Img (Slot)
+                          & ", c_, __ATOMIC_RELEASE); } c_; })";
                      end;
                   end if;
                   return "ahc_apply(" & Gen_Lazy (N.Fun, Scope) & ", "
@@ -1735,6 +1796,8 @@ package body AHC.CodeGen is
             Lit_Init := Null_Unbounded_String;
             TLit_Map.Clear;
             TLit_Next := 0;
+            DC_Map.Clear;
+            DC_Next := 0;
 
             --  Init assigns every global of the unit. A binding whose
             --  RHS is a bare global VARIABLE (an alias, `toInt8_ =
