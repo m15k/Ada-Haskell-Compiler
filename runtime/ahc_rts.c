@@ -2576,21 +2576,23 @@ static AhcNode *p_compare_poly(AhcNode *a, AhcNode *b) {
 }
 
 /* M150: is dictionary D structural at its method field K - that
-   field evaluating to the very PRIM node (ahc_prim_eq_poly for ==,
+   field ALREADY being the very PRIM node (ahc_prim_eq_poly for ==,
    ahc_prim_compare_poly for compare)? Only AHC.Prelude_Core's
-   structural builder puts that node there; a source instance cannot
-   name it, and a GND dictionary is its representation's. A wired or
-   derived Eq/Ord dictionary over element dictionaries asks this
-   lazily, on its first comparison, and then answers with the
-   primitive or with field-wise code. Both collectors are non-moving,
-   so node identity is stable.
-   A dictionary that reaches itself (GND: newtype L = L [L], whose Eq
-   IS the list instance at L's Eq) meets its own blackhole: that cycle
-   adds no hand-written instance, so it answers structural - the
-   optimistic fixpoint. Polymorphic recursion (newtype M a =
-   M (Maybe (M a))) builds a new dictionary per level and never meets
-   a blackhole; past a few nested tests the answer is "not
-   structural", and field-wise code is always correct. */
+   structural builder puts that node there, and it puts it there as
+   the value itself; a source instance cannot name it, and a GND
+   dictionary's fields are selections not yet made. The field is
+   NEVER forced (M150 review): a hand-written method may be bottom or
+   slow (`(==) = error ..` must not break `[x] == []`), and one under
+   evaluation is not a cycle we may assume away. Anything but the
+   evaluated primitive answers "not structural", and field-wise code
+   is always correct. D itself is forced - a dictionary, built lazily
+   from its parts - except when it is a blackhole of this thread (a
+   dictionary that reaches itself), which also answers field-wise.
+   Forcing D may build a dictionary that tests ITS elements (a
+   polymorphically recursive newtype, M a = M (Maybe (M a)), builds
+   one per level): past a few nested tests the answer is field-wise.
+   ahc_throw resets the depth, so a raise out of a test cannot leave
+   it counted. Both collectors are non-moving: identity is stable. */
 static __thread int struct_depth;
 
 static int struct_self_held(AhcNode *n) {
@@ -2604,22 +2606,16 @@ static int struct_self_held(AhcNode *n) {
 static AhcNode *p_struct_ok(AhcNode *d, AhcNode *k, AhcNode *prim) {
   long i = ahc_eval(k)->u.i;
   AhcNode *v, *f, *p;
-  if (struct_depth >= 8) return mk_bool(0);
-  if (struct_self_held(d)) return mk_bool(1);
+  if (struct_depth >= 8 || struct_self_held(d)) return mk_bool(0);
   struct_depth++;
   v = ahc_eval(d);
-  if (v->tag != AHC_CON || i < 0 || i >= v->u.con.arity) {
-    struct_depth--;
-    return mk_bool(0);
-  }
-  f = v->u.con.fields[i];
-  if (struct_self_held(f)) {
-    struct_depth--;
-    return mk_bool(1);
-  }
-  f = ahc_eval(f);
-  p = ahc_eval(prim);
   struct_depth--;
+  if (v->tag != AHC_CON || i < 0 || i >= v->u.con.arity)
+    return mk_bool(0);
+  f = v->u.con.fields[i];
+  while (__atomic_load_n(&f->tag, __ATOMIC_ACQUIRE) == AHC_IND)
+    f = (AhcNode *)__atomic_load_n(&f->u.ind, __ATOMIC_ACQUIRE);
+  p = ahc_eval(prim);
   return mk_bool(f == p);
 }
 
@@ -3059,6 +3055,9 @@ static int reg_add(void ***tab, int *n, int *cap, void *p) {
     int i;
     if (!nt) ahc_die("out of memory");
     for (i = 0; i < *n; i++) nt[i] = (*tab)[i];
+    /* the old table is garbage now, but may be sticky-old and keep
+       pointing at structs that retire (M150 review) */
+    if (*tab) memset(*tab, 0, sizeof(void *) * (size_t)*cap);
     *tab = nt;
     *cap = nc;
   }
@@ -3099,6 +3098,12 @@ static void task_trampoline(int id) {
     t->state = 3;
   }
   t->action = NULL;
+#ifdef AHC_GC_OWN
+  /* result/exc were stored into a struct that may already be old;
+     an awaiter can read them after the scope retires the task, when
+     no walk covers it any more (M150 review) - remember it. */
+  own_write_barrier(t);
+#endif
   {
     AhcTask *w = t->join_waiters;
     t->join_waiters = NULL;
@@ -3163,18 +3168,30 @@ static AhcNode *io_scope(AhcNode **env, AhcNode *w) {
     }
     /* Retire the scope. Its structs are re-walked by the collector
        only while registered, and they were mutated without a
-       barrier (sc->kids, a task's result, its saved registers), so
-       a retired struct that is already sticky-old would keep
-       dangling pointers to young objects the next minor frees:
-       harmless to the program (nothing reads a retired struct) but
-       a dangling heap pointer, and AHC_OWN_VERIFY rightly calls the
-       mark set unclosed. Scrub them: a dead struct holds nothing. */
+       barrier (sc->kids, a task's saved registers), so a retired
+       struct that is already sticky-old would keep dangling
+       pointers to young objects the next minor frees - and
+       AHC_OWN_VERIFY rightly calls the mark set unclosed. Scrub
+       them, except what an await still parked on a task reads once
+       it resumes: its state, result, exception and message (M150
+       review: zeroing state re-parked such an await forever). Those
+       went through the write barrier when the task finished. */
     for (i = 0; i < sc->n; i++) {
       AhcTask *k = sc->kids[i];
+      int id = k->id, state = k->state, awaited = k->awaited;
+      AhcNode *result = k->result, *exc = k->exc;
+      char msg[sizeof k->err_msg];
+      memcpy(msg, k->err_msg, sizeof msg);
       if (k->stack)
         munmap(k->stack, STACK_MAP_SIZE(AHC_TASK_STACK));
-      task_reg[k->id] = NULL;
+      task_reg[id] = NULL;
       memset(k, 0, sizeof *k);
+      k->id = id;
+      k->state = state;
+      k->awaited = awaited;
+      k->result = result;
+      k->exc = exc;
+      memcpy(k->err_msg, msg, sizeof msg);
     }
     if (sc->kids) memset(sc->kids, 0, sizeof(AhcTask *) * (size_t)sc->cap);
     memset(sc, 0, sizeof *sc);
@@ -3258,6 +3275,7 @@ static AhcNode *io_spawn(AhcNode **env, AhcNode *w) {
     int i;
     if (!nk) ahc_die("out of memory");
     for (i = 0; i < sc->n; i++) nk[i] = sc->kids[i];
+    if (sc->kids) memset(sc->kids, 0, sizeof(AhcTask *) * (size_t)sc->cap);
     sc->kids = nk;
     sc->cap = nc;
   }
@@ -3758,6 +3776,7 @@ static void exc_abandon(AhcEvalFrame *stop, AhcNode *exc) {
    err_msg AND the value in exc, and decides what to do with it. */
 void ahc_throw(AhcNode *exc) {
   AhcCatch *c = cur_task->catch_top;
+  struct_depth = 0;   /* a raise out of a structural test (M150 review) */
   cur_task->exc = exc;
   if (c && c->err_depth == cur_task->err_depth) {
     exc_abandon(c->eval_top, exc);
@@ -4311,8 +4330,9 @@ static AhcNode *io_select_recv(AhcNode **env, AhcNode *w) {
         c->head = cc->next;
         if (!c->head) c->tail = NULL;
         {
+          AhcNode *ix = ahc_mk_int(idx);   /* components first */
           AhcNode *pr = ahc_mk_con(1, 2);
-          pr->u.con.fields[0] = ahc_mk_int(idx);
+          pr->u.con.fields[0] = ix;
           pr->u.con.fields[1] = cc->v;
           return pr;
         }
@@ -4336,9 +4356,10 @@ static AhcNode *io_select_recv(AhcNode **env, AhcNode *w) {
     }
     if (cur_task->xfer) {
       AhcNode *v = cur_task->xfer;
+      AhcNode *ix = ahc_mk_int(cur_task->sel_index);  /* components first */
       AhcNode *pr = ahc_mk_con(1, 2);
       cur_task->xfer = NULL;
-      pr->u.con.fields[0] = ahc_mk_int(cur_task->sel_index);
+      pr->u.con.fields[0] = ix;
       pr->u.con.fields[1] = v;
       return pr;
     }

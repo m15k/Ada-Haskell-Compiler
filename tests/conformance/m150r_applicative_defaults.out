@@ -1,0 +1,7 @@
+["1","2","pure","liftA2","liftA2"]
+["a","pure","liftA2"]
+["1","fmap"]
+["1","fmap"]
+["1","fmap"]
+["x","fmap","y","ap"]
+["x","y","liftA2"]

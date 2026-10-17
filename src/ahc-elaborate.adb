@@ -775,15 +775,23 @@ package body AHC.Elaborate is
                                            1, Bool_Con (False),
                                            Bool_Con (True)))));
                                     when 6 =>
-                                       --  max
+                                       --  max x y = if x <= y then y
+                                       --  else x (Report 6.3.2: a tie
+                                       --  answers y; M150 review - it
+                                       --  answered x, through compare)
                                        return Expr_Id (Lam2E (X,
-                                         Lam2E (Y, Cmp_Case (X, Y,
-                                           1, V2 (Y), V2 (X)))));
+                                         Lam2E (Y, Bool_Case2
+                                           (Ap2E (Ap2E (Sib (3),
+                                              V2 (X)), V2 (Y)),
+                                            V2 (Y), V2 (X)))));
                                     when 7 =>
-                                       --  min
+                                       --  min x y = if x <= y then x
+                                       --  else y
                                        return Expr_Id (Lam2E (X,
-                                         Lam2E (Y, Cmp_Case (X, Y,
-                                           3, V2 (Y), V2 (X)))));
+                                         Lam2E (Y, Bool_Case2
+                                           (Ap2E (Ap2E (Sib (3),
+                                              V2 (X)), V2 (Y)),
+                                            V2 (X), V2 (Y)))));
                                     when others =>
                                        return No_Expr;
                                  end case;

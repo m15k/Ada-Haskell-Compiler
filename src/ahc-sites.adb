@@ -30,9 +30,18 @@ package body AHC.Sites is
      (Ctx : Site_Context; Span : Diagnostics.Source_Span;
       L1, C1, L2, C2 : out Positive)
    is
-      Last : constant Source_Text.Byte_Offset :=
+      Last : Source_Text.Byte_Offset :=
         (if Span.Stop > Span.Start then Span.Stop - 1 else Span.Start);
    begin
+      --  The last CHARACTER's first byte (M150 review): Stop - 1 is a
+      --  continuation byte when the span ends in a multi-byte
+      --  character, and its column is the next one.
+      while Last > Span.Start
+        and then Ctx.Src.In_Range (Last)
+        and then Character'Pos (Ctx.Src.Char_At (Last)) in 16#80# .. 16#BF#
+      loop
+         Last := Last - 1;
+      end loop;
       L1 := Positive (Ctx.Src.Line_Of (Span.Start));
       C1 := Ghc_Column (Ctx.Src, Span.Start);
       L2 := Positive (Ctx.Src.Line_Of (Last));

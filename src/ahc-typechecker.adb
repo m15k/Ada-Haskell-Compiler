@@ -668,26 +668,57 @@ package body AHC.Typechecker is
       --  Shown is the head as Type_Str printed it, computed once by
       --  the caller.
       function AMP_Hint
-        (Of_Class, Missing : Class_Id; Shown : String) return String
+        (Inst : Instance_Info; Missing : Class_Id) return String
       is
-         Head : constant String :=
-           (if (for some Ch of Shown => Ch = ' ')
-            then "(" & Shown & ")" else Shown);
+         Of_Class : constant Class_Id := Inst.Of_Class;
+         Name : constant String :=
+           (if Inst.Head = No_TyCon then "the type"
+            else Table.Text (Names.Real_Name_Id
+                   (M.Info (Real_TyCon_Id (Inst.Head)).Name)));
          Pad : constant String := ASCII.LF & "               ";
+         Has_Return : Boolean := False;
       begin
-         if Missing = Env.Applicative_Cl
-           and then Of_Class = Env.Monad_Cl
+         for B of Inst.Method_Binds loop
+            if Table.Text (Names.Real_Name_Id (M.Info (B.Binder).Name))
+              = "return"
+            then
+               Has_Return := True;
+            end if;
+         end loop;
+         if not (Missing = Env.Applicative_Cl and then Of_Class = Env.Monad_Cl)
+           and then not (Missing = Env.Functor_Cl
+                         and then (Of_Class = Env.Applicative_Cl
+                                   or else Of_Class = Env.Monad_Cl))
          then
-            return ASCII.LF & "  hint: add  instance Applicative "
-              & Head & " where" & Pad & "pure = return; (<*>) = ap";
-         elsif Missing = Env.Functor_Cl
-           and then (Of_Class = Env.Applicative_Cl
-                     or else Of_Class = Env.Monad_Cl)
-         then
-            return ASCII.LF & "  hint: add  instance Functor "
-              & Head & " where" & Pad & "fmap = liftM";
+            return "";
+         elsif Inst.Is_Derived or else Inst.Is_GND then
+            --  M150 review: a derived Monad wants its sibling derived
+            --  too, not a hand-written instance.
+            return ASCII.LF & "  hint: add "
+              & Table.Text (M.Info (Real_Class_Id (Missing)).Name)
+              & " to " & Name & "'s deriving clause";
+         elsif Missing = Env.Functor_Cl then
+            return ASCII.LF & "  hint: add  instance Functor " & Name
+              & (if Inst.Context.Is_Empty then "" else " (with this"
+                   & " instance's context)")
+              & " where" & Pad & "fmap = liftM"
+              & ASCII.LF & "  (liftM is Control.Monad's)";
+         elsif Has_Return then
+            return ASCII.LF & "  hint: add  instance Applicative " & Name
+              & (if Inst.Context.Is_Empty then "" else " (with this"
+                   & " instance's context)")
+              & " where" & Pad & "pure = return; (<*>) = ap"
+              & ASCII.LF & "  (ap is Control.Monad's)";
+         else
+            --  No return here: it defaults to pure, so pure = return
+            --  would loop (M150 review).
+            return ASCII.LF & "  hint: add  instance Applicative " & Name
+              & (if Inst.Context.Is_Empty then "" else " (with this"
+                   & " instance's context)")
+              & " where" & Pad & "pure x = ...; (<*>) = ap"
+              & ASCII.LF & "  (define pure there - return defaults to it;"
+              & " ap is Control.Monad's)";
          end if;
-         return "";
       end AMP_Hint;
 
       procedure Head_Of
@@ -2010,6 +2041,19 @@ package body AHC.Typechecker is
          end case;
       end Spine_Is_Var;
 
+      --  Every argument along T's application spine is a variable.
+      function Var_Args (T : Real_Type_Id) return Boolean is
+         N : constant Type_Node := M.Node (Repr (T));
+      begin
+         case N.Kind is
+            when TVar_T => return True;
+            when TApp_T =>
+               return M.Node (Repr (N.T_Arg)).Kind = TVar_T
+                 and then Var_Args (N.T_Fun);
+            when others => return False;
+         end case;
+      end Var_Args;
+
       procedure Reduce_Context
         (S : in out Reduce_State; C : Class_Id; T : Real_Type_Id;
          D : Natural; Depth : Natural)
@@ -2034,7 +2078,14 @@ package body AHC.Typechecker is
          then
             --  A type variable, or one applied (`Eq (f a)` for
             --  `newtype Wrap f a = Wrap (f a)`), cannot be reduced:
-            --  it joins the context as GHC infers it.
+            --  it joins the context as GHC infers it. Stock deriving
+            --  takes such a constraint only over variables: GHC
+            --  rejects `data K f = K (f Int) deriving Eq` (M150
+            --  review; it asks for a standalone deriving).
+            if not S.For_GND and then not Var_Args (T) then
+               Fail (No_Instance);
+               return;
+            end if;
             for Old of S.Ctx loop
                if Old.Class = C and then Same_Arg (Old.Arg, T) then
                   return;
@@ -2089,8 +2140,13 @@ package body AHC.Typechecker is
                      Hit_Ids.Append (J);
                   elsif Inst_Match."=" (MR, Inst_Match.Undecided)
                     and then M.Info (J).Overlap /= Incoherent
-                    and then not Only_Apart_Vars (T)
+                    and then (not S.For_GND or else not Only_Apart_Vars (T))
                   then
+                     --  Stock deriving: an instance that may match at
+                     --  some instantiation of the field's variables
+                     --  is an overlap GHC rejects (`instance Eq [B]`
+                     --  beside `data S a = S [a] deriving Eq`; M150
+                     --  review), so it is not exempted here.
                      Pending := True;
                   end if;
                end;
@@ -2355,6 +2411,50 @@ package body AHC.Typechecker is
                & Constraint_Text (Inst.Of_Class, Head_T) & "'");
          end Report_Missing;
 
+         --  C is D or one of D's superclasses, transitively.
+         function Super_Of (C, D : Class_Id; Depth : Natural := 0)
+           return Boolean is
+         begin
+            if C = D then
+               return True;
+            elsif Depth > 20 then
+               return False;
+            end if;
+            for S2 of M.Info (Real_Class_Id (D)).Supers loop
+               if Super_Of (C, Class_Id (S2), Depth + 1) then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Super_Of;
+
+         --  Drop a constraint another one on the same argument entails
+         --  through its superclasses (`Eq a` beside `Ord a`), as GHC
+         --  simplifies an inferred context.
+         procedure Drop_Entailed (Ctx : in out Constraint_Vectors.Vector) is
+            R : Constraint_Vectors.Vector;
+         begin
+            for I in 1 .. Ctx.Last_Index loop
+               declare
+                  Redundant : Boolean := False;
+               begin
+                  for J in 1 .. Ctx.Last_Index loop
+                     if I /= J
+                       and then Ctx (I).Class /= Ctx (J).Class
+                       and then Same_Arg (Ctx (I).Arg, Ctx (J).Arg)
+                       and then Super_Of (Ctx (I).Class, Ctx (J).Class)
+                     then
+                        Redundant := True;
+                     end if;
+                  end loop;
+                  if not Redundant then
+                     R.Append (Ctx (I));
+                  end if;
+               end;
+            end loop;
+            Ctx := R;
+         end Drop_Entailed;
+
          procedure Infer_One
            (II : Real_Instance_Id; Report : Boolean;
             Changed : in out Boolean)
@@ -2414,6 +2514,30 @@ package body AHC.Typechecker is
                   end loop;
                end;
             end loop;
+            --  The superclasses' needs too (M150 review): `deriving Ord`
+            --  beside a hand-written `instance (Show a, Eq a) =>
+            --  Eq (W a)` infers `(Show a, Ord a)`, as GHC does, and with
+            --  no `Eq` instance at all it is rejected, not a run-time
+            --  "missing superclass dictionary".
+            for Sup of M.Info (Real_Class_Id (Inst.Of_Class)).Supers loop
+               Reduce_Context (S, Class_Id (Sup), Head_T, 0, 0);
+               if S.Failure /= No_Failure then
+                  if Report then
+                     if Natural (II) <= Inst_Origins.Last_Index then
+                        Bag.Set_Origin (Inst_Origins (Natural (II)));
+                     end if;
+                     Bag.Add
+                       (Diagnostics.Error, Diagnostics.Class_No_Instance,
+                        Inst.Span,
+                        "no instance for '"
+                        & Constraint_Text (Class_Id (Sup), Head_T)
+                        & "', required by the superclasses of the derived '"
+                        & Constraint_Text (Inst.Of_Class, Head_T) & "'");
+                  end if;
+                  return;
+               end if;
+            end loop;
+            Drop_Entailed (S.Ctx);
             if not Same_Context (S.Ctx, Inst.Context) then
                M.Instances (II).Context := S.Ctx;
                Changed := True;
@@ -2565,22 +2689,42 @@ package body AHC.Typechecker is
                   for I in W_Mark + 1 .. W_List.Last_Index loop
                      if W_List (I).Sol in Unsolved | By_Error then
                         declare
-                           Shown : constant String :=
-                             Type_Str (W_List (I).C.Arg);
                            Missing : constant Class_Id :=
                              Class_Id (W_List (I).C.Class);
+                           Matches : Natural := 0;
                         begin
+                           --  More than one matching instance is an
+                           --  overlap, not a missing one (M150 review:
+                           --  quiet solving reported both as "no
+                           --  instance", and the hint then asked for a
+                           --  third).
+                           for J of M.Info (W_List (I).C.Class).Instances
+                           loop
+                              declare
+                                 A : Type_Id_Vectors.Vector;
+                              begin
+                                 if Inst_Match."="
+                                      (Match_TC (M, Env, M.Info (J),
+                                                 W_List (I).C.Arg, A),
+                                       Inst_Match.Matched)
+                                 then
+                                    Matches := Matches + 1;
+                                 end if;
+                              end;
+                           end loop;
                            Bag.Add (Diagnostics.Error,
                                     Diagnostics.Class_No_Instance,
                                     Inst.Span,
-                                    "no instance for '"
+                                    (if Matches > 1
+                                     then "overlapping instances for '"
+                                     else "no instance for '")
                                     & Constraint_Text
                                         (W_List (I).C.Class,
                                          W_List (I).C.Arg)
                                     & "', required by the superclasses"
                                     & " of an instance declaration"
-                                    & AMP_Hint (Inst.Of_Class, Missing,
-                                                Shown));
+                                    & (if Matches > 1 then ""
+                                       else AMP_Hint (Inst, Missing)));
                         end;
                         exit;
                      end if;

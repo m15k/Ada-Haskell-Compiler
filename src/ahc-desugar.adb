@@ -156,6 +156,13 @@ package body AHC.Desugar is
       --  Body_E under `seq f` for each strict binding F of a group,
       --  first binding outermost (M150): `let !x = e in b` forces x
       --  before b.
+      --  A strict binding's pattern without its bang: GHC's message
+      --  names `Just a` for `!(Just a) = ...` (M150 review); inner
+      --  bangs stay.
+      function Unbanged (P : Real_Pat_Id) return Real_Pat_Id is
+        (if Arena.Node (P).Kind = Bang_P then Arena.Node (P).Bang_Pat
+         else P);
+
       function Force_All
         (Forces : Core.Var_Id_Vectors.Vector;
          Body_E : Core.Real_Expr_Id;
@@ -2773,7 +2780,7 @@ package body AHC.Desugar is
                                     --  pattern's text (M149).
                                     Fail : constant Core.Real_Expr_Id :=
                                       Fail_Match
-                                        (Pat_Text (Ext_P (N.Pat)),
+                                        (Pat_Text (Ext_P (Unbanged (N.Pat))),
                                          Ext_D (D), PB_Ref,
                                          "irrefutable pattern failed",
                                          Handled => Handled_Of_One (N.Pat),
@@ -2799,7 +2806,7 @@ package body AHC.Desugar is
                                       VarE (PB, Span);
                                     Fail : constant Core.Real_Expr_Id :=
                                       Fail_Match
-                                        (Pat_Text (Ext_P (N.Pat)),
+                                        (Pat_Text (Ext_P (Unbanged (N.Pat))),
                                          Ext_D (D), PB_Ref,
                                          "irrefutable pattern failed",
                                          Handled => Handled_Of_One (N.Pat),
@@ -2824,6 +2831,125 @@ package body AHC.Desugar is
                   end;
             end case;
          end loop;
+         --  GHC's order for forcing a group's strict bindings (M150
+         --  review): a binding after the strict ones it depends on,
+         --  independent ones in reverse source order - what its
+         --  dependency analysis yields (`let !a = ..; !b = .. a ..`
+         --  forces a then b in either source order; three independent
+         --  ones force the last first). Dependencies go through the
+         --  group's other bindings too.
+         if Natural (Forces.Length) > 1 then
+            declare
+               N : constant Natural := Natural (Forces.Length);
+
+               --  E mentions V, directly or through a binding of Into.
+               function Mentions
+                 (E : Core.Real_Expr_Id; V : Core.Var_Id; Depth : Natural)
+                  return Boolean
+               is
+                  Node : constant Core.Expr_Node := M.Node (E);
+               begin
+                  if Depth > 200 then
+                     return False;
+                  end if;
+                  case Node.Kind is
+                     when Core.Var_C =>
+                        if Core.Var_Id (Node.V) = V then
+                           return True;
+                        end if;
+                        for B of Into loop
+                           if Core.Var_Id (B.Binder) = Core.Var_Id (Node.V)
+                             and then Core.Var_Id (B.Binder) /= V
+                             and then not Forces.Contains
+                               (Core.Var_Id (B.Binder))
+                           then
+                              return Mentions (B.Rhs, V, Depth + 1);
+                           end if;
+                        end loop;
+                        return False;
+                     when Core.App_C =>
+                        return Mentions (Node.Fun, V, Depth + 1)
+                          or else Mentions (Node.Arg, V, Depth + 1);
+                     when Core.Lam_C =>
+                        return Mentions (Node.Lam_Body, V, Depth + 1);
+                     when Core.Let_C =>
+                        for B of Node.Binds loop
+                           if Mentions (B.Rhs, V, Depth + 1) then
+                              return True;
+                           end if;
+                        end loop;
+                        return Mentions (Node.Let_Body, V, Depth + 1);
+                     when Core.Case_C =>
+                        if Mentions (Node.Scrutinee, V, Depth + 1) then
+                           return True;
+                        end if;
+                        for A of Node.Alts loop
+                           if Mentions (M.Node (A).Alt_Body, V, Depth + 1)
+                           then
+                              return True;
+                           end if;
+                        end loop;
+                        return False;
+                     when others =>
+                        return False;
+                  end case;
+               end Mentions;
+
+               function Rhs_Of (V : Core.Var_Id) return Core.Real_Expr_Id is
+               begin
+                  for B of Into loop
+                     if Core.Var_Id (B.Binder) = V then
+                        return B.Rhs;
+                     end if;
+                  end loop;
+                  return Core.Real_Expr_Id'First;
+               end Rhs_Of;
+
+               Placed : array (1 .. N) of Boolean := [others => False];
+               Sorted : Core.Var_Id_Vectors.Vector;
+            begin
+               for Round in 1 .. N loop
+                  pragma Warnings (Off, Round);
+                  declare
+                     Pick : Natural := 0;
+                  begin
+                     for I in reverse 1 .. N loop
+                        if not Placed (I) then
+                           declare
+                              Ready : Boolean := True;
+                              R : constant Core.Real_Expr_Id :=
+                                Rhs_Of (Forces (I));
+                           begin
+                              for J in 1 .. N loop
+                                 if J /= I and then not Placed (J)
+                                   and then Mentions (R, Forces (J), 0)
+                                 then
+                                    Ready := False;
+                                 end if;
+                              end loop;
+                              if Ready then
+                                 Pick := I;
+                                 exit;
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+                     if Pick = 0 then
+                        --  a cycle: the latest unplaced one
+                        for I in reverse 1 .. N loop
+                           if not Placed (I) then
+                              Pick := I;
+                              exit;
+                           end if;
+                        end loop;
+                     end if;
+                     Placed (Pick) := True;
+                     Sorted.Append (Forces (Pick));
+                  end;
+               end loop;
+               Forces := Sorted;
+            end;
+         end if;
          Group_Depth := Group_Depth - 1;
       end Ds_Group;
 

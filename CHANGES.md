@@ -1,5 +1,55 @@
 # AHC Changelog
 
+## v1.21 (unreleased)
+
+**M150 - the correctness round.** Seven places where AHC rejected or
+misread a program GHC 9.4.8 accepts, each probed against both, plus
+the error-text follow-ups M149 left open.
+
+- **Silent wrong answers fixed: `Eq`/`Ord` now use a component's own
+  instance.** Derived instances and the wired ones for lists, `Maybe`,
+  `Either` and tuples compared structurally, so a type with a
+  hand-written `Eq` (say, case-insensitive) compared wrongly inside
+  any container: `[Ci "A"] == [Ci "a"]` was `False`. A dictionary now
+  takes the structural primitive only when every instance it reaches
+  is structural - decided once, when the dictionary is built - and
+  otherwise compares field by field through each field's instance,
+  constructors in declaration order. Strings, `[Int]` and records of
+  base fields keep the primitive.
+- **`Applicative` is `Monad`'s superclass and `mapM` is
+  `Traversable`'s**, as in GHC since 7.10. `mapM`, `sequence`,
+  `traverse` and `forM` work over `Maybe`, `Either`, `Map`, pairs,
+  `Array`, `Identity` and user `Traversable`s; `pure`, `<*>` and `fmap`
+  work under `Monad m =>` alone; `Data.Traversable` is new. A `Monad`
+  instance without an `Applicative` instance is now rejected, as GHC
+  rejects it, with a hint naming the instance to add.
+- **Derived contexts are inferred from the fields.** A phantom
+  parameter needs no instance; a field with no instance is a compile
+  error at the deriving clause, in GHC's words ("no instance for 'Show
+  F', arising from the second field of 'T' (type 'F')"), not a run-time
+  crash.
+- **Bang patterns**, with GHC 9's rule for when `!` is a bang and when
+  it is the operator, including strict `let`, `where` and `do`
+  bindings.
+- **Unicode identifiers and operators** (`ñ`, `café`, `λx`, `∘`),
+  classified by GHC's own general-category table; source columns
+  count code points.
+- **A `where` binding may shadow an argument**, and a token that cannot
+  start an alternative (`)`, `,`, ...) closes a layout block as in a
+  `do` block.
+- **`Word` is its own type**, as in GHC, crossing the FFI as
+  `uint64_t`.
+- **GHC's exact error texts in the libraries:** `Data.Map`/`Data.Set`
+  with containers' call stacks, `Data.Array`'s `!` through the index's
+  `Ix` instance, `Data.Char`, `Numeric`, `Data.Ratio` (an
+  `ArithException`), and derived `Enum` errors with GHC's call stack at
+  the deriving clause.
+- **More correctness fixes found on the way:** `==` under an `Ord a`
+  context crashed with "selector on a non-dictionary"; `max` and `min`
+  broke ties the wrong way (`max 0.0 (-0.0)`); `maximumBy` kept the
+  first of equal maxima where GHC keeps the last; `showIntAtBase`
+  looped on base 1.
+
 ## v1.20 (2026-10-14)
 
 **M149 - runtime errors better than GHC's.** GHC's runtime errors are a

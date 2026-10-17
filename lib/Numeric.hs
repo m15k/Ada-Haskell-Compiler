@@ -15,10 +15,12 @@ showIntAtBase base toDig n s
       ("Numeric.showIntAtBase: applied to unsupported base " ++ show base)
   | n < 0     = errorWithoutStackTrace
       ("Numeric.showIntAtBase: applied to negative number " ++ show n)
-  | n < base  = toDig n : s
+  -- each digit is forced as it is made, as base's showIt does (M150
+  -- review: intToDigit's "not a digit" never fired otherwise)
+  | n < base  = let c = toDig n in c `seq` (c : s)
   | otherwise =
-      showIntAtBase base toDig (div n base)
-        (toDig (mod n base) : s)
+      let c = toDig (mod n base)
+      in c `seq` showIntAtBase base toDig (div n base) (c : s)
 
 showHex :: Int -> String -> String
 showHex n s = showIntAtBase 16 intToDigit n s

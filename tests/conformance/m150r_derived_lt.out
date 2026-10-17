@@ -1,0 +1,9 @@
+(True,False,True,False,GT)
+(True,True,P 1 (W 1))
+(True,True,Just (W 1))
+(False,False,True)
+(False,False)
+True
+(False,GT,GT,False)
+(P 0 (Le 1),[Le 2])
+(False,True,True,True,True)

@@ -1,0 +1,9 @@
+list len => False
+maybe nothing => False
+cfg diff int => False
+cfg nothing => True
+list len again => False
+ord list => False
+ord pair => True
+ord cfg => True
+maybe same => error: Act: no equality

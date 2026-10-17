@@ -29,7 +29,9 @@ listArray (lo, hi) es = MkArray (lo, hi) (take (hi - lo + 1) es)
 -- Out of range is the index type's Ix error, as GHC's (!) reports it:
 -- Ix{Int}.index: Index (5) out of range ((0,2)).
 (!) :: Array e -> Int -> e
-(!) (MkArray b es) i = pickAt es (index b i)
+-- The index is checked first (M150 review: an array with no stored
+-- elements said "undefined array element" for an index out of range).
+(!) (MkArray b es) i = let k = index b i in k `seq` pickAt es k
 
 pickAt :: [e] -> Int -> e
 pickAt (x : _) 0 = x
@@ -75,6 +77,17 @@ instance Foldable Array where
   foldr f z (MkArray _ es) = foldr f z es
   null (MkArray _ es) = null es
   length (MkArray _ es) = length es
+  foldr1 f (MkArray _ es) = case es of
+    [] -> errorWithoutStackTrace "foldr1: empty Array"
+    _ -> foldr1 f es
+  foldl1 f (MkArray _ es) = case es of
+    [] -> errorWithoutStackTrace "foldl1: empty Array"
+    _ -> foldl1 f es
+
+-- base compares arrays by their assocs (M150 review: a derived Ord
+-- over an Array field needs it).
+instance Ord e => Ord (Array e) where
+  compare a b = compare (assocs a) (assocs b)
 
 instance Traversable Array where
   traverse f (MkArray b es) = fmap (MkArray b) (traverse f es)

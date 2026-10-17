@@ -1897,14 +1897,44 @@ package body AHC.Prelude_Core is
       --  reads a field). A field of the instance's own type calls
       --  Self, the let-bound function: a list or tree builds no
       --  dictionary per node.
+      --  case C of LT -> True; EQ -> Rest; GT -> False
+      function Lt_Then (C, Rest : Real_Expr_Id) return Real_Expr_Id is
+         Alts : Alt_Id_Vectors.Vector;
+         T_E : constant Real_Expr_Id := ConE (Env.True_DC);
+         F_E : constant Real_Expr_Id := ConE (Env.False_DC);
+      begin
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => T_E,
+            A_Con => Ordering_LT,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => Rest,
+            A_Con => Ordering_LT + 1,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         Alts.Append (M.Add (Alt_Node'
+           (Kind => Con_Alt, Span => Span, Alt_Body => F_E,
+            A_Con => Ordering_GT,
+            Binders => Var_Id_Vectors.Empty_Vector)));
+         return M.Add (Expr_Node'
+           (Kind => Case_C, Span => Span, Scrutinee => C, Alts => Alts));
+      end Lt_Then;
+
+      --  The field-wise compare, or (Lt_Mode) GHC's derived <: the
+      --  fields before the last by compare, the last by its own <,
+      --  different constructors by declaration order (M150 review:
+      --  < went through compare, and differs for an instance whose <
+      --  and compare disagree).
       function Con_Body
         (Inst : Instance_Info; Params : Var_Id_Vectors.Vector;
-         Self : Real_Var_Id) return Real_Expr_Id
+         Self : Real_Var_Id; Self_Lt : Real_Var_Id;
+         Lt_Mode : Boolean := False) return Real_Expr_Id
       is
          Is_Ord : constant Boolean := Inst.Of_Class = Env.Ord_Cl;
          Cl : constant Real_Class_Id := Real_Class_Id (Inst.Of_Class);
          TC : constant Real_TyCon_Id := Real_TyCon_Id (Inst.Head);
          Sel : constant Var_Id := Struct_Sel (Inst.Of_Class);
+         Lt_Sel : constant Var_Id :=
+           (if Is_Ord then M.Info (Cl).Methods (2).Selector else Sel);
          Head_T : constant Real_Type_Id :=
            Inst_Match.Instance_Type (M, Env, Inst);
          Multi : constant Boolean :=
@@ -1915,12 +1945,13 @@ package body AHC.Prelude_Core is
 
          function Field_Op
            (FT : Real_Type_Id; Tvs : TyVar_Id_Vectors.Vector;
-            A, B : Real_Var_Id) return Real_Expr_Id
+            A, B : Real_Var_Id; Use_Lt : Boolean := False)
+            return Real_Expr_Id
          is
             Fn : Real_Expr_Id;
          begin
             if Same_Under (FT, Tvs, Head_T, Inst.Head_Vars) then
-               Fn := V (Self);
+               Fn := V (if Use_Lt then Self_Lt else Self);
             else
                declare
                   D : constant Expr_Id :=
@@ -1932,7 +1963,8 @@ package body AHC.Prelude_Core is
                                  & ": unsupported field type");
                   end if;
                   declare
-                     S : constant Real_Expr_Id := V (Sel);
+                     S : constant Real_Expr_Id :=
+                       V (if Use_Lt then Lt_Sel else Sel);
                   begin
                      Fn := Ap (S, Real_Expr_Id (D));
                   end;
@@ -1975,12 +2007,13 @@ package body AHC.Prelude_Core is
                      end;
                   end loop;
                elsif FTs.Is_Empty then
-                  Same := ConE (Ordering_LT + 1);   --  EQ
+                  Same := (if Lt_Mode then ConE (Env.False_DC)
+                           else ConE (Ordering_LT + 1));   --  EQ
                else
                   Same := Field_Op
                     (Real_Type_Id (FTs.Last_Element), Tvs,
                      Real_Var_Id (As.Last_Element),
-                     Real_Var_Id (Bs.Last_Element));
+                     Real_Var_Id (Bs.Last_Element), Use_Lt => Lt_Mode);
                   for I in reverse 1 .. FTs.Last_Index - 1 loop
                      declare
                         C : constant Real_Expr_Id :=
@@ -1988,7 +2021,8 @@ package body AHC.Prelude_Core is
                                     Real_Var_Id (As.Element (I)),
                                     Real_Var_Id (Bs.Element (I)));
                      begin
-                        Same := Ord_Then (C, Same);
+                        Same := (if Lt_Mode then Lt_Then (C, Same)
+                                 else Ord_Then (C, Same));
                      end;
                   end loop;
                end if;
@@ -2006,6 +2040,15 @@ package body AHC.Prelude_Core is
                            YE : constant Real_Expr_Id := V (Y);
                         begin
                            Other := Ap2 (Cmp, XE, YE);
+                           if Lt_Mode then
+                              --  declaration order: tag x < tag y
+                              declare
+                                 F_E : constant Real_Expr_Id :=
+                                   ConE (Env.False_DC);
+                              begin
+                                 Other := Lt_Then (Other, F_E);
+                              end;
+                           end if;
                         end;
                      else
                         Other := ConE (Env.False_DC);
@@ -2044,21 +2087,57 @@ package body AHC.Prelude_Core is
       is
          Is_Ord : constant Boolean := Inst.Of_Class = Env.Ord_Cl;
          F : constant Real_Var_Id := Fresh (if Is_Ord then "cmp" else "eq");
-         Body_F : constant Real_Expr_Id := Con_Body (Inst, Params, F);
+         FL : constant Real_Var_Id := Fresh ("lt");
+         Body_F : constant Real_Expr_Id := Con_Body (Inst, Params, F, FL);
          Supers : constant Expr_Id_Vectors.Vector :=
            Super_Dicts (Inst, Params);
          Ms : Expr_Id_Vectors.Vector;
          Binds : Bind_Vectors.Vector;
          Dict : Real_Expr_Id;
+
+         --  \x y -> if lt (A x y) (B x y) then T else E, where Flip
+         --  swaps lt's arguments and Pick chooses the branch values:
+         --  0 = (True, False), 1 = (False, True), 2 = (x, y),
+         --  3 = (y, x).
+         function Via_Lt (Flip : Boolean; Pick : Natural)
+           return Real_Expr_Id
+         is
+            X : constant Real_Var_Id := Fresh ("x");
+            Y : constant Real_Var_Id := Fresh ("y");
+            LE : constant Real_Expr_Id := V (FL);
+            A1 : constant Real_Expr_Id := V (if Flip then Y else X);
+            A2 : constant Real_Expr_Id := V (if Flip then X else Y);
+            Call : constant Real_Expr_Id := Ap2 (LE, A1, A2);
+            T_E, E_E : Real_Expr_Id;
+         begin
+            case Pick is
+               when 0 =>
+                  T_E := ConE (Env.True_DC);
+                  E_E := ConE (Env.False_DC);
+               when 1 =>
+                  T_E := ConE (Env.False_DC);
+                  E_E := ConE (Env.True_DC);
+               when 2 =>
+                  T_E := V (X);
+                  E_E := V (Y);
+               when others =>
+                  T_E := V (Y);
+                  E_E := V (X);
+            end case;
+            return Lam (X, Lam (Y, Bool_Case (Call, T_E, E_E)));
+         end Via_Lt;
       begin
          Ms.Append (V (F));
          if Is_Ord then
-            Ms.Append (Cmp_Method (Ordering_LT, False, Using => F));  --  <
-            Ms.Append (Cmp_Method (Ordering_GT, True, Using => F));   --  <=
-            Ms.Append (Cmp_Method (Ordering_GT, False, Using => F));  --  >
-            Ms.Append (Cmp_Method (Ordering_LT, True, Using => F));   --  >=
-            Ms.Append (Max_Min (True, Using => F));
-            Ms.Append (Max_Min (False, Using => F));
+            --  GHC's derived Ord (and base's Maybe/Either/tuples): <
+            --  field-wise, the others from it; max/min are the class
+            --  defaults over <= (Report 6.3.2's tie rule).
+            Ms.Append (V (FL));                       --  <
+            Ms.Append (Via_Lt (True, 1));             --  x <= y = not (y < x)
+            Ms.Append (Via_Lt (True, 0));             --  x > y = y < x
+            Ms.Append (Via_Lt (False, 1));            --  x >= y = not (x < y)
+            Ms.Append (Via_Lt (True, 2));             --  max: y < x ? x : y
+            Ms.Append (Via_Lt (True, 3));             --  min: y < x ? y : x
          else
             declare
                X : constant Real_Var_Id := Fresh ("x");
@@ -2076,6 +2155,14 @@ package body AHC.Prelude_Core is
          Dict := Mk_Dict (M, Real_Class_Id (Inst.Of_Class), Supers, Ms,
                           Span);
          Binds.Append (Bind_Pair'(Binder => F, Rhs => Body_F));
+         if Is_Ord then
+            declare
+               Body_L : constant Real_Expr_Id :=
+                 Con_Body (Inst, Params, F, FL, Lt_Mode => True);
+            begin
+               Binds.Append (Bind_Pair'(Binder => FL, Rhs => Body_L));
+            end;
+         end if;
          return M.Add (Expr_Node'
            (Kind => Let_C, Span => Span, Is_Rec => True,
             Binds => Binds, Let_Body => Dict));

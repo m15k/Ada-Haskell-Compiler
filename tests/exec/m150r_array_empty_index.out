@@ -1,0 +1,4 @@
+empty ! => EXC: Ix{Int}.index: Index (0) out of range ((1,0))
+no elems, oob => EXC: Ix{Int}.index: Index (9) out of range ((0,4))
+no elems, neg => EXC: Ix{Int}.index: Index (-1) out of range ((0,4))
+array [] oob => EXC: Ix{Int}.index: Index (7) out of range ((0,2))

@@ -1,0 +1,6 @@
+(Ci "a",Ci "A")
+(Wr (Ci "a"),Wr (Ci "A"))
+(Wp (Ci "a"),Wp (Ci "A"))
+(Wp (-0.0),Wp 0.0)
+(D (Ci "a"),D (Ci "A"))
+(Ci "a",Ci "A",Wr (Ci "a"))

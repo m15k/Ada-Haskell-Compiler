@@ -2370,7 +2370,18 @@ package body AHC.Rename is
                            end if;
                         end Check_Method;
                      begin
-                        if N.Kind = Fun_D then
+                        if N.Kind = Pat_D
+                          and then Arena.Node (N.Pat).Kind = Bang_P
+                        then
+                           --  A class or instance body is top level
+                           --  for GHC too (M150 review: a class default
+                           --  compiled and died $mMISSING; an instance
+                           --  one named internal binders).
+                           Bag.Add (Diagnostics.Error,
+                                    Diagnostics.Rename_Unsupported, N.Span,
+                                    "top-level strict bindings aren't "
+                                    & "allowed");
+                        elsif N.Kind = Fun_D then
                            declare
                               V : constant Core.Real_Var_Id :=
                                 Mint_Local (N.Fun_Name, N.Span);

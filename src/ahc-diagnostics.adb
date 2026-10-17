@@ -1,4 +1,5 @@
 with Ada.Text_IO;
+with Ada.Text_IO.Text_Streams;
 
 package body AHC.Diagnostics is
 
@@ -79,17 +80,28 @@ package body AHC.Diagnostics is
         & D.Message;
    end Render;
 
+   --  A diagnostic quotes source text, which is UTF-8 already: write
+   --  its bytes as they are. Text_IO under -gnatW8 takes each byte
+   --  above 16#7F# for a Latin-1 character and encodes it again
+   --  ("cafÃ©" for "café"; M150 review).
+   procedure Put_Raw_Line (S : String) is
+   begin
+      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      String'Write
+        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Error),
+         S & ASCII.LF);
+      Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+   end Put_Raw_Line;
+
    procedure Print_All
      (Bag : Diagnostic_Bag; Over : Source_Text.Source) is
    begin
       for I in 1 .. Bag.Count loop
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error, Bag.Render (Over, I));
+         Put_Raw_Line (Bag.Render (Over, I));
       end loop;
       if Bag.Errors > Max_Stored_Errors then
-         Ada.Text_IO.Put_Line
-           (Ada.Text_IO.Standard_Error,
-            Over.File_Name & ": too many errors, further errors omitted");
+         Put_Raw_Line
+           (Over.File_Name & ": too many errors, further errors omitted");
       end if;
    end Print_All;
 

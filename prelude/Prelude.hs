@@ -429,14 +429,6 @@ unlines :: [String] -> String
 unlines [] = ""
 unlines (l : ls) = l ++ "\n" ++ unlines ls
 
--- The list instance's mapM (M150): the Report's direct monadic
--- recursion, one bind per element, where traverse goes through <*>
--- (two binds in IO). Equal to traverse for every lawful monad.
-mapMListR_ :: Monad m => (a -> m b) -> [a] -> m [b]
-mapMListR_ _ [] = return []
-mapMListR_ f (x : xs) =
-  f x >>= \y -> mapMListR_ f xs >>= \ys -> return (y : ys)
-
 mapMList__ :: Monad m => (a -> m b) -> [a] -> m ()
 mapMList__ f xs = go xs
   where go [] = return ()
@@ -622,13 +614,16 @@ liftA2Default_ :: Applicative f => (a -> b -> c) -> f a -> f b -> f c
 liftA2Default_ f x y = fmap f x <*> y
 
 thenADefault_ :: Applicative f => f a -> f b -> f b
-thenADefault_ x y = liftA2 (\_ b -> b) x y
+thenADefault_ x y = (id <$ x) <*> y   -- base's (*>) (M150 review)
 
 thenLeftADefault_ :: Applicative f => f a -> f b -> f a
 thenLeftADefault_ x y = liftA2 (\a _ -> a) x y
 
 returnDefault_ :: Monad m => a -> m a
-returnDefault_ x = pure x
+-- Point-free (M150 review): the field is then the selection of pure,
+-- so a pure/return cycle in a user's instances meets a blackhole and
+-- reports <<loop>>, as GHC does, instead of tail-calling forever.
+returnDefault_ = pure
 
 instance Applicative Maybe where
   pure x = Just x
@@ -956,6 +951,23 @@ instance Read Int where
 
 integerToInt_ :: Integer -> Int
 integerToInt_ n = fromInteger n
+
+-- base's Read () (M150 review: a derived Read over a () field needs it).
+instance Read () where
+  readsPrec _ s =
+    case skipSpace_ s of
+      ('(' : r) -> case skipSpace_ r of
+        (')' : r2) -> [((), r2)]
+        _ -> []
+      _ -> []
+
+instance Read Ordering where
+  readsPrec _ s =
+    case skipSpace_ s of
+      ('L' : 'T' : r) -> [(LT, r)]
+      ('E' : 'Q' : r) -> [(EQ, r)]
+      ('G' : 'T' : r) -> [(GT, r)]
+      _ -> []
 
 instance Read Bool where
   readsPrec _ s =
@@ -1418,18 +1430,20 @@ class (Functor t, Foldable t) => Traversable t where
   sequence :: Monad m => t (m a) -> m (t a)
   sequence t = sequenceA t
 
+-- base's definitions exactly (M150 review): an Applicative whose <*>
+-- is not ap, or one with no pure, sees what it sees in GHC - list
+-- traverse through liftA2 (:), Maybe and Either through <$>, and mapM
+-- and sequence the class defaults, traverse and sequenceA.
 instance Traversable [] where
-  traverse f = foldrList_ (\x acc -> pure (:) <*> f x <*> acc) (pure [])
-  mapM f xs = mapMListR_ f xs
-  sequence ms = mapMListR_ id ms
+  traverse f = foldrList_ (\x ys -> liftA2 (:) (f x) ys) (pure [])
 
 instance Traversable Maybe where
   traverse _ Nothing = pure Nothing
-  traverse f (Just x) = pure Just <*> f x
+  traverse f (Just x) = Just <$> f x
 
 instance Traversable (Either a) where
   traverse _ (Left e) = pure (Left e)
-  traverse f (Right x) = pure Right <*> f x
+  traverse f (Right x) = Right <$> f x
 
 -- Pairs over their second component, as base: fmap (+1) ("k", 1) is
 -- ("k", 2) and length (x, y) is 1.

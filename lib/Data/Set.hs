@@ -263,5 +263,10 @@ instance Show a => Show (Set a) where
     showParen (d > 10)
       (\t -> "fromList " ++ shows (toList s0) t) s
 
+-- containers' Ord: by the ascending element lists (M150 review: a
+-- derived Ord over a Set field needs it).
+instance Ord a => Ord (Set a) where
+  compare a b = compare (toAscList a) (toAscList b)
+
 instance Eq a => Eq (Set a) where
   a == b = toList a == toList b

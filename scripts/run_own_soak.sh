@@ -111,7 +111,8 @@ EOF
 # before the fix).
 progs="$tmp/deep_foldl.hs $tmp/deep_nest.hs $tmp/deep_recycle.hs"
 for p in tests/exec/lazy.hs tests/exec/numbers.hs tests/exec/prelude4.hs \
-         tests/exec/gc_scope_retire.hs; do
+         tests/exec/gc_scope_retire.hs tests/exec/m150r_scope_many_kids.hs \
+         tests/exec/m150r_scope_mix.hs; do
   [ -f "$p" ] && progs="$progs $p"
 done
 
