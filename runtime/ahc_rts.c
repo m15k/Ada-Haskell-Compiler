@@ -650,6 +650,13 @@ static unsigned char *own_bstate;        /* one byte per block */
 static unsigned char *own_marks;         /* 1 bit / 8 heap bytes */
 static OwnBlock *own_partial[4][OWN_NCLASS];  /* free-slot blocks */
 static __thread void *own_free_tls[4][OWN_NCLASS];
+/* Every thread's free-list heads, registered when it first adopts a
+   block's list (under own_mx), so AHC_OWN_VERIFY can tell a free
+   slot from an object (M150 review; see own_verify_closure). */
+#define OWN_TLS_MAX 64
+static void *(*own_tls_reg[OWN_TLS_MAX])[OWN_NCLASS];
+static int own_tls_n;
+static __thread int own_tls_registered;
 static long own_since_gc;                /* bytes handed out */
 static long own_live_bytes;              /* after last sweep */
 static long own_gc_count;
@@ -838,6 +845,10 @@ static void *own_adopt_partial(int kind, size_t cls) {
   pthread_mutex_lock(&own_mx);
   b = own_partial[kind][cls];
   if (b) own_partial[kind][cls] = b->next;
+  if (b && !own_tls_registered && own_tls_n < OWN_TLS_MAX) {
+    own_tls_registered = 1;
+    own_tls_reg[own_tls_n++] = own_free_tls;
+  }
   pthread_mutex_unlock(&own_mx);
   if (!b) return NULL;
   b->next = NULL;
@@ -5431,12 +5442,61 @@ static void own_paranoid_check(int nw) {
 static int own_verify;
 static long own_verify_bad;
 
+/* Slots on a free list - a block's sweep-built list or a thread's
+   adopted one. A stale conservative word can mark a free slot (the
+   M142 stale mark), and its leftover words then read as edges to
+   objects freed and reused since: not live data, so not a missed
+   edge (M150 review: such reports carried no loss, AHC_OWN_PARANOID
+   clean). Built per verification, during the stop-the-world. */
+static void **own_vfree;
+static size_t own_vfree_n, own_vfree_cap;
+
+static void own_vfree_add(void *p) {
+  if (own_vfree_n == own_vfree_cap) {
+    own_vfree_cap = own_vfree_cap ? own_vfree_cap * 2 : 65536;
+    own_vfree = (void **)realloc(own_vfree, own_vfree_cap * sizeof(void *));
+    if (!own_vfree) ahc_die("own gc: verify free set");
+  }
+  own_vfree[own_vfree_n++] = p;
+}
+
+static int own_vfree_cmp(const void *a, const void *b) {
+  uintptr_t x = (uintptr_t)*(void *const *)a, y = (uintptr_t)*(void *const *)b;
+  return x < y ? -1 : x > y;
+}
+
+static void own_vfree_build(void) {
+  size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK, bi;
+  int t, k, c;
+  own_vfree_n = 0;
+  for (bi = 0; bi < nblocks; bi++) {
+    OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
+    void *p;
+    if (own_bstate[bi] == OWN_B_FREE || own_bstate[bi] == OWN_B_VIRGIN
+        || own_bstate[bi] == OWN_B_LARGE_TAIL) continue;
+    for (p = b->free_head; p; p = *(void **)p) own_vfree_add(p);
+  }
+  for (t = 0; t < own_tls_n; t++)
+    for (k = 0; k < 4; k++)
+      for (c = 0; c < OWN_NCLASS; c++) {
+        void *p;
+        for (p = own_tls_reg[t][k][c]; p; p = *(void **)p) own_vfree_add(p);
+      }
+  qsort(own_vfree, own_vfree_n, sizeof(void *), own_vfree_cmp);
+}
+
+static int own_vfree_has(void *p) {
+  return own_vfree_n
+    && bsearch(&p, own_vfree, own_vfree_n, sizeof(void *), own_vfree_cmp);
+}
+
 /* one edge: complain if src is marked and dst is an unmarked heap
    object */
 static void own_vcheck(void *src, const char *what, void *dst) {
   OwnBlock *tb, *sb;
   void *t = own_find_object(dst, &tb);
   if (!t || own_marked(t)) return;
+  if (own_vfree_has(src)) return;     /* a marked free slot: no object */
   if (own_verify_bad++ < 12) {
     own_find_object(src, &sb);
     fprintf(stderr,
@@ -5453,6 +5513,7 @@ static void own_verify_closure(void) {
   size_t nblocks = (size_t)(own_commit - own_base) / OWN_BLOCK;
   size_t bi;
   own_verify_bad = 0;
+  own_vfree_build();
 
   for (bi = 0; bi < nblocks; bi++) {
     OwnBlock *b = (OwnBlock *)(own_base + bi * OWN_BLOCK);
