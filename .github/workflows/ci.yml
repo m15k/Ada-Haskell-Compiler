@@ -142,7 +142,11 @@ jobs:
   # points-to at every collection - which is what actually found
   # the bug, in one run.
   collector:
-    runs-on: macos-latest
+    # Pinned: the 2026-10-21 macos-26 image refresh ships an SDK whose
+    # libSystem.tbd the Alire GNAT's linker cannot read ("unknown
+    # architecture"), so the compiler itself failed to link. macos-15
+    # keeps the SDK the toolchain understands (as ubuntu-24.04 above).
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
