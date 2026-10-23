@@ -403,7 +403,7 @@ Control.Exception (catchable `IOError`s shaped exactly like GHC's,
 `ErrorCall`/`ArithException`/`ExitCode`, `catch`/`try`/`evaluate`/
 `bracket`/`finally` over a closed `SomeException` — see
 docs/exceptions-design-note.md), Data.Int / Data.Word (wrapping
-`Int8..Word64` with their instances, `Word` = `Word64`), Data.IORef,
+`Int8..Word64` with their instances, and `Word` - its own type of `Word64`'s width, as GHC's), Data.IORef,
 Network.Socket (TCP over IPv4 with `Text` payloads; nonblocking
 underneath, parking on the scheduler; the runtime owns the constants,
 so ahttpd carries none), Numeric (showHex and
@@ -588,6 +588,11 @@ scripts/run_watchdog_check.sh      # the spin watchdog, made to fire on purpose
   dogfood — an HTTP server over the socket FFI whose goldens pin a
   deterministic concurrent schedule, and whose README records the
   two runtime gaps it surfaced.
+- **v1.21** — the correctness round (M150): bang patterns, Unicode
+  identifiers, `Applicative` above `Monad` with `mapM` over any
+  `Traversable`, `Eq`/`Ord` that use a component's own instance,
+  derived contexts inferred from the fields, `Word` as its own type,
+  and GHC's library error texts.
 - **v1.20** — runtime errors better than GHC's (M149): a caught
   error's `show` is GHC 9.4.8's exact text (`CallStack` blocks for
   `error`, `undefined` and the partial Prelude functions, a real

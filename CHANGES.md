@@ -46,9 +46,29 @@ the error-text follow-ups M149 left open.
   the deriving clause.
 - **More correctness fixes found on the way:** `==` under an `Ord a`
   context crashed with "selector on a non-dictionary"; `max` and `min`
-  broke ties the wrong way (`max 0.0 (-0.0)`); `maximumBy` kept the
-  first of equal maxima where GHC keeps the last; `showIntAtBase`
-  looped on base 1.
+  broke ties the wrong way (`max 0.0 (-0.0)`, and any hand-written
+  `Ord`'s defaults); `maximumBy` kept the first of equal maxima where
+  GHC keeps the last; `showIntAtBase` looped on base 1; `Set` and
+  `Array` gain `Ord`, the Prelude `Read ()` and `Read Ordering`.
+- **Two collector bugs the soak exposed, both older than M150:** a
+  `letrec`'s environment arrays were patched with their siblings
+  without the own collector's write barrier, so a collection in
+  between could free a live closure; and `AHC_OWN_VERIFY` read a
+  marked free slot's leftover words as edges, failing programs that
+  lost no data.
+- **Faster dictionaries:** a dictionary built only from global
+  dictionaries (`Eq [Char]`) is now built once per program instead of
+  at every use.
+
+Adversarial review: 25 defects found after a green gate, six of them
+regressions from v1.20, all fixed with regression cases (m150r_*);
+the pre-existing gaps it found are listed in EXCLUSIONS ("M150
+review"). Gate: full suites in both builds and both GC
+modes, own soak with `AHC_OWN_VERIFY=1` from the 64KB floor, TSan,
+300-seed fuzz. Bench against v1.20 (best of 5, interleaved): `b_streq`
+-42% (dictionaries built once), every other program within 2% except
+`b_text` +4%, which is the ~1 ms of extra startup (a larger Prelude) on
+an 80 ms run.
 
 ## v1.20 (2026-10-14)
 
