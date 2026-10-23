@@ -629,6 +629,10 @@ instance Applicative Maybe where
   pure x = Just x
   Nothing <*> _ = Nothing
   Just f <*> mx = fmap f mx
+  -- direct, as base's (M150: list traverse is liftA2-based now, and
+  -- the fmap-then-<*> default cost mapM in Maybe a closure per step)
+  liftA2 f (Just x) (Just y) = Just (f x y)
+  liftA2 _ _ _ = Nothing
 
 instance Applicative [] where
   pure x = [x]
@@ -637,6 +641,7 @@ instance Applicative [] where
 instance Applicative IO where
   pure x = return x
   mf <*> mx = mf >>= \f -> mx >>= \x -> return (f x)
+  liftA2 f ma mb = ma >>= \a -> mb >>= \b -> return (f a b)
 
 -- The function type `(->) r` - the reader - as base has it (M142
 -- made `(->)` an ordinary type constructor for instance heads).
@@ -1435,7 +1440,11 @@ class (Functor t, Foldable t) => Traversable t where
 -- traverse through liftA2 (:), Maybe and Either through <$>, and mapM
 -- and sequence the class defaults, traverse and sequenceA.
 instance Traversable [] where
-  traverse f = foldrList_ (\x ys -> liftA2 (:) (f x) ys) (pure [])
+  -- base's foldr cons_f (pure []), as direct recursion: the same
+  -- liftA2s in the same order, without a closure per element
+  traverse f xs = go xs
+    where go [] = pure []
+          go (y : ys) = liftA2 (:) (f y) (go ys)
 
 instance Traversable Maybe where
   traverse _ Nothing = pure Nothing
