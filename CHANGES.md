@@ -1,6 +1,6 @@
 # AHC Changelog
 
-## v1.21 (unreleased)
+## v1.21 (2026-10-23)
 
 **M150 - the correctness round.** Seven places where AHC rejected or
 misread a program GHC 9.4.8 accepts, each probed against both, plus
